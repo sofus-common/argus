@@ -12,7 +12,7 @@ that ARGUS, an option strategy, or an LLM will be profitable.
 | [Vasquez (2017)](https://www.cambridge.org/core/product/identifier/S002210901700076X/type/journal_article) | Equity IV term-structure slope predicts option returns. | Include term slope as a predeclared feature. |
 | [Christoffersen et al. (2018)](https://doi.org/10.1093/rfs/hhx113) | Equity option illiquidity carries a premium. | Measure spread/liquidity and model execution costs. |
 | [Bali et al. (2023)](https://doi.org/10.1093/rfs/hhad017) | Nonlinear methods predict option returns after modeled costs. | Permit nonlinear AI selection, but compare it with a strong control after costs. |
-| [Driessen et al. (2009)](https://doi.org/10.1111/j.1540-6261.2009.01467.x) | Apparent option-strategy returns are sensitive to implementation frictions. | Publish cost sensitivity; do not headline frictionless results. |
+| [Santa-Clara & Saretto (2009)](https://doi.org/10.1016/j.finmar.2009.01.002) | Trading frictions and margin requirements materially affect some option strategies. | Publish cost sensitivity; do not headline frictionless results. |
 | [Broadie, Chernov & Johannes (2009)](https://doi.org/10.1093/rfs/hhp032) | Extreme payoffs and small samples can mislead option-return inference. | Keep hackathon findings provisional and report uncertainty. |
 | [Muravyev & Pearson (2020)](https://doi.org/10.1093/rfs/hhaa010) | Execution timing changes measured effective option spreads. | Freeze timing assumptions and revalidate before execution. |
 

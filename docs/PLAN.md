@@ -8,7 +8,7 @@
 - Use both surfaces: CLI plus `alpaca-py` is the sole governed write path;
   Alpaca MCP is read-only for research and demonstration.
 - Use OpenRouter as a bounded inference adapter. Pin one model for scored runs;
-  permit same-model provider fallback only.
+  pin one provider and disable fallback. Same-model fallback is demo-only.
 - Use Codex as the primary development harness and Claude Code as an optional
   review/planning harness. Neither is part of the trading runtime.
 - Run the product as plain Python. Do not add LangGraph, CrewAI, Strands, or AWS
@@ -26,6 +26,7 @@ replay: snapshot → candidates → quant choice → recorded AI choice → pair
 scoring → claim manifest → minimal scoreboard.
 
 Verify: package install, tests, and full replay run without credentials.
+Replay records carry `run_mode=replay` and cannot enter scored aggregates.
 
 ### M1 — Alpaca gateway and data snapshots
 
@@ -41,8 +42,8 @@ operator can save a real snapshot with paper credentials.
 ### M2 — deterministic control and research runner
 
 Implement a small parameterized baseline with abstention using RV-IV wedge, IV
-term slope, skew, liquidity, and an observable regime. It selects a defined-risk
-structure from the bounded universe and owns its trade fields. Backtest with
+term slope, and liquidity. It selects a defined-risk structure from the bounded
+universe and owns its trade fields. Backtest with
 chronological/walk-forward splits, source cutoffs, costs, slippage, parameter
 sensitivity, and a registered trial ID.
 
@@ -56,7 +57,7 @@ provider, token, cost, and latency metadata. Score all candidates where possible
 so executed-choice selection does not hide counterfactual outcomes.
 
 Verify: tests prove AI cannot change deterministic candidates; scored runs fail
-closed if the model or experiment contract drifts.
+closed if the information set, model, provider, or experiment contract drifts.
 
 ### M4 — validation and public claims
 
@@ -77,7 +78,9 @@ state; bind short-lived approval to the exact proposal hash and use a
 deterministic client order ID.
 
 Verify: rejected proposals never submit; approved proposals record intent then
-result with a fake client.
+result with a fake client. Tests cover expired/reused approval, changed proposal
+hash, stale market/account state, duplicate client order ID, timeout after
+submission, and reconciliation before retry.
 
 ### M6 — evidence-first app and demo
 
@@ -88,6 +91,8 @@ outages. No frontend build step unless plain server-rendered HTML proves
 insufficient.
 
 Verify: a smoke test starts the shell and reads fixture-ledger output.
+The server binds to loopback by default and never renders secrets or raw broker
+responses.
 
 ## Module map
 
@@ -110,7 +115,7 @@ src/argus/
 tests/            fixture and fake-client tests
 ```
 
-## Handoff decisions needed before M3/M4
+## Handoff decisions required before M2
 
 1. Which underlying symbols and expiry range are allowed?
 2. Is the first structure a defined-risk vertical debit spread, or another
@@ -118,5 +123,21 @@ tests/            fixture and fake-client tests
 3. What per-run budget applies to the initial pinned OpenRouter model,
    `google/gemini-2.5-flash-lite`, and what evidence would justify changing it?
 4. What transaction-cost and slippage assumptions apply to the backtest?
+5. What exact entry, exit, mark, holding-period, expiration, missing-quote,
+   abstention, capital-normalization, overlap, and drawdown rules define outcomes?
+6. What deterministic feature lookbacks, thresholds, and candidate-ranking rule
+   define the control?
 
 Do not invent these product/risk choices in implementation.
+
+## Public documentation release gate
+
+Before each public push:
+
+- verify every research summary against the cited primary abstract and state
+  universe-transfer limits;
+- check local links and internal terminology for contradictions;
+- confirm runtime data, ledgers, logs, databases, `.env*`, and `private/` remain
+  ignored while `.env.example` and deliberate public fixtures remain eligible;
+- stage explicit files only and scan the staged diff for secrets and private
+  absolute paths.

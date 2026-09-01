@@ -4,6 +4,10 @@ The app is a read-only evidence viewer, not an agent control room. Its first
 screen answers: **did AI add value over the same quant strategy?** All displayed
 values come from event-ledger and claim-manifest artifacts.
 
+Replay, research, and paper runs are visibly labeled. Replay is excluded from
+the scored scoreboard. The local server binds to loopback by default and never
+renders secrets or raw provider/broker responses.
+
 ## Views
 
 1. **Scoreboard** — paired cumulative net outcome, drawdown, changed decisions,
@@ -54,6 +58,7 @@ Public submissions informed presentation, not performance claims:
 - [Aegis](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon/aegis-labs/aegis-a-trading-agent-you-can-audit) motivates proposal-bound approvals and replayable governance evidence.
 - [EdgeStack](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon/edgestack-ai/edgestack-evidence-gated-trading-agent) motivates a visible failed-strategy graveyard.
 - [Options Sniper](https://lablab.ai/submissions/sg8cnko85w6s1ssafl9bdiqw) motivates an Alpaca activity timeline and credential-free demo.
-- The [Lablab apps gallery](https://lablab.ai/apps) confirms that agent theatre is common; ARGUS differentiates on paired incremental-value evidence.
+- The [Lablab apps gallery](https://lablab.ai/apps) informed the choice to
+  differentiate ARGUS through paired incremental-value evidence.
 
 These are submission descriptions, not independently verified strategy results.

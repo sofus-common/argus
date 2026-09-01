@@ -2,9 +2,9 @@
 
 ## Testable claim
 
-Implied-versus-realized volatility, volatility term structure, skew, liquidity,
-and textual information contain economically meaningful signals. LLMs may
-extract incremental information, but can also be miscalibrated, contaminated by
+Implied-versus-realized volatility, volatility term structure, and liquidity
+have been associated with option outcomes in prior samples. LLMs may extract
+incremental information, but can also be miscalibrated, contaminated by
 memorization, or fail live. ARGUS tests whether a bounded AI selector or
 abstainer improves an otherwise identical deterministic options strategy after
 costs.
@@ -16,13 +16,16 @@ evaluation, without unacceptable drawdown, coverage, or cost deterioration.
 ## Mechanism under test
 
 Deterministic code freezes the market snapshot and constructs all valid,
-defined-risk candidates. The quant control and AI arm see the same candidates,
-features, costs, and constraints. AI may select a candidate or abstain; it may
-not invent or alter a trade.
+defined-risk candidates. In the primary trial, the quant control and AI arm see
+the same serialized numeric packet, candidates, costs, and constraints. A
+separate `ai_plus_text` trial may test a frozen text bundle and must be labeled as
+AI plus extra information. AI may select a candidate or abstain; it may not
+invent or alter a trade.
 
 The plausible AI contribution is narrow: extracting context or nonlinear
 interactions that change selection or improve abstention. If AI agrees with the
-control, its incremental decision value is zero for that observation.
+control, its gross decision difference is zero; its net incremental value is
+negative by inference cost and any measured latency impact.
 
 ## Predictions
 
@@ -39,4 +42,6 @@ Research supports testing these mechanisms; it does not validate ARGUS. A
 small positive paper-trading sample is exploratory. A null or negative result
 is a valid product result and remains in the public ledger. ARGUS will not claim
 that AI beats quant, that a backtest proves future profitability, or that a
-defined-risk structure is inherently superior.
+defined-risk structure is inherently superior. Results from cross-sectional or
+index-option research do not automatically transfer to ARGUS's eventual symbols,
+holding period, or spread structure.

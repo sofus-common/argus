@@ -38,14 +38,16 @@ review/query requirements.
 Use OpenRouter for one strict-schema selection call, not agent orchestration.
 Start with the cost-aware `google/gemini-2.5-flash-lite`; pin model, prompt,
 schema, temperature, token limit, retention/routing policy, and trial ID. Allow
-same-model provider fallback only. Record cost, latency, and provider.
-Free/random routing is demo-only because model changes contaminate an ablation.
+no provider fallback in scored trials. Record cost, latency, and provider.
+Same-model fallback and free/random routing are demo-only because routing changes
+contaminate an ablation.
 
 ## ADR-007: research motivates; experiments decide
 
-Use options-native features supported by primary literature: RV-IV wedge, IV
-term slope, skew, liquidity, and observable regime. These are hypotheses and
-controls, not inherited proof of profitability. Promotion follows the
+Use options-native features motivated by primary literature: RV-IV wedge, IV
+term slope, and liquidity. Skew and regime are optional engineering hypotheses,
+not literature-backed M1 requirements. None inherits proof of profitability or
+transfers automatically to ARGUS's universe. Promotion follows the
 pre-registered validation protocol and retains failed hypotheses.
 
 ## ADR-008: events and claims are separate artifacts
@@ -53,6 +55,9 @@ pre-registered validation protocol and retains failed hypotheses.
 The JSONL event ledger records what happened. A claim manifest records what may
 be displayed publicly and how to reproduce it. A dashboard may not invent or
 hardcode performance values.
+
+The ledger hash-chains events; each public claim includes the source artifact's
+SHA-256. Hashes expose later edits but do not replace durable storage.
 
 ## ADR-009: coding harnesses are not runtime frameworks
 
