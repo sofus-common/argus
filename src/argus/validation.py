@@ -49,11 +49,13 @@ def score(ledger: Ledger, settings) -> dict:
         delta = (a_net - inf - q_net) / rb
         rows.append({"snapshot_id": sid, "ts": o["ts"], "quant_choice": o["quant"], "ai_choice": o["ai"], "changed": o["quant"] != o["ai"],
                      "quant_net": q_net, "ai_net": a_net, "ai_net_after_inference": round(a_net - inf, 2), "inference_cost_usd": inf,
-                     "delta": round(delta, 6), "quant_status": q["status"], "ai_status": a["status"], "executed": bool(o.get("executed"))})
+                     "delta": round(delta, 6), "quant_status": q["status"], "ai_status": a["status"], "executed": bool(o.get("executed")),
+                     "ai_source": o.get("ai_source")})
     n = len(rows)
     deltas = [r["delta"] for r in rows]
     changed = sum(1 for r in rows if r["changed"])
     ai_abst = sum(1 for r in rows if r["ai_choice"] == "abstain")
+    ai_err = sum(1 for r in rows if r["ai_choice"] == "abstain" and r["ai_source"] in ("error", "unavailable"))
     q_abst = sum(1 for r in rows if r["quant_choice"] == "abstain")
     lo, hi = _block_bootstrap(deltas) if n >= 2 else (None, None)
     q_series = [r["quant_net"] for r in rows]
@@ -63,6 +65,7 @@ def score(ledger: Ledger, settings) -> dict:
         "trial_id": settings.trial_id, "model": settings.model, "run_mode": ledger.run_mode, "evidence_state": evidence,
         "n_observations": n, "n_unmarked": len(obs) - n, "changed_decisions": changed, "ai_abstentions": ai_abst,
         "quant_abstentions": q_abst, "coverage": round(1 - ai_abst / n, 4) if n else None,
+        "ai_inference_errors": ai_err, "ai_abstentions_deliberate": ai_abst - ai_err,
         "paired_delta_sum": round(sum(deltas), 6), "paired_delta_mean": round(sum(deltas) / n, 6) if n else None,
         "paired_delta_ci95": [lo, hi], "quant_net_total": round(sum(q_series), 2), "ai_net_total": round(sum(a_series), 2),
         "ai_minus_quant_usd": round(sum(a_series) - sum(q_series), 2), "inference_cost_total_usd": round(sum(r["inference_cost_usd"] for r in rows), 4),

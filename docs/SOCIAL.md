@@ -50,7 +50,7 @@ decision; the broker just never sees it. @lablabai @AlpacaHQ
 
 ---
 
-**5 — Fri, after flatten and submission (screenshot: final board + claim table
+**5 — Thu evening after the 15:30 ET flatten (Alpaca's equity snapshot is EOD Thursday), or Fri after submission (screenshot: final board + claim table
 showing "AI beats quant: UNSUPPORTED")**
 
 X: Submitted ARGUS. Final: [N] paired decisions on a $100k Alpaca paper

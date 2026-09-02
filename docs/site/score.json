@@ -3,29 +3,31 @@
   "model": "google/gemini-2.5-flash-lite",
   "run_mode": "paper",
   "evidence_state": "DESCRIPTIVE",
-  "n_observations": 2,
+  "n_observations": 3,
   "n_unmarked": 1,
-  "changed_decisions": 2,
+  "changed_decisions": 3,
   "ai_abstentions": 1,
   "quant_abstentions": 0,
-  "coverage": 0.5,
-  "paired_delta_sum": 0.008399,
-  "paired_delta_mean": 0.004199,
+  "coverage": 0.6667,
+  "ai_inference_errors": 1,
+  "ai_abstentions_deliberate": 0,
+  "paired_delta_sum": 0.028898,
+  "paired_delta_mean": 0.009633,
   "paired_delta_ci95": [
-    0.0042,
-    0.023
+    -0.0055,
+    0.0115
   ],
-  "quant_net_total": 1.7,
-  "ai_net_total": 10.1,
-  "ai_minus_quant_usd": 8.4,
-  "inference_cost_total_usd": 0.0011,
-  "max_drawdown_quant": -12.9,
+  "quant_net_total": 1.3,
+  "ai_net_total": 30.2,
+  "ai_minus_quant_usd": 28.9,
+  "inference_cost_total_usd": 0.0023,
+  "max_drawdown_quant": -14.4,
   "max_drawdown_ai": 0.0,
   "changed_only": {
-    "n": 2,
-    "delta_sum": 0.008399
+    "n": 3,
+    "delta_sum": 0.028898
   },
-  "executed_observations": 0,
+  "executed_observations": 1,
   "min_observations_for_exploratory": 30,
   "supported_enabled": false,
   "rows": [
@@ -35,14 +37,15 @@
       "quant_choice": "471b90d148ee",
       "ai_choice": "abstain",
       "changed": true,
-      "quant_net": 14.6,
+      "quant_net": -14.4,
       "ai_net": 0.0,
       "ai_net_after_inference": 0.0,
       "inference_cost_usd": 0.0,
-      "delta": -0.0146,
+      "delta": 0.0144,
       "quant_status": "open",
       "ai_status": "closed",
-      "executed": false
+      "executed": false,
+      "ai_source": "error"
     },
     {
       "snapshot_id": "2ad1454db4416e18",
@@ -50,14 +53,31 @@
       "quant_choice": "4fdf47cd28c0",
       "ai_choice": "a3b7802363f0",
       "changed": true,
-      "quant_net": -12.9,
-      "ai_net": 10.1,
-      "ai_net_after_inference": 10.1,
+      "quant_net": 4.1,
+      "ai_net": 24.1,
+      "ai_net_after_inference": 24.1,
       "inference_cost_usd": 0.001133946,
-      "delta": 0.022999,
+      "delta": 0.019999,
       "quant_status": "open",
       "ai_status": "open",
-      "executed": false
+      "executed": false,
+      "ai_source": "live"
+    },
+    {
+      "snapshot_id": "6c9025ecc868fb09",
+      "ts": "2026-09-02T14:28:25.564124+00:00",
+      "quant_choice": "7eaca86c4edf",
+      "ai_choice": "614f5f67db00",
+      "changed": true,
+      "quant_net": 11.6,
+      "ai_net": 6.1,
+      "ai_net_after_inference": 6.1,
+      "inference_cost_usd": 0.001133847,
+      "delta": -0.005501,
+      "quant_status": "open",
+      "ai_status": "open",
+      "executed": true,
+      "ai_source": "live"
     }
   ]
 }

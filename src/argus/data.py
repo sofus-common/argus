@@ -117,7 +117,8 @@ def build_candidates(snapshot: dict, settings) -> list[dict]:
                 if kind == "credit" and not (-settings.spread_width < v_mid <= -0.05):
                     continue
                 spread_pct = (v_ask - v_bid) / abs(v_mid)
-                max_loss = (v_mid if kind == "debit" else settings.spread_width + v_mid) * 100.0
+                # Size on the worst quoted open price (the marketable limit), so the cap holds at the fill, not at mid.
+                max_loss = (v_ask if kind == "debit" else settings.spread_width + v_ask) * 100.0
                 max_profit = (settings.spread_width - v_mid if kind == "debit" else -v_mid) * 100.0
                 if max_loss <= 0:
                     continue

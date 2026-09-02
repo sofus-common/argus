@@ -65,16 +65,24 @@ max loss ≤ 5% · no leg already held (no stacking the same spread) · buying
 power · no new positions in the last 60 min before flatten · operator HALT
 absent. Sixteen checks, each recorded with its detail in the `risk_decision`
 event. Exits: ±50% of the entry price, expiry guard, or forced flatten at
-`ARGUS_FLATTEN_AT` (16:00 CEST Friday); unfilled closes are reconciled and
-retried with a fresh client order ID, aggressively at flatten. Costs modelled
+`ARGUS_FLATTEN_AT` (15:30 ET Thursday 3 Sep — Alpaca scores total equity as of
+that day's close, so ARGUS ends the window in cash rather than in broker marks
+on open spreads); unfilled closes are reconciled and retried with a fresh
+client order ID, aggressively at flatten. Costs modelled
 identically for both arms: 25% of the half-spread per leg per side plus $0.05
 regulatory fees per contract per side (Alpaca charges no options commission).
 
-## Alpaca surfaces
+## Alpaca surfaces — and why the write path is the official SDK
 
-- **CLI + `alpaca-py`** is the only write path (`TradingClient(paper=True)`,
-  MLEG limit orders, deterministic client order IDs, intent-before-submit,
-  reconcile-before-retry).
+- **`alpaca-py` (official SDK)** is the only write path: `TradingClient(paper=True)`
+  hardcoded, MLEG limit orders with signed net prices, deterministic client
+  order IDs, intent-before-submit, reconcile-before-retry. Reason: the governor
+  must bind a 60-second authorization to the exact proposal hash and verify it
+  *inside the same process* immediately before the broker call; that contract
+  cannot be enforced through a conversational MCP tool call or a shell
+  invocation, where the model or the operator could alter the order between
+  approval and submission. The SDK gives the governor a typed request it can
+  hash, sign, submit, and re-query for reconciliation.
 - **Alpaca CLI** (official `alpaca` binary) is an independent read path: after
   every cycle `account get`, `position list`, `order list` are compared with
   the ledger and any mismatch is recorded, never auto-fixed.
@@ -99,5 +107,12 @@ claim "AI beats quant" is published as `UNSUPPORTED` until a pre-registered
 [Plan](docs/PLAN.md) · [Thesis](docs/THESIS.md) ·
 [Validation](docs/VALIDATION.md) · [App](docs/APP.md) ·
 [Research](docs/RESEARCH.md)
+
+## Disclosure
+
+All work was done inside the hackathon window: planning documents on 1 Sep
+2026, all code on 2 Sep 2026 (see `git log`). No pre-event code, libraries, or
+infrastructure were reused. The agent went live on the dedicated $100k paper
+account on Wednesday 2 Sep at 09:30 ET; equity before that is untouched.
 
 MIT licensed. Paper trading only; nothing here is investment advice.

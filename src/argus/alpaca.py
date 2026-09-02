@@ -144,6 +144,13 @@ class AlpacaGateway:
         except Exception:  # noqa: BLE001 - SDK raises APIError for unknown ids
             return None
 
+    def cancel_order(self, order_id: str) -> bool:
+        try:
+            self.trading.cancel_order_by_id(order_id)
+            return True
+        except Exception:  # noqa: BLE001 - already filled/canceled; caller reconciles
+            return False
+
     def positions(self) -> list[dict]:
         return [{"symbol": p.symbol, "qty": float(p.qty), "asset_class": str(p.asset_class),
                  "avg_entry_price": float(p.avg_entry_price), "market_value": float(p.market_value or 0)}
@@ -222,6 +229,13 @@ class FakeGateway:
 
     def order_by_client_id(self, client_order_id: str) -> dict | None:
         return self.orders.get(client_order_id)
+
+    def cancel_order(self, order_id: str) -> bool:
+        for o in self.orders.values():
+            if o["id"] == order_id and o["status"] not in ("filled", "canceled"):
+                o["status"] = "canceled"
+                return True
+        return False
 
     def positions(self) -> list[dict]:
         return list(self._positions)

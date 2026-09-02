@@ -30,10 +30,13 @@ def open_observations(ledger: Ledger) -> dict:
     obs: dict[str, dict] = {}
     cands: dict[str, dict] = {}
     by_cid: dict[str, tuple[str, str]] = {}  # client_order_id -> (snapshot_id, "open"|"close")
+    ai_source: dict[str, str | None] = {}
     for e in ledger.events():
         p, k = e["payload"], e["kind"]
         if k == "candidates":
             cands[p["snapshot_id"]] = {c["candidate_id"]: c for c in p["candidates"]}
+        elif k == "ai_recommendation":
+            ai_source[p["snapshot_id"]] = p.get("source")
         elif k == "ablation":
             obs[p["snapshot_id"]] = {"snapshot_id": p["snapshot_id"], "ts": e["ts"], "quant": p["quant_choice"], "ai": p["ai_choice"],
                                      "inference_cost_usd": p["inference_cost_usd"], "risk_budget": p["risk_budget"],
@@ -70,7 +73,9 @@ def open_observations(ledger: Ledger) -> dict:
                 o["arms"][p["arm"]] = p
     for sid, o in obs.items():
         o["candidates"] = cands.get(sid, {})
+        o["ai_source"] = ai_source.get(sid)
         oo = o.get("open_order")
+        o["open_pending"] = bool(oo and oo["status"] != "filled" and oo["status"] in PENDING | {"submitted"})
         if oo and oo["status"] == "filled":
             closed = any(c["status"] == "filled" for c in o["close_orders"])
             pending = [c for c in o["close_orders"] if c["status"] in PENDING | {"submitted"}]
@@ -79,14 +84,26 @@ def open_observations(ledger: Ledger) -> dict:
     return obs
 
 
-def open_risk_usd(obs: dict) -> float:
-    """Sum of defined max loss across executed, not-yet-closed AI positions."""
-    total = 0.0
+def _committed_candidates(obs: dict) -> list[dict]:
+    """Candidates whose risk is live: filled and unclosed, or an opening order still working."""
+    out = []
     for o in obs.values():
         ex = o.get("executed")
-        if ex and not ex["closed"]:
-            total += float(o["candidates"][o["ai"]]["max_loss_total"])
-    return round(total, 2)
+        if (ex and not ex["closed"]) or o.get("open_pending"):
+            cand = o.get("candidates", {}).get(o["ai"])
+            if cand:
+                out.append(cand)
+    return out
+
+
+def open_risk_usd(obs: dict) -> float:
+    """Sum of defined max loss across AI positions that are filled or still working."""
+    return round(sum(float(c["max_loss_total"]) for c in _committed_candidates(obs)), 2)
+
+
+def committed_symbols(obs: dict) -> set[str]:
+    """Leg symbols already committed by a filled or still-working AI order."""
+    return {leg["symbol"] for c in _committed_candidates(obs) for leg in c["legs"]}
 
 
 def run_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool = False,
@@ -133,16 +150,18 @@ def run_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool =
         proposal = {
             "run_id": run_id, "snapshot_id": snapshot["snapshot_id"], "candidate_id": cand["candidate_id"], "structure": cand["structure"],
             "legs": [{k: l[k] for k in ("symbol", "side", "position_intent")} for l in cand["legs"]], "qty": cand["qty"],
-            # signed net price (Alpaca MLEG: + debit / - credit), conceded halfway from mid toward the worst open price
-            "limit_price": round(cand["entry_mid"] + 0.5 * (cand["entry_ask"] - cand["entry_mid"]), 2),
+            # signed net price (Alpaca MLEG: + debit / - credit). Marketable: the worst quoted open price, so the
+            # order fills now against the snapshot it was decided on instead of resting and filling adversely later.
+            "limit_price": round(cand["entry_ask"], 2),
             "entry_mid": cand["entry_mid"], "kind": cand.get("kind", "debit"), "width": cand["width"],
             "time_in_force": "day", "intent": "open",
         }
         governor = governor or Governor(settings, ledger.path.parent / "state")
         fresh = gateway.latest_option_quotes([l["symbol"] for l in proposal["legs"]])
         fresh_account = gateway.account()
-        fresh_account["open_risk_usd"] = open_risk_usd(open_observations(ledger))
-        fresh_account["open_symbols"] = sorted({p["symbol"] for p in gateway.positions()})
+        live_obs = open_observations(ledger)
+        fresh_account["open_risk_usd"] = open_risk_usd(live_obs)
+        fresh_account["open_symbols"] = sorted({p["symbol"] for p in gateway.positions()} | committed_symbols(live_obs))
         decision = governor.evaluate(proposal, fresh_account, fresh, now=now)
         ledger.append("risk_decision", run_id, {"proposal": proposal, **{k: v for k, v in decision.items() if k != "authorization"},
                                                 "open_risk_usd": fresh_account["open_risk_usd"], "execute_flag": execute})
@@ -155,12 +174,24 @@ def run_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool =
             "changed": ablation["changed"], "execution": execution, "ai_record": a.get("recorded")}
 
 
-def _reconcile(gateway, ledger: Ledger, run_id: str, order: dict | None) -> str | None:
-    """Re-query a submitted order; record the broker state if it changed. Returns the broker status."""
+def _reconcile(gateway, ledger: Ledger, run_id: str, order: dict | None, cancel_if_pending: bool = False) -> str | None:
+    """Re-query a submitted order; record the broker state if it changed. Returns the broker status.
+
+    With ``cancel_if_pending`` a still-working order is canceled first: an order that did not fill within one
+    cycle belongs to a stale snapshot and would otherwise fill only when the market moves against it.
+    """
     if not order or order["status"] in TERMINAL_UNFILLED or order["status"] == "filled":
         return order["status"] if order else None
     state = gateway.order_by_client_id(order["client_order_id"])
     status = (state or {}).get("status")
+    if cancel_if_pending and status in PENDING and state and state.get("id"):
+        gateway.cancel_order(state["id"])
+        state = gateway.order_by_client_id(order["client_order_id"]) or state
+        status = state.get("status") or status
+        ledger.append("reconciliation", run_id, {"client_order_id": order["client_order_id"], "broker_state": state,
+                                                 "action": "canceled_stale_pending_order"})
+        order["status"] = status
+        return status
     if status and status != order["status"]:
         ledger.append("reconciliation", run_id, {"client_order_id": order["client_order_id"], "broker_state": state, "action": "status_update"})
         order["status"] = status
@@ -171,12 +202,13 @@ def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool 
                governor: Governor | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     obs = open_observations(ledger)
-    # 1. Reconcile opening orders that are not yet terminal, so `executed` reflects broker truth.
+    # 1. Reconcile opening orders that are not yet terminal, so `executed` reflects broker truth. An opening order
+    #    still working at the next cycle is stale (its snapshot is a cycle old): cancel it, then read the final state.
     changed = False
     for o in obs.values():
         oo = o.get("open_order")
         if oo and oo["status"] not in TERMINAL_UNFILLED and oo["status"] != "filled":
-            changed |= _reconcile(gateway, ledger, run_id, oo) != "submitted"
+            changed |= _reconcile(gateway, ledger, run_id, oo, cancel_if_pending=True) != "submitted"
     if changed:
         obs = open_observations(ledger)
     symbols: set[str] = set()
@@ -231,9 +263,9 @@ def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool 
             # 2. Real position management for the AI arm: close when the outcome closes; retry unfilled closes.
             ex = o.get("executed")
             if arm == "ai" and already_closed and ex and not ex["closed"] and execute and lq and sq:
-                pending_status = _reconcile(gateway, ledger, run_id, ex["close_pending"]) if ex["close_pending"] else None
+                pending_status = _reconcile(gateway, ledger, run_id, ex["close_pending"], cancel_if_pending=True) if ex["close_pending"] else None
                 if pending_status == "filled" or pending_status in PENDING:
-                    continue  # closed now, or still working — do not stack close orders
+                    continue  # closed now, or cancel did not land yet — never stack close orders
                 attempt = ex["close_attempts"] + 1
                 if attempt > settings.max_close_attempts:
                     ledger.append("note", run_id, {"snapshot_id": sid, "close_attempts_exhausted": attempt - 1, "action": "operator_attention"})

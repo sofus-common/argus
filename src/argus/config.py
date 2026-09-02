@@ -85,7 +85,7 @@ class Settings:
 def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
     if dotenv is not None:
         _load_dotenv(dotenv)
-    flatten = datetime.fromisoformat(_env("ARGUS_FLATTEN_AT", "2026-09-04T14:00:00+00:00").replace("Z", "+00:00"))
+    flatten = datetime.fromisoformat(_env("ARGUS_FLATTEN_AT", "2026-09-03T19:30:00+00:00").replace("Z", "+00:00"))
     if flatten.tzinfo is None:
         flatten = flatten.replace(tzinfo=timezone.utc)
     return Settings(

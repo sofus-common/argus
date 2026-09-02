@@ -42,16 +42,19 @@ hour before the deadline; unfilled closes are reconciled and retried. Costs are
 modelled identically for both arms (25% of half-spread per leg per side plus
 regulatory fees), inference cost is charged to the AI arm only.
 
-**Alpaca infrastructure.** `alpaca-py` is the single governed write path:
-`TradingClient(paper=True)` hardcoded, MLEG limit orders with deterministic
-client order IDs, intent written to the ledger before submission, broker state
-re-queried before any retry. The official **Alpaca CLI** runs after every cycle
+**Alpaca infrastructure.** The official `alpaca-py` SDK is the single governed
+write path — chosen over MCP/CLI order tools because the governor must hash,
+sign, verify and submit the exact proposal inside one process, then re-query it
+for reconciliation; a conversational tool call cannot give that guarantee.
+`TradingClient(paper=True)` is hardcoded; MLEG limit orders carry signed net
+prices and deterministic client order IDs; intent is written to the ledger
+before submission and broker state re-queried before any retry. The official **Alpaca CLI** runs after every cycle
 as an independent read path (`account get`, `position list`, `order list`) and
 records whether broker positions match the ledger; mismatches are surfaced,
 never auto-fixed. The **Alpaca MCP server** is configured read-only
 (`assets,stock-data,options-data,news`) for research and captured the replay
 fixture. Market data: options snapshots (indicative feed), latest quotes, daily
-bars. The agent loops autonomously every 30 minutes while the market is open.
+bars. The agent loops autonomously every 20 minutes while the market is open.
 
 **Evidence.** Append-only, SHA-256 hash-chained JSONL ledger; `score.json` is a
 pure function of it; every displayed value maps to a claim with a source
@@ -61,9 +64,15 @@ fewer than 30 paired observations the evidence state is DESCRIPTIVE; "AI beats
 quant" is published as UNSUPPORTED. The evidence board, `argus replay`, and 15
 tests run without credentials.
 
-**Result at submission (paper account `[ACCOUNT_ID]`).** `[N]` paired
+**Scoring window.** Alpaca scores total account equity as of EOD Thursday 3 Sep.
+ARGUS went live Wednesday 2 Sep 09:30 ET on this account, stops opening
+positions at 14:30 ET Thursday and flattens at 15:30 ET, so the scored equity
+is realized cash, not broker marks on open spreads. Equity before Wednesday
+is the untouched $100,000.
+
+**Result at submission (paper account `PA3OAPMCFQAY`).** `[N]` paired
 observations, `[K]` where AI ≠ quant. AI minus quant after inference:
 `[$X.XX]`. Quant net `[$]`, AI net `[$]`, inference cost `[$]`. Evidence state
 DESCRIPTIVE — a measurement apparatus with a real number on it, not a claim.
 
-Repo: `[GITHUB_URL]` · Board: `[PAGES_URL]` · Video: `[VIDEO_URL]`
+Repo: https://github.com/sofus-common/argus · Board: https://sofus-common.github.io/argus/ · Video: `[VIDEO_URL]`

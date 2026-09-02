@@ -301,9 +301,9 @@ def test_credit_and_debit_verticals_share_one_signed_price_model(tmp_path, setti
     assert kinds == {"debit", "credit"}
     for c in cands:
         if c["kind"] == "debit":
-            assert 0 < c["entry_mid"] < c["width"] and abs(c["max_loss_per_contract"] - c["entry_mid"] * 100) < 1e-6
+            assert 0 < c["entry_mid"] < c["width"] and abs(c["max_loss_per_contract"] - c["entry_ask"] * 100) < 1e-6
         else:
-            assert -c["width"] < c["entry_mid"] < 0 and abs(c["max_loss_per_contract"] - (c["width"] + c["entry_mid"]) * 100) < 1e-6
+            assert -c["width"] < c["entry_mid"] < 0 and abs(c["max_loss_per_contract"] - (c["width"] + c["entry_ask"]) * 100) < 1e-6
         assert c["max_loss_total"] <= settings.risk_cap_pct * settings.start_equity
         assert c["entry_bid"] <= c["entry_mid"] <= c["entry_ask"]
     # Quant: IV is ~5 vol points rich in this fixture -> credit regime.
@@ -334,3 +334,30 @@ def test_credit_and_debit_verticals_share_one_signed_price_model(tmp_path, setti
     mark_cycle(gw2, settings, led2, "m1", execute=True, now=settings.flatten_at + timedelta(minutes=1), governor=Governor(settings, tmp_path / "s2"))
     close2 = [e["payload"]["proposal"] for e in led2.by_kind("risk_decision") if e["payload"]["proposal"]["intent"].startswith("close")][0]
     assert close2["limit_price"] < 0
+
+
+def test_stale_pending_open_order_is_canceled_next_cycle_and_limit_is_marketable(tmp_path, settings, fixture):
+    from argus.engine import mark_cycle, open_observations
+
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    original = gw.submit_mleg
+
+    def resting(legs, qty, limit_price, cid):  # broker accepts but does not fill
+        o = original(legs, qty, limit_price, cid)
+        o["status"] = "new"
+        return o
+
+    gw.submit_mleg = resting
+    r = run_cycle(gw, settings, led, "r1", execute=True, ai_recorded=fixture["ai"], now=now, governor=gov)
+    prop = led.by_kind("risk_decision")[0]["payload"]["proposal"]
+    cand = next(c for c in led.by_kind("candidates")[0]["payload"]["candidates"] if c["candidate_id"] == prop["candidate_id"])
+    assert prop["limit_price"] == round(cand["entry_ask"], 2)  # marketable, not resting at mid
+    assert open_observations(led)[r["snapshot_id"]]["executed"] is None  # not filled => not executed
+    mark_cycle(gw, settings, led, "m1", execute=True, now=now + timedelta(minutes=20), governor=gov)
+    rec = [e["payload"] for e in led.by_kind("reconciliation")]
+    assert rec and rec[-1]["action"] == "canceled_stale_pending_order" and rec[-1]["broker_state"]["status"] == "canceled"
+    assert open_observations(led)[r["snapshot_id"]]["executed"] is None
+    assert all(e["payload"].get("submitted") is not True or e["payload"]["intent"] == "open" for e in led.by_kind("order_intent"))
