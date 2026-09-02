@@ -483,3 +483,21 @@ def test_usd_totals_count_a_held_spread_once_but_n_stays_per_snapshot(tmp_path, 
     assert sc["quant_net_total"] == pytest.approx(sc["rows"][0]["quant_net"])
     # ...while abstentions have no legs and stay one observation per snapshot.
     assert sc["distinct_spreads"]["ai"] == 3
+
+
+def test_representative_row_prefers_the_observation_that_actually_traded():
+    # A dry-run cycle or a governor veto can precede the observation that filled, so the earliest row can be a
+    # position that was never taken. The executed flag is the AI's, so the quant arm must never use it.
+    from argus.validation import _representative
+
+    legs = ("A", "B")
+    rows = [
+        {"ts": "t1", "k": legs, "executed": False, "tag": "dry"},
+        {"ts": "t2", "k": legs, "executed": True, "tag": "filled"},
+        {"ts": "t3", "k": legs, "executed": False, "tag": "blocked"},
+        {"ts": "t4", "k": ("C", "D"), "executed": False, "tag": "other"},
+    ]
+    ai = _representative(rows, lambda r: r["k"], prefer_executed=True)
+    assert [r["tag"] for r in ai] == ["filled", "other"]
+    quant = _representative(rows, lambda r: r["k"], prefer_executed=False)
+    assert [r["tag"] for r in quant] == ["dry", "other"]

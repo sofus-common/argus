@@ -33,6 +33,21 @@ def _block_bootstrap(deltas: list[float], block: int = 3, reps: int = 2000, seed
     return (round(means[int(0.025 * reps)], 5), round(means[int(0.975 * reps)] - 1e-12, 5))
 
 
+def _representative(rows: list[dict], key, prefer_executed: bool) -> list[dict]:
+    """One row per distinct spread, in time order.
+
+    ``prefer_executed`` picks the observation whose order actually filled, which is not always the earliest: a
+    dry-run cycle or a governor veto can precede the one that traded. Only ever pass it for the AI arm - the
+    ``executed`` flag is the AI's, so using it to collapse the quant arm silently picks a different quant entry.
+    """
+    groups: dict = {}
+    for r in rows:
+        groups.setdefault(key(r), []).append(r)
+    out = [next((r for r in grp if r["executed"]), grp[0]) if prefer_executed else grp[0]
+           for grp in groups.values()]
+    return sorted(out, key=lambda r: r["ts"])
+
+
 def score(ledger: Ledger, settings) -> dict:
     ok, why = ledger.verify()
     if not ok:
@@ -55,23 +70,14 @@ def score(ledger: Ledger, settings) -> dict:
     # one-per-snapshot and the block bootstrap absorbs the overlap. The DOLLAR totals are a different quantity:
     # both arms are sticky, so one spread is re-picked for many consecutive snapshots, and summing per-snapshot
     # outcomes would count a single position many times over and report it as money. Those aggregate over the
-    # first observation of each run of identical legs - the one that became the real order.
+    # observation of each run of identical legs that actually traded, or the earliest where none did.
     def _legs(r, arm):
         cand = obs[r["snapshot_id"]]["candidates"].get(r[arm + "_choice"])
         # an abstention has no legs and is genuinely one observation per snapshot
         return tuple(l["symbol"] for l in cand["legs"]) if cand else ("abstain", r["snapshot_id"])
 
-    def _first_per(key):
-        seen, out = set(), []
-        for r in rows:
-            k = key(r)
-            if k not in seen:
-                seen.add(k)
-                out.append(r)
-        return out
-
-    q_rows = _first_per(lambda r: _legs(r, "quant"))
-    a_rows = _first_per(lambda r: _legs(r, "ai"))
+    q_rows = _representative(rows, lambda r: _legs(r, "quant"), prefer_executed=False)
+    a_rows = _representative(rows, lambda r: _legs(r, "ai"), prefer_executed=True)
 
     n = len(rows)
     deltas = [r["delta"] for r in rows]
@@ -95,6 +101,6 @@ def score(ledger: Ledger, settings) -> dict:
         "changed_only": {"n": changed, "delta_sum": round(sum(r["delta"] for r in rows if r["changed"]), 6)},
         "executed_observations": sum(1 for r in rows if r["executed"]), "min_observations_for_exploratory": settings.min_observations,
         "distinct_spreads": {"quant": len(q_rows), "ai": len(a_rows)},
-        "usd_totals_basis": "distinct spreads (first observation of each run of identical legs); n and the CI are per snapshot",
+        "usd_totals_basis": "distinct spreads (the observation that traded, else the earliest); n and the CI are per snapshot",
         "supported_enabled": False, "rows": rows,
     }
