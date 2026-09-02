@@ -143,6 +143,9 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
               "research": ("warn", "RESEARCH — not paper-executed"),
               "paper": ("ok", "PAPER — dedicated $100k Alpaca paper account")}[mode]
     diff = score["ai_minus_quant_usd"]
+    # The dollar cards count each distinct spread once; the delta cards are per snapshot, so a spread held for
+    # many snapshots is weighted by how long it was held. The two answer different questions and can disagree.
+    ds = score.get("distinct_spreads") or {"quant": score["n_observations"], "ai": score["n_observations"]}
     cls = "ok" if (diff or 0) > 0 else ("bad" if (diff or 0) < 0 else "")
     events = list(ledger.events())
     ok, msg = ledger.verify()
@@ -157,11 +160,14 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
             last[e["kind"]] = e
     recon = next((e["payload"] for e in reversed(events) if e["kind"] == "reconciliation" and e["payload"].get("source") == "alpaca-cli"), None)
     cards = [
-        ("AI minus quant, net of inference", f"${_fmt(diff)}", cls, "USD, after modelled costs, same marks"),
-        ("Paired observations", _fmt(score["n_observations"]), "", f"{score['n_unmarked']} not yet marked"),
+        ("AI minus quant, net of inference", f"${_fmt(diff)}", cls,
+         f"USD over {ds['ai']} AI / {ds['quant']} quant distinct spreads, after modelled costs, same marks"),
+        ("Paired observations", _fmt(score["n_observations"]), "",
+         f"{score['n_unmarked']} not yet marked; one per snapshot, so a held spread is re-observed"),
         ("Changed decisions", _fmt(score["changed_decisions"]), "", f"Δ on changed only: {_fmt(score['changed_only']['delta_sum'])}"),
         ("AI coverage", _fmt(score["coverage"]), "", f"{score['ai_abstentions']} AI / {score['quant_abstentions']} quant abstentions"),
-        ("Mean paired Δ / risk budget", _fmt(score["paired_delta_mean"]), "", "block-bootstrap CI95 " + _fmt(score["paired_delta_ci95"])),
+        ("Mean paired Δ / risk budget", _fmt(score["paired_delta_mean"]), "",
+         "per snapshot, block-bootstrap CI95 " + _fmt(score["paired_delta_ci95"])),
         ("Quant net", f"${_fmt(score['quant_net_total'])}", "", f"max drawdown {_fmt(score['max_drawdown_quant'])}"),
         ("AI net", f"${_fmt(score['ai_net_total'])}", "", f"max drawdown {_fmt(score['max_drawdown_ai'])}"),
         ("Inference cost", f"${_fmt(score['inference_cost_total_usd'])}", "", score["model"]),

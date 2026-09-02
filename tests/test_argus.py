@@ -459,3 +459,27 @@ def test_flatten_still_attempts_a_close_after_the_attempt_budget_is_spent(tmp_pa
     closes = [e["payload"] for e in led.by_kind("order_intent") if e["payload"]["intent"].startswith("close")]
     assert closes and closes[-1]["submitted"] is True
     assert open_observations(led)[list(open_observations(led))[0]]["executed"]["closed"]
+
+def test_usd_totals_count_a_held_spread_once_but_n_stays_per_snapshot(tmp_path, settings, fixture):
+    # candidate_id is salted with snapshot_id, so a sticky arm re-picks the same contracts every cycle. The
+    # pre-registered unit is the snapshot, so n must count every cycle - but the dollar totals must not add the
+    # same position up again and again and publish the result as money.
+    from argus.engine import mark_cycle
+
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    for i in range(3):  # same fixture, same packet => both arms re-pick the same legs
+        run_cycle(gw, settings, led, f"r{i}", execute=False, ai_recorded=fixture["ai"],
+                  now=now + timedelta(minutes=20 * i), governor=gov)
+    gw.marks_active = True
+    mark_cycle(gw, settings, led, "m1", execute=False, now=now + timedelta(minutes=70), governor=gov)
+
+    sc = validation.score(led, settings)
+    assert sc["n_observations"] == 3, "the pre-registered unit is the snapshot"
+    # The quant re-picks the same contracts every cycle, so its dollar total counts them once...
+    assert sc["distinct_spreads"]["quant"] == 1
+    assert sc["quant_net_total"] == pytest.approx(sc["rows"][0]["quant_net"])
+    # ...while abstentions have no legs and stay one observation per snapshot.
+    assert sc["distinct_spreads"]["ai"] == 3
