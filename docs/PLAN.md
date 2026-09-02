@@ -1,5 +1,14 @@
 # ARGUS implementation plan
 
+## Status (2 Sep 2026, 14:00 CEST)
+
+M0–M5 are implemented as a vertical slice in `src/argus/` (10 passing tests,
+credential-free replay, live dry run against the fresh paper account and
+OpenRouter verified). M6 is a static exported site rather than a server. The
+six handoff decisions below were taken with the defaults recorded in
+`.env.example` (rationale in the private competition notes). Remaining: run the loop
+during market hours, submission assets, social posts.
+
 ## Operating decisions
 
 - Build one Python service, not microservices.

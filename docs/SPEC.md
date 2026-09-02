@@ -88,14 +88,19 @@ day time-in-force, defined maximum loss, a 1% configured-equity position-risk
 cap, and underlying/expiry allowlists. Reobserve quote, Greeks, account,
 positions, and maximum loss immediately before submission. The 1% denominator
 is the lesser of current paper-account equity and the supplied $100,000 starting
-equity. An explicit,
-short-lived operator approval must bind to the exact proposal hash. Write order
-intent with a deterministic client order ID before calling Alpaca; reconcile
-uncertain outcomes before retrying.
+equity. The governor issues a short-lived (60 s) HMAC authorization bound to the
+exact proposal hash; it is autonomous (no human token, per the competition's
+autonomy requirement) and honors an operator kill switch (`argus halt`) before
+every approval. Write order intent with a deterministic client order ID before
+calling Alpaca; reconcile uncertain outcomes before retrying.
 
 The only submission call chain is CLI → governor-issued authorization → Alpaca
-gateway. The gateway rejects missing, expired, already-used, or proposal-hash-
-mismatched authorization.
+gateway. The gateway rejects missing, expired, forged, already-used, or
+proposal-hash-mismatched authorization.
+
+Amended 2 Sep 2026: the original human-approval token conflicted with the
+"autonomous agent" requirement and was replaced by governor self-authorization
+plus a kill switch. See the private competition notes.
 
 ### Evidence ledger
 

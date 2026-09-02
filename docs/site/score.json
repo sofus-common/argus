@@ -1,0 +1,63 @@
+{
+  "trial_id": "same_information_v1",
+  "model": "google/gemini-2.5-flash-lite",
+  "run_mode": "paper",
+  "evidence_state": "DESCRIPTIVE",
+  "n_observations": 2,
+  "n_unmarked": 1,
+  "changed_decisions": 2,
+  "ai_abstentions": 1,
+  "quant_abstentions": 0,
+  "coverage": 0.5,
+  "paired_delta_sum": 0.008399,
+  "paired_delta_mean": 0.004199,
+  "paired_delta_ci95": [
+    0.0042,
+    0.023
+  ],
+  "quant_net_total": 1.7,
+  "ai_net_total": 10.1,
+  "ai_minus_quant_usd": 8.4,
+  "inference_cost_total_usd": 0.0011,
+  "max_drawdown_quant": -12.9,
+  "max_drawdown_ai": 0.0,
+  "changed_only": {
+    "n": 2,
+    "delta_sum": 0.008399
+  },
+  "executed_observations": 0,
+  "min_observations_for_exploratory": 30,
+  "supported_enabled": false,
+  "rows": [
+    {
+      "snapshot_id": "160e2d76d4749ab8",
+      "ts": "2026-09-02T14:25:38.952117+00:00",
+      "quant_choice": "471b90d148ee",
+      "ai_choice": "abstain",
+      "changed": true,
+      "quant_net": 14.6,
+      "ai_net": 0.0,
+      "ai_net_after_inference": 0.0,
+      "inference_cost_usd": 0.0,
+      "delta": -0.0146,
+      "quant_status": "open",
+      "ai_status": "closed",
+      "executed": false
+    },
+    {
+      "snapshot_id": "2ad1454db4416e18",
+      "ts": "2026-09-02T14:26:44.763374+00:00",
+      "quant_choice": "4fdf47cd28c0",
+      "ai_choice": "a3b7802363f0",
+      "changed": true,
+      "quant_net": -12.9,
+      "ai_net": 10.1,
+      "ai_net_after_inference": 10.1,
+      "inference_cost_usd": 0.001133946,
+      "delta": 0.022999,
+      "quant_status": "open",
+      "ai_status": "open",
+      "executed": false
+    }
+  ]
+}

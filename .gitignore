@@ -16,3 +16,6 @@ logs/
 *.jsonl
 !fixtures/**/*.jsonl
 !public/**/*.jsonl
+# local Alpaca CLI binary (download from github.com/alpacahq/cli/releases)
+bin/
+*.egg-info/
