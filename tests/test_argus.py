@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -422,4 +423,39 @@ def test_flatten_closes_even_when_the_quote_is_missing(tmp_path, settings, fixtu
     assert any(o["reason"] == "flatten_deadline_no_quote" and o["status"] == "closed" for o in out)
     intents = [e["payload"] for e in led.by_kind("order_intent") if e["payload"]["intent"].startswith("close")]
     assert intents and intents[-1]["submitted"] is True
+    assert open_observations(led)[list(open_observations(led))[0]]["executed"]["closed"]
+
+
+def test_unusable_quotes_never_mark_or_close_an_arm():
+    # A crossed, offerless or stale quote yields a mark that can trip the profit target or stop loss and close an
+    # arm permanently on a fabricated price, which then becomes the final scored value in score.json.
+    from argus.engine import _usable_quote
+
+    now = datetime(2026, 9, 2, 18, 0, tzinfo=timezone.utc)
+    fresh = now.isoformat()
+    assert _usable_quote({"bid": 1.0, "ask": 1.2, "quote_ts": fresh}, now)
+    assert _usable_quote({"bid": 0.0, "ask": 0.05, "quote_ts": fresh}, now)  # far-OTM zero bid is legitimate
+    assert not _usable_quote({"bid": 1.0, "ask": 0.0, "quote_ts": fresh}, now)  # no offer
+    assert not _usable_quote({"bid": 1.5, "ask": 1.2, "quote_ts": fresh}, now)  # crossed
+    assert not _usable_quote({"bid": 1.0, "ask": None, "quote_ts": fresh}, now)
+    assert not _usable_quote(None, now)
+    stale = (now - timedelta(minutes=90)).isoformat()
+    assert not _usable_quote({"bid": 1.0, "ask": 1.2, "quote_ts": stale}, now)
+
+
+def test_flatten_still_attempts_a_close_after_the_attempt_budget_is_spent(tmp_path, settings, fixture):
+    # max_close_attempts is a lifetime counter, so attempts spent on a profit target hours earlier must not
+    # leave the deadline with none, which would end the run holding the position.
+    from argus.engine import mark_cycle, open_observations
+
+    settings = replace(settings, max_close_attempts=0)
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    run_cycle(gw, settings, led, "r1", execute=True, ai_recorded=fixture["ai"], now=now, governor=gov)
+    gw.marks_active = True
+    mark_cycle(gw, settings, led, "m1", execute=True, now=settings.flatten_at + timedelta(minutes=1), governor=gov)
+    closes = [e["payload"] for e in led.by_kind("order_intent") if e["payload"]["intent"].startswith("close")]
+    assert closes and closes[-1]["submitted"] is True
     assert open_observations(led)[list(open_observations(led))[0]]["executed"]["closed"]

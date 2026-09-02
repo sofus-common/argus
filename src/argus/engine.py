@@ -10,7 +10,8 @@ from .ledger import Ledger, canonical, sha256
 from .risk import Governor, client_order_id, governed_submit
 
 TERMINAL_UNFILLED = {"canceled", "expired", "rejected", "error", "replaced", "done_for_day", "stopped", "suspended"}
-PENDING = {"new", "accepted", "pending_new", "partially_filled", "accepted_for_bidding", "held", "calculated"}
+PENDING = {"new", "accepted", "pending_new", "partially_filled", "accepted_for_bidding", "held", "calculated",
+           "pending_cancel", "pending_replace", "pending_review"}  # still live: can still fill
 
 
 def _costs(cand: dict, settings) -> float:
@@ -198,6 +199,29 @@ def _reconcile(gateway, ledger: Ledger, run_id: str, order: dict | None, cancel_
     return status or order["status"]
 
 
+MAX_QUOTE_AGE = timedelta(minutes=40)  # ~2 cycles at the default 20-minute interval
+
+
+def _usable_quote(q: dict | None, now: datetime) -> bool:
+    """A quote we are willing to mark or price a close against.
+
+    A crossed or offerless quote produces a mark that can trip the profit target or stop loss and close an arm
+    permanently on a fabricated price, which then becomes the final scored value. A bid of 0 is legitimate on a
+    far-OTM leg, so it is not rejected here.
+    """
+    if not q or q.get("bid") is None or q.get("ask") is None:
+        return False
+    if q["ask"] <= 0 or q["ask"] < q["bid"]:
+        return False
+    ts = q.get("quote_ts")
+    if ts:
+        try:
+            return now - datetime.fromisoformat(ts) <= MAX_QUOTE_AGE
+        except ValueError:
+            return False
+    return True
+
+
 def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool = False, now: datetime | None = None,
                governor: Governor | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
@@ -219,6 +243,7 @@ def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool 
             if cid != "abstain" and not (prior and prior["status"] == "closed" and not (arm == "ai" and o.get("executed") and not o["executed"]["closed"])):
                 symbols.update(l["symbol"] for l in o["candidates"][cid]["legs"])
     quotes = gateway.latest_option_quotes(sorted(symbols)) if symbols else {}
+    quotes = {occ: q for occ, q in quotes.items() if _usable_quote(q, now)}
     marked, closed, close_orders = 0, 0, 0
     flatten = now >= settings.flatten_at
     for sid, o in obs.items():
@@ -275,7 +300,7 @@ def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool 
                 if pending_status == "filled" or pending_status in PENDING:
                     continue  # closed now, or cancel did not land yet — never stack close orders
                 attempt = ex["close_attempts"] + 1
-                if attempt > settings.max_close_attempts:
+                if attempt > settings.max_close_attempts and not flatten:  # the deadline always gets an attempt
                     ledger.append("note", run_id, {"snapshot_id": sid, "close_attempts_exhausted": attempt - 1, "action": "operator_attention"})
                     continue
                 governor = governor or Governor(settings, ledger.path.parent / "state")

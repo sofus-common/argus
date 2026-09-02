@@ -158,7 +158,10 @@ def governed_submit(governor: Governor, gateway, proposal: dict, auth: dict | No
     try:
         order = gateway.submit_mleg(proposal["legs"], proposal["qty"], proposal["limit_price"], cid)
     except Exception as exc:  # noqa: BLE001
-        ledger.append("order_result", run_id, {"client_order_id": cid, "error": f"{type(exc).__name__}: {exc}"[:300], "status": "error"})
+        # "error" is terminal, which would freeze the order and hide a position that actually filled. Record it
+        # as still submitted so every later cycle keeps re-querying the broker for its true state.
+        ledger.append("order_result", run_id, {"client_order_id": cid, "error": f"{type(exc).__name__}: {exc}"[:300],
+                                              "status": "submitted"})
         recon = gateway.order_by_client_id(cid)
         ledger.append("reconciliation", run_id, {"client_order_id": cid, "broker_state": recon, "action": "checked_after_error"})
         return {"submitted": True, "status": "error", "order": recon}
