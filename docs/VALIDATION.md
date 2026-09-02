@@ -14,6 +14,21 @@ drawdown allocation. Missing counterfactuals retain a reason code and are never
 silently dropped. The default abstention outcome is zero trading P&L minus
 inference cost; any cash benchmark must be pre-registered instead.
 
+## Uncertainty
+
+The paired delta interval is a block bootstrap with `block=3`, `reps=2000`,
+`seed=7`, all pre-registered. One unit is a snapshot and snapshots overlap in
+time by design, so consecutive deltas are not independent. `score.json` reports
+`max_leg_run`, the longest run of consecutive snapshots on identical legs, which
+bounds the correlation the overlap can induce; a reader can check it against the
+registered block length. Pairing removes most of the shared market move before
+the delta is formed, so the overlap that inflates arm sums largely does not
+survive into the difference series.
+
+The interval describes the mean paired delta per snapshot under the registered
+resampling scheme. It is not a forecast of realized AI-versus-quant return, and
+below the pre-registered minimum sample it is reported as descriptive only.
+
 ## Experimental unit
 
 One unit is an immutable timestamped market snapshot and candidate set. Quant

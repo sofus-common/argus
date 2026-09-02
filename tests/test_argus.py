@@ -501,3 +501,47 @@ def test_representative_row_prefers_the_observation_that_actually_traded():
     assert [r["tag"] for r in ai] == ["filled", "other"]
     quant = _representative(rows, lambda r: r["k"], prefer_executed=False)
     assert [r["tag"] for r in quant] == ["dry", "other"]
+
+
+def test_reconcile_does_not_flag_an_order_that_filled_between_submit_and_compare(tmp_path, settings, fixture, monkeypatch):
+    # An opening order fills at the broker before the ledger learns of it, so a naive comparison reports a
+    # mismatch on every successful entry and buries a real one.
+    from argus import alpaca_cli
+
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    original = gw.submit_mleg
+
+    def resting(legs, qty, limit_price, cid):
+        o = original(legs, qty, limit_price, cid)
+        o["status"] = "new"  # ledger sees it working...
+        return o
+
+    gw.submit_mleg = resting
+    r = run_cycle(gw, settings, led, "r1", execute=True, ai_recorded=fixture["ai"], now=now, governor=gov)
+    obs = open_observations_for(led, r["snapshot_id"])
+    legs = [l["symbol"] for l in obs["candidates"][obs["ai"]]["legs"]]
+    qty = obs["candidates"][obs["ai"]]["qty"]
+
+    # ...while the broker already shows the filled position.
+    filled = [{"symbol": legs[0], "qty": qty, "asset_class": "us_option"},
+              {"symbol": legs[1], "qty": -qty, "asset_class": "us_option"}]
+    monkeypatch.setattr(alpaca_cli, "cli_json", lambda args, s, timeout=30: (
+        {} if args[0] == "account" else (filled if args[0] == "position" else []), None))
+    out = alpaca_cli.reconcile(led, settings, "m1")
+    assert out["consistent"] and not out["mismatches"], out["mismatches"]
+    assert out["ledger_pending_legs"] == {legs[0]: float(qty), legs[1]: -float(qty)}
+
+    # A position neither executed nor pending is still a real mismatch.
+    stray = filled + [{"symbol": "SPY260909C00999000", "qty": 1, "asset_class": "us_option"}]
+    monkeypatch.setattr(alpaca_cli, "cli_json", lambda args, s, timeout=30: (
+        {} if args[0] == "account" else (stray if args[0] == "position" else []), None))
+    out = alpaca_cli.reconcile(led, settings, "m2")
+    assert [m["symbol"] for m in out["mismatches"]] == ["SPY260909C00999000"]
+
+
+def open_observations_for(led, sid):
+    from argus.engine import open_observations
+    return open_observations(led)[sid]

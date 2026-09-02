@@ -64,22 +64,30 @@ def reconcile(ledger, settings, run_id: str) -> dict:
         return payload
     obs = open_observations(ledger)
     ledger_legs: dict[str, float] = {}
+    pending_legs: dict[str, float] = {}  # submitted but not yet known filled: the broker may or may not show them
     for o in obs.values():
         ex = o.get("executed")
-        if ex and not ex["closed"]:
-            cand = o["candidates"][o["ai"]]
-            for leg in cand["legs"]:
-                ledger_legs[leg["symbol"]] = ledger_legs.get(leg["symbol"], 0.0) + (cand["qty"] if leg["side"] == "buy" else -cand["qty"])
+        into = ledger_legs if (ex and not ex["closed"]) else (pending_legs if o.get("open_pending") else None)
+        if into is None:
+            continue
+        cand = o.get("candidates", {}).get(o["ai"])
+        if not cand:
+            continue
+        for leg in cand["legs"]:
+            into[leg["symbol"]] = into.get(leg["symbol"], 0.0) + (cand["qty"] if leg["side"] == "buy" else -cand["qty"])
     broker_legs = {p.get("symbol"): float(p.get("qty", 0)) for p in (positions or []) if p.get("asset_class") == "us_option"}
     mismatches = []
-    for sym in sorted(set(ledger_legs) | set(broker_legs)):
-        lq, bq = ledger_legs.get(sym, 0.0), broker_legs.get(sym, 0.0)
-        if abs(lq - bq) > 1e-9:
-            mismatches.append({"symbol": sym, "ledger_qty": lq, "broker_qty": bq})
+    for sym in sorted(set(ledger_legs) | set(broker_legs) | set(pending_legs)):
+        lq, bq, pq = ledger_legs.get(sym, 0.0), broker_legs.get(sym, 0.0), pending_legs.get(sym, 0.0)
+        # A working order legitimately reads either way: the broker shows it once it fills, and the ledger only
+        # learns that on the next cycle. Flag only a broker position that neither state explains, or this would
+        # report a mismatch on every successful entry and bury a real one.
+        if abs(lq - bq) > 1e-9 and abs(lq + pq - bq) > 1e-9:
+            mismatches.append({"symbol": sym, "ledger_qty": lq, "pending_qty": pq, "broker_qty": bq})
     payload = {
         "source": "alpaca-cli", "available": True, "action": "compared",
         "account": {k: (account or {}).get(k) for k in ("account_number", "equity", "cash", "options_buying_power", "status")},
-        "broker_option_positions": broker_legs, "ledger_open_legs": ledger_legs,
+        "broker_option_positions": broker_legs, "ledger_open_legs": ledger_legs, "ledger_pending_legs": pending_legs,
         "open_orders": [{"client_order_id": o.get("client_order_id"), "status": o.get("status"), "symbol": o.get("symbol")} for o in (orders or [])],
         "mismatches": mismatches, "consistent": not mismatches,
     }

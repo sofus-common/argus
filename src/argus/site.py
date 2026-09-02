@@ -146,6 +146,7 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
     # The dollar cards count each distinct spread once; the delta cards are per snapshot, so a spread held for
     # many snapshots is weighted by how long it was held. The two answer different questions and can disagree.
     ds = score.get("distinct_spreads") or {"quant": score["n_observations"], "ai": score["n_observations"]}
+    mlr = score.get("max_leg_run") or {"quant": 1, "ai": 1}
     cls = "ok" if (diff or 0) > 0 else ("bad" if (diff or 0) < 0 else "")
     events = list(ledger.events())
     ok, msg = ledger.verify()
@@ -167,7 +168,8 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
         ("Changed decisions", _fmt(score["changed_decisions"]), "", f"Δ on changed only: {_fmt(score['changed_only']['delta_sum'])}"),
         ("AI coverage", _fmt(score["coverage"]), "", f"{score['ai_abstentions']} AI / {score['quant_abstentions']} quant abstentions"),
         ("Mean paired Δ / risk budget", _fmt(score["paired_delta_mean"]), "",
-         "per snapshot, block-bootstrap CI95 " + _fmt(score["paired_delta_ci95"])),
+         f"per snapshot, CI95 {_fmt(score['paired_delta_ci95'])} (block=3 pre-registered; "
+         f"snapshots overlap, longest identical-leg run {mlr['ai']} AI / {mlr['quant']} quant)"),
         ("Quant net", f"${_fmt(score['quant_net_total'])}", "", f"max drawdown {_fmt(score['max_drawdown_quant'])}"),
         ("AI net", f"${_fmt(score['ai_net_total'])}", "", f"max drawdown {_fmt(score['max_drawdown_ai'])}"),
         ("Inference cost", f"${_fmt(score['inference_cost_total_usd'])}", "", score["model"]),

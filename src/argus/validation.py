@@ -76,6 +76,20 @@ def score(ledger: Ledger, settings) -> dict:
         # an abstention has no legs and is genuinely one observation per snapshot
         return tuple(l["symbol"] for l in cand["legs"]) if cand else ("abstain", r["snapshot_id"])
 
+    def _max_run(arm):
+        """Longest run of consecutive snapshots on identical legs: the correlation length the overlap can induce.
+
+        Reported, not acted on. block is pre-registered; this lets a reader check it against the data.
+        """
+        best = cur = 0
+        prev = object()
+        for r in rows:
+            k = _legs(r, arm)
+            cur = cur + 1 if k == prev else 1
+            prev = k
+            best = max(best, cur)
+        return best
+
     q_rows = _representative(rows, lambda r: _legs(r, "quant"), prefer_executed=False)
     a_rows = _representative(rows, lambda r: _legs(r, "ai"), prefer_executed=True)
 
@@ -101,6 +115,8 @@ def score(ledger: Ledger, settings) -> dict:
         "changed_only": {"n": changed, "delta_sum": round(sum(r["delta"] for r in rows if r["changed"]), 6)},
         "executed_observations": sum(1 for r in rows if r["executed"]), "min_observations_for_exploratory": settings.min_observations,
         "distinct_spreads": {"quant": len(q_rows), "ai": len(a_rows)},
+        "max_leg_run": {"quant": _max_run("quant"), "ai": _max_run("ai")},
+        "bootstrap": {"block": 3, "reps": 2000, "seed": 7, "pre_registered": True},
         "usd_totals_basis": "distinct spreads (the observation that traded, else the earliest); n and the CI are per snapshot",
         "supported_enabled": False, "rows": rows,
     }
