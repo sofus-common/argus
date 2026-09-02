@@ -118,7 +118,7 @@ class AlpacaGateway:
         feed = OptionsFeed.INDICATIVE if self.options_feed == "indicative" else OptionsFeed.OPRA
         quotes = self.options.get_option_latest_quote(OptionLatestQuoteRequest(symbol_or_symbols=symbols, feed=feed))
         return {occ: {"bid": float(q.bid_price), "ask": float(q.ask_price), "quote_ts": q.timestamp.isoformat() if q.timestamp else None}
-                for occ, q in quotes.items()}
+                for occ, q in quotes.items() if q is not None and q.bid_price is not None and q.ask_price is not None}
 
     def submit_mleg(self, legs: list[dict], qty: int, limit_price: float, client_order_id: str) -> dict:
         from alpaca.trading.requests import LimitOrderRequest, OptionLegRequest

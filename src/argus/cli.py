@@ -71,10 +71,11 @@ def cmd_loop(args, settings):
         if governor.halted():
             print(now.isoformat(), "HALT present; exiting loop")
             return
-        clock = clock_client.get_clock()
-        ledger = Ledger(p["ledger"], "paper")
-        if clock.is_open:
-            try:
+        ledger = None
+        try:
+            clock = clock_client.get_clock()
+            ledger = Ledger(p["ledger"], "paper")
+            if clock.is_open:
                 mk = engine.mark_cycle(gw, settings, ledger, _run_id(), execute=args.execute, governor=governor)
                 print(now.isoformat(), "mark", json.dumps(mk))
                 if now < settings.flatten_at:
@@ -87,11 +88,12 @@ def cmd_loop(args, settings):
                 rc = alpaca_cli.reconcile(ledger, settings, _run_id())
                 print(now.isoformat(), "reconcile", json.dumps({k: rc.get(k) for k in ("action", "consistent", "mismatches", "errors")}))
                 _score_and_export(settings, "paper", quiet=True, out=args.publish)
-            except Exception as exc:  # noqa: BLE001 - keep the loop alive, record the failure
+            else:
+                print(now.isoformat(), "market closed; next open", clock.next_open)
+        except Exception as exc:  # noqa: BLE001 - keep the loop alive, record the failure
+            if ledger is not None:  # an unbound ledger means the failure was building it; only the print survives
                 ledger.append("note", _run_id(), {"loop_error": f"{type(exc).__name__}: {exc}"[:300]})
-                print(now.isoformat(), "error", type(exc).__name__, exc)
-        else:
-            print(now.isoformat(), "market closed; next open", clock.next_open)
+            print(now.isoformat(), "error", type(exc).__name__, exc)
         if args.once:
             return
         wake = engine.next_wake(datetime.now(timezone.utc), args.interval, settings.flatten_at)

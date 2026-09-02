@@ -235,34 +235,42 @@ def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool 
             already_closed = bool(prior and prior["status"] == "closed")
             if not already_closed:
                 if not lq or not sq:
-                    ledger.append("outcome", run_id, {"snapshot_id": sid, "arm": arm, "candidate_id": cid, "status": "open",
-                                                      "reason": "missing_quote_keep_last", "marked_at": now.isoformat(),
+                    # Outside the deadline a missing quote just carries the last mark forward. At the deadline it
+                    # must not skip the close below, or the position stays open past it.
+                    status = "closed" if flatten else "open"
+                    ledger.append("outcome", run_id, {"snapshot_id": sid, "arm": arm, "candidate_id": cid, "status": status,
+                                                      "reason": "flatten_deadline_no_quote" if flatten else "missing_quote_keep_last",
+                                                      "marked_at": now.isoformat(),
                                                       **{k: (prior or {}).get(k, 0.0) for k in ("mark", "pnl_gross", "costs", "pnl_net")}})
-                    continue
-                mark = (lq["bid"] + lq["ask"]) / 2 - (sq["bid"] + sq["ask"]) / 2
-                pnl_gross = round((mark - cand["entry_mid"]) * 100.0 * cand["qty"], 2)
-                costs = cand.get("modelled_costs", 0.0)
-                pnl_net = round(pnl_gross - costs, 2)
-                per_contract = mark - cand["entry_mid"]  # works for debit (entry>0) and credit (entry<0) alike
-                reason = None
-                if flatten:
-                    reason = "flatten_deadline"
-                elif per_contract >= settings.profit_target * abs(cand["entry_mid"]):
-                    reason = "profit_target"
-                elif per_contract <= -settings.stop_loss * abs(cand["entry_mid"]):
-                    reason = "stop_loss"
-                elif (datetime.fromisoformat(cand["expiry"]).date() - now.date()).days <= 1:
-                    reason = "expiry_guard"
-                status = "closed" if reason else "open"
-                ledger.append("outcome", run_id, {"snapshot_id": sid, "arm": arm, "candidate_id": cid, "status": status, "mark": round(mark, 4),
-                                                  "pnl_gross": pnl_gross, "costs": costs, "pnl_net": pnl_net, "reason": reason or "marked",
-                                                  "marked_at": now.isoformat(), "quote_ts": lq.get("quote_ts")})
-                marked += 1
-                closed += status == "closed"
-                already_closed = status == "closed"
+                    closed += status == "closed"
+                    already_closed = status == "closed"
+                    if not already_closed:
+                        continue
+                if lq and sq:
+                    mark = (lq["bid"] + lq["ask"]) / 2 - (sq["bid"] + sq["ask"]) / 2
+                    pnl_gross = round((mark - cand["entry_mid"]) * 100.0 * cand["qty"], 2)
+                    costs = cand.get("modelled_costs", 0.0)
+                    pnl_net = round(pnl_gross - costs, 2)
+                    per_contract = mark - cand["entry_mid"]  # works for debit (entry>0) and credit (entry<0) alike
+                    reason = None
+                    if flatten:
+                        reason = "flatten_deadline"
+                    elif per_contract >= settings.profit_target * abs(cand["entry_mid"]):
+                        reason = "profit_target"
+                    elif per_contract <= -settings.stop_loss * abs(cand["entry_mid"]):
+                        reason = "stop_loss"
+                    elif (datetime.fromisoformat(cand["expiry"]).date() - now.date()).days <= 1:
+                        reason = "expiry_guard"
+                    status = "closed" if reason else "open"
+                    ledger.append("outcome", run_id, {"snapshot_id": sid, "arm": arm, "candidate_id": cid, "status": status, "mark": round(mark, 4),
+                                                      "pnl_gross": pnl_gross, "costs": costs, "pnl_net": pnl_net, "reason": reason or "marked",
+                                                      "marked_at": now.isoformat(), "quote_ts": lq.get("quote_ts")})
+                    marked += 1
+                    closed += status == "closed"
+                    already_closed = status == "closed"
             # 2. Real position management for the AI arm: close when the outcome closes; retry unfilled closes.
             ex = o.get("executed")
-            if arm == "ai" and already_closed and ex and not ex["closed"] and execute and lq and sq:
+            if arm == "ai" and already_closed and ex and not ex["closed"] and execute and (flatten or (lq and sq)):
                 pending_status = _reconcile(gateway, ledger, run_id, ex["close_pending"], cancel_if_pending=True) if ex["close_pending"] else None
                 if pending_status == "filled" or pending_status in PENDING:
                     continue  # closed now, or cancel did not land yet — never stack close orders
@@ -273,13 +281,20 @@ def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool 
                 governor = governor or Governor(settings, ledger.path.parent / "state")
                 # Closing reverses the legs. The spread's value v = long mid - short mid is what we give up, so the
                 # close order's signed net price is -v (Alpaca MLEG: negative = credit received, positive = debit paid).
-                value_mid = (lq["bid"] + lq["ask"]) / 2 - (sq["bid"] + sq["ask"]) / 2
-                value_bid = lq["bid"] - sq["ask"]  # worst (most conservative) value we can close at
+                kind = cand.get("kind", "debit")
+                cap = cand["width"] - 0.01  # the governor requires 0 < |limit| < width; width is the defined max loss
                 aggressive = flatten or attempt > 1
-                value_target = value_bid if aggressive else value_mid - 0.25 * (value_mid - value_bid)
-                limit = -value_target
+                if lq and sq:
+                    value_mid = (lq["bid"] + lq["ask"]) / 2 - (sq["bid"] + sq["ask"]) / 2
+                    value_bid = lq["bid"] - sq["ask"]  # worst (most conservative) value we can close at
+                    value_target = value_bid if aggressive else value_mid - 0.25 * (value_mid - value_bid)
+                    limit = -value_target
+                else:  # no quote at the deadline: concede the whole defined risk rather than stay open
+                    limit = cap if kind == "credit" else -0.01
                 if abs(limit) < 0.01:
-                    limit = -0.01 if cand.get("kind", "debit") == "debit" else 0.01
+                    limit = -0.01 if kind == "debit" else 0.01
+                # A deep-ITM spread can quote wider than its own width, which would veto the close forever.
+                limit = max(-cap, min(cap, limit))
                 proposal = {
                     "run_id": ex["run_id"], "snapshot_id": sid, "candidate_id": cid, "structure": cand["structure"],
                     "legs": [{"symbol": cand["legs"][0]["symbol"], "side": "sell", "position_intent": "sell_to_close"},

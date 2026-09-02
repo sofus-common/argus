@@ -361,3 +361,65 @@ def test_stale_pending_open_order_is_canceled_next_cycle_and_limit_is_marketable
     assert rec and rec[-1]["action"] == "canceled_stale_pending_order" and rec[-1]["broker_state"]["status"] == "canceled"
     assert open_observations(led)[r["snapshot_id"]]["executed"] is None
     assert all(e["payload"].get("submitted") is not True or e["payload"]["intent"] == "open" for e in led.by_kind("order_intent"))
+
+
+def test_second_writer_does_not_break_the_hash_chain(tmp_path):
+    # argus halt and argus mark append while the loop holds its own Ledger; a stale cached head hash would
+    # corrupt the chain and make the run permanently unscorable.
+    a = Ledger(tmp_path / "e.jsonl", "paper")
+    b = Ledger(tmp_path / "e.jsonl", "paper")
+    a.append("note", "r1", {"a": 1})
+    b.append("halt", "r2", {"b": 2})
+    a.append("note", "r3", {"a": 3})
+    assert Ledger(tmp_path / "e.jsonl", "paper").verify() == (True, "ok")
+
+
+def test_deep_itm_close_limit_is_clamped_inside_the_width(tmp_path, settings, fixture):
+    # The aggressive close price is long_bid - short_ask, which for a deep-ITM credit spread can exceed the
+    # width and be vetoed by close_limit_within_width forever - on exactly the position that must be closed.
+    from argus.engine import mark_cycle, open_observations
+
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    r = run_cycle(gw, settings, led, "r1", execute=True, ai_recorded=fixture["ai"], now=now, governor=gov)
+    obs = open_observations(led)[r["snapshot_id"]]
+    cand = obs["candidates"][obs["ai"]]
+    long_sym, short_sym = cand["legs"][0]["symbol"], cand["legs"][1]["symbol"]
+
+    gw.marks_active = True
+    original = gw.latest_option_quotes
+
+    def deep_itm(symbols):
+        q = dict(original(symbols))
+        if long_sym in q and short_sym in q:  # |long_bid - short_ask| > width
+            q[long_sym] = {**q[long_sym], "bid": 2.00, "ask": 2.30}
+            q[short_sym] = {**q[short_sym], "bid": 6.90, "ask": 7.20}
+        return q
+
+    gw.latest_option_quotes = deep_itm
+    mark_cycle(gw, settings, led, "m1", execute=True, now=settings.flatten_at + timedelta(minutes=1), governor=gov)
+    rd = [e["payload"] for e in led.by_kind("risk_decision") if e["payload"]["proposal"]["intent"].startswith("close")]
+    assert rd, "no close was ever proposed"
+    assert abs(rd[-1]["proposal"]["limit_price"]) < cand["width"]
+    assert rd[-1]["approved"], [c for c in rd[-1]["checks"] if not c["ok"]]
+
+
+def test_flatten_closes_even_when_the_quote_is_missing(tmp_path, settings, fixture):
+    # A quote outage at the deadline must not skip the close and strand the position past it.
+    from argus.engine import mark_cycle, open_observations
+
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    run_cycle(gw, settings, led, "r1", execute=True, ai_recorded=fixture["ai"], now=now, governor=gov)
+    gw.marks_active = True
+    gw.latest_option_quotes = lambda symbols: {}
+    mark_cycle(gw, settings, led, "m1", execute=True, now=settings.flatten_at + timedelta(minutes=1), governor=gov)
+    out = [e["payload"] for e in led.by_kind("outcome")]
+    assert any(o["reason"] == "flatten_deadline_no_quote" and o["status"] == "closed" for o in out)
+    intents = [e["payload"] for e in led.by_kind("order_intent") if e["payload"]["intent"].startswith("close")]
+    assert intents and intents[-1]["submitted"] is True
+    assert open_observations(led)[list(open_observations(led))[0]]["executed"]["closed"]

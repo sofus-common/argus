@@ -42,6 +42,7 @@ class Ledger:
         self.run_mode = run_mode
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._last_hash = self._read_last_hash()
+        self._size = self.path.stat().st_size if self.path.exists() else 0
 
     def _read_last_hash(self) -> str:
         last = GENESIS
@@ -57,6 +58,10 @@ class Ledger:
     def append(self, kind: str, run_id: str, payload: dict, ts: str | None = None) -> dict:
         if kind not in KINDS:
             raise ValueError(f"unknown event kind {kind}")
+        # Another process (argus halt, argus mark) may have appended since we last wrote. Re-read the tail
+        # rather than chaining onto a stale hash, which would corrupt the chain and make scoring impossible.
+        if (self.path.stat().st_size if self.path.exists() else 0) != self._size:
+            self._last_hash = self._read_last_hash()
         body = {
             "ts": ts or utc_now(),
             "run_id": run_id,
@@ -69,6 +74,7 @@ class Ledger:
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(canonical(body) + "\n")
         self._last_hash = body["event_hash"]
+        self._size = self.path.stat().st_size
         return body
 
     def verify(self) -> tuple[bool, str]:

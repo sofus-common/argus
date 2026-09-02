@@ -69,9 +69,15 @@ class Governor:
 
         # Re-observed max loss from fresh quotes (defined risk = debit paid at the limit).
         lq, sq = fresh_quotes.get(legs[0]["symbol"]), fresh_quotes.get(legs[1]["symbol"])
-        check("fresh_quotes_present", lq is not None and sq is not None)
+        closing = str(proposal.get("intent", "")).startswith("close")
+        # A close at or after the flatten deadline is strictly risk-reducing. Refusing it for want of a quote
+        # would leave a position open past the deadline, which is worse than closing at a width-bounded limit.
+        # Waived only in that case, and the waiver is recorded in the check detail.
+        quotes_waived = closing and now >= s.flatten_at and not (lq and sq)
+        check("fresh_quotes_present", (lq is not None and sq is not None) or quotes_waived,
+              "waived: flatten close with no quote" if quotes_waived else "")
         limit = float(proposal["limit_price"])
-        if str(proposal.get("intent", "")).startswith("close"):
+        if closing:
             # Alpaca MLEG: positive limit = pay debit, negative = receive credit. A close of a debit spread is a
             # credit (negative), a close of a credit spread is a debit (positive); either way |limit| < width.
             check("close_limit_within_width", 0 < abs(limit) < proposal["width"], f"limit={limit}")
