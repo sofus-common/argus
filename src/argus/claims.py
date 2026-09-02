@@ -11,8 +11,10 @@ from .ledger import sha256
 DISPLAYED = [
     ("n_observations", "Paired observations"),
     ("changed_decisions", "Decisions where AI differed from quant"),
-    ("ai_abstentions", "AI abstentions"),
-    ("coverage", "AI coverage"),
+    ("ai_abstentions", "AI cycles with no trade decision (deliberate abstentions plus inference errors)"),
+    ("ai_abstentions_deliberate", "AI abstentions the model actually chose"),
+    ("ai_inference_errors", "Cycles with no AI answer because the inference call failed"),
+    ("coverage", "AI coverage (1 - all no-decision cycles / observations)"),
     ("quant_net_total", "Quant control net P&L (USD, modelled costs)"),
     ("ai_net_total", "AI arm net P&L after inference cost (USD)"),
     ("ai_minus_quant_usd", "AI minus quant (USD)"),

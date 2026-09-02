@@ -84,7 +84,7 @@ def _chart(rows: list[dict]) -> str:
             f'<span style="background:var(--a)"></span>AI arm after inference cost &nbsp;·&nbsp; orange dots = AI ≠ quant</div>')
 
 
-def _funnel(events: list[dict]) -> str:
+def _funnel(events: list[dict], fills: int) -> str:
     snaps = sum(1 for e in events if e["kind"] == "data_snapshot")
     cands = sum(e["payload"].get("count", 0) for e in events if e["kind"] == "candidates")
     quant_picks = sum(1 for e in events if e["kind"] == "baseline" and e["payload"]["choice"] != "abstain")
@@ -92,7 +92,6 @@ def _funnel(events: list[dict]) -> str:
     opens = [e["payload"] for e in events if e["kind"] == "risk_decision" and e["payload"]["proposal"]["intent"] == "open"]
     approved = sum(1 for p in opens if p["approved"])
     vetoed = len(opens) - approved
-    fills = sum(1 for e in events if e["kind"] == "order_result" and e["payload"].get("status") == "filled")
     closes = sum(1 for e in events if e["kind"] == "outcome" and e["payload"]["status"] == "closed" and e["payload"]["arm"] == "ai" and e["payload"]["candidate_id"] != "abstain")
     items = [("Snapshots", snaps), ("Candidates built", cands), ("Quant picks", quant_picks), ("AI picks", ai_picks),
              ("Governor approved", approved), ("Governor vetoed", vetoed), ("Alpaca fills", fills), ("AI positions closed", closes)]
@@ -166,7 +165,9 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
         ("Paired observations", _fmt(score["n_observations"]), "",
          f"{score['n_unmarked']} not yet marked; one per snapshot, so a held spread is re-observed"),
         ("Changed decisions", _fmt(score["changed_decisions"]), "", f"Δ on changed only: {_fmt(score['changed_only']['delta_sum'])}"),
-        ("AI coverage", _fmt(score["coverage"]), "", f"{score['ai_abstentions']} AI / {score['quant_abstentions']} quant abstentions"),
+        ("AI coverage", _fmt(score["coverage"]), "",
+         f"{score.get('ai_abstentions_deliberate', score['ai_abstentions'])} AI abstentions, "
+         f"{score.get('ai_inference_errors', 0)} inference errors, {score['quant_abstentions']} quant"),
         ("Mean paired Δ / risk budget", _fmt(score["paired_delta_mean"]), "",
          f"per snapshot, CI95 {_fmt(score['paired_delta_ci95'])} (block=3 pre-registered; "
          f"snapshots overlap, longest identical-leg run {mlr['ai']} AI / {mlr['quant']} quant)"),
@@ -191,7 +192,7 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
              + "</div>",
              "<h2>Scoreboard</h2><div class=grid>" + "".join(card(*c) for c in cards) + "</div>",
              "<h2>Cumulative net P&amp;L, quant vs AI (same observations, same marks)</h2><div class=chart>" + _chart(rows) + "</div>",
-             "<h2>Candidate funnel</h2>" + _funnel(events)]
+             "<h2>Candidate funnel</h2>" + _funnel(events, score["executed_observations"])]
     if last.get("baseline"):
         b, a = last["baseline"]["payload"], last.get("ai_recommendation", {}).get("payload", {})
         r = last.get("risk_decision", {}).get("payload", {})

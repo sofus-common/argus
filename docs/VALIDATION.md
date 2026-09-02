@@ -25,6 +25,18 @@ registered block length. Pairing removes most of the shared market move before
 the delta is formed, so the overlap that inflates arm sums largely does not
 survive into the difference series.
 
+Two known deviations of the sampler from the registered scheme, recorded before
+the run closed and deliberately not changed during it. Blocks are truncated at
+the end of the array rather than wrapped, so the last observations are drawn less
+often than the rest, which biases the resampled mean toward early observations
+and slightly narrows the interval; the effect scales as block/n. And the
+percentile indices are taken as `int(0.025*reps)` and `int(0.975*reps)`, which
+read the 2.55th and 97.55th percentiles rather than the 2.5th and 97.5th,
+displacing the interval marginally upward. Both are corrected after the run and
+reported as a documented sensitivity check, not as a revision: editing the
+sampler after seeing the interval it produces, in the direction that widens it,
+is not distinguishable from tuning it.
+
 The interval describes the mean paired delta per snapshot under the registered
 resampling scheme. It is not a forecast of realized AI-versus-quant return, and
 below the pre-registered minimum sample it is reported as descriptive only.

@@ -92,7 +92,10 @@ def cmd_loop(args, settings):
                 print(now.isoformat(), "market closed; next open", clock.next_open)
         except Exception as exc:  # noqa: BLE001 - keep the loop alive, record the failure
             if ledger is not None:  # an unbound ledger means the failure was building it; only the print survives
-                ledger.append("note", _run_id(), {"loop_error": f"{type(exc).__name__}: {exc}"[:300]})
+                try:  # the failure may BE the ledger; the handler must never be what ends the loop
+                    ledger.append("note", _run_id(), {"loop_error": f"{type(exc).__name__}: {exc}"[:300]})
+                except Exception as note_exc:  # noqa: BLE001
+                    print(now.isoformat(), "note failed", type(note_exc).__name__, note_exc)
             print(now.isoformat(), "error", type(exc).__name__, exc)
         if args.once:
             return
