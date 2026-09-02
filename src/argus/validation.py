@@ -53,6 +53,24 @@ def score(ledger: Ledger, settings) -> dict:
     if not ok:
         raise ValueError(f"refusing to score {ledger.run_mode} ledger {ledger.path}: {why}")
     obs = open_observations(ledger)
+    # Settings.contract() is "everything that, if changed, creates a new trial", and flatten_at is in it and is
+    # shown to the model in the decision packet. If the contract changed mid-run, observations from before the
+    # change belong to a different trial and must not be pooled: score the current contract, report the rest as
+    # discarded. They stay in the ledger; nothing is ever deleted.
+    contracts: list[str] = []
+    for o in sorted(obs.values(), key=lambda x: x["ts"]):
+        c = o.get("contract_sha256")
+        if c and c not in contracts:
+            contracts.append(c)
+    scored_contract = contracts[-1] if contracts else None
+    discarded = []
+    if len(contracts) > 1:
+        for c in contracts[:-1]:
+            seg = [o for o in obs.values() if o.get("contract_sha256") == c]
+            discarded.append({"contract_sha256": c, "n": len(seg),
+                              "first_ts": min(o["ts"] for o in seg), "last_ts": max(o["ts"] for o in seg),
+                              "reason": "settings contract changed mid-run; a different trial by pre-registration"})
+        obs = {sid: o for sid, o in obs.items() if o.get("contract_sha256") == scored_contract}
     rows = []
     for sid, o in sorted(obs.items(), key=lambda kv: kv[1]["ts"]):
         q, a = o["arms"]["quant"], o["arms"]["ai"]
@@ -117,6 +135,7 @@ def score(ledger: Ledger, settings) -> dict:
         "distinct_spreads": {"quant": len(q_rows), "ai": len(a_rows)},
         "max_leg_run": {"quant": _max_run("quant"), "ai": _max_run("ai")},
         "sessions_covered": len({r["ts"][:10] for r in rows}),
+        "contract_sha256": scored_contract, "discarded_segments": discarded,
         "n_counts": "decisions, not market conditions: each snapshot is a fresh packet and a fresh inference call, "
                     "but the sample spans few sessions and two correlated ETFs",
         "bootstrap": {"block": 3, "reps": 2000, "seed": 7, "pre_registered": True},

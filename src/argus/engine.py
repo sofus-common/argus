@@ -41,6 +41,7 @@ def open_observations(ledger: Ledger) -> dict:
         elif k == "ablation":
             obs[p["snapshot_id"]] = {"snapshot_id": p["snapshot_id"], "ts": e["ts"], "quant": p["quant_choice"], "ai": p["ai_choice"],
                                      "inference_cost_usd": p["inference_cost_usd"], "risk_budget": p["risk_budget"],
+                                     "contract_sha256": p.get("contract_sha256"),
                                      "arms": {"quant": None, "ai": None}, "executed": None,
                                      "open_order": None, "close_orders": []}
         elif k == "order_intent" and p.get("submitted"):

@@ -545,3 +545,30 @@ def test_reconcile_does_not_flag_an_order_that_filled_between_submit_and_compare
 def open_observations_for(led, sid):
     from argus.engine import open_observations
     return open_observations(led)[sid]
+
+
+def test_a_settings_contract_change_mid_run_is_not_pooled_into_one_trial(tmp_path, settings, fixture):
+    # Settings.contract() is "everything that, if changed, creates a new trial", and flatten_at is in it and is
+    # shown to the model in the packet. Observations from before such a change must not be scored alongside.
+    from argus.engine import mark_cycle
+
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    run_cycle(gw, settings, led, "r0", execute=False, ai_recorded=fixture["ai"], now=now, governor=gov)
+
+    moved = replace(settings, flatten_at=settings.flatten_at - timedelta(hours=19))
+    for i in (1, 2):
+        run_cycle(gw, moved, led, f"r{i}", execute=False, ai_recorded=fixture["ai"],
+                  now=now + timedelta(minutes=20 * i), governor=gov)
+    gw.marks_active = True
+    mark_cycle(gw, moved, led, "m1", execute=False, now=now + timedelta(minutes=70), governor=gov)
+
+    sc = validation.score(led, moved)
+    assert sc["n_observations"] == 2, "only the current contract is scored"
+    assert len(sc["discarded_segments"]) == 1 and sc["discarded_segments"][0]["n"] == 1
+    assert sc["contract_sha256"] == sha256(canonical(moved.contract()))
+    assert sc["discarded_segments"][0]["contract_sha256"] != sc["contract_sha256"]
+    # nothing is deleted: every observation is still in the ledger
+    assert sum(1 for e in led.events() if e["kind"] == "ablation") == 3

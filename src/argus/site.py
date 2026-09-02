@@ -162,6 +162,9 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
     cards = [
         ("AI minus quant, net of inference", f"${_fmt(diff)}", cls,
          f"USD over {ds['ai']} AI / {ds['quant']} quant distinct spreads, after modelled costs, same marks"),
+        ("Discarded observations", _fmt(sum(d["n"] for d in score.get("discarded_segments", []))),
+         "warn" if score.get("discarded_segments") else "",
+         "settings contract changed mid-run; earlier observations are a different trial and are not pooled"),
         ("Paired observations", _fmt(score["n_observations"]), "",
          f"{score['n_unmarked']} not yet marked; one per snapshot, so a held spread is re-observed"),
         ("Changed decisions", _fmt(score["changed_decisions"]), "", f"Δ on changed only: {_fmt(score['changed_only']['delta_sum'])}"),

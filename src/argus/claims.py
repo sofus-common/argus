@@ -9,7 +9,8 @@ from pathlib import Path
 from .ledger import sha256
 
 DISPLAYED = [
-    ("n_observations", "Paired observations"),
+    ("n_observations", "Paired observations (current settings contract only)"),
+    ("contract_sha256", "Settings contract the scored observations share"),
     ("changed_decisions", "Decisions where AI differed from quant"),
     ("ai_abstentions", "AI cycles with no trade decision (deliberate abstentions plus inference errors)"),
     ("ai_abstentions_deliberate", "AI abstentions the model actually chose"),

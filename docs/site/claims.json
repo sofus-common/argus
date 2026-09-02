@@ -1,18 +1,31 @@
 {
-  "generated_at": "2026-09-02T15:08:01.332949+00:00",
+  "generated_at": "2026-09-02T15:10:24.576067+00:00",
   "run_mode": "paper",
   "claims": [
     {
       "claim_id": "same_information_v1:paper:n_observations",
       "trial_id": "same_information_v1",
-      "label": "Paired observations",
+      "label": "Paired observations (current settings contract only)",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 9,
+      "displayed_value": 7,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
+      "note": "Sample below pre-registered minimum; descriptive only."
+    },
+    {
+      "claim_id": "same_information_v1:paper:contract_sha256",
+      "trial_id": "same_information_v1",
+      "label": "Settings contract the scored observations share",
+      "evidence_state": "DESCRIPTIVE",
+      "displayed_value": "6ff1a01de118751fff80d79c3f0b9928bb2658bc7cd043a93178713f3299349b",
+      "source_artifact": "runs\\paper\\score.json",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
+      "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
+      "status": "RECORDED",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -20,12 +33,12 @@
       "trial_id": "same_information_v1",
       "label": "Decisions where AI differed from quant",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 9,
+      "displayed_value": 7,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -33,12 +46,12 @@
       "trial_id": "same_information_v1",
       "label": "AI cycles with no trade decision (deliberate abstentions plus inference errors)",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 1,
+      "displayed_value": 0,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -48,10 +61,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 0,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -59,12 +72,12 @@
       "trial_id": "same_information_v1",
       "label": "Cycles with no AI answer because the inference call failed",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 1,
+      "displayed_value": 0,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -72,12 +85,12 @@
       "trial_id": "same_information_v1",
       "label": "AI coverage (1 - all no-decision cycles / observations)",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 0.8889,
+      "displayed_value": 1.0,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -85,12 +98,12 @@
       "trial_id": "same_information_v1",
       "label": "Quant control net P&L (USD, modelled costs)",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 13.4,
+      "displayed_value": 0.4,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -98,12 +111,12 @@
       "trial_id": "same_information_v1",
       "label": "AI arm net P&L after inference cost (USD)",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 18.8,
+      "displayed_value": 21.8,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -111,12 +124,12 @@
       "trial_id": "same_information_v1",
       "label": "AI minus quant (USD)",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 5.4,
+      "displayed_value": 21.4,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -124,12 +137,12 @@
       "trial_id": "same_information_v1",
       "label": "Mean paired delta per unit risk budget",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 0.005194,
+      "displayed_value": 0.016893,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -138,14 +151,14 @@
       "label": "Block-bootstrap 95% interval of mean delta",
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": [
-        -0.00203,
-        0.01208
+        0.01068,
+        0.02667
       ],
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -153,12 +166,12 @@
       "trial_id": "same_information_v1",
       "label": "Max drawdown, quant",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": -9.8,
+      "displayed_value": -14.8,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -166,12 +179,12 @@
       "trial_id": "same_information_v1",
       "label": "Max drawdown, AI",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": -24.4,
+      "displayed_value": -6.5,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -179,12 +192,12 @@
       "trial_id": "same_information_v1",
       "label": "Total inference cost (USD)",
       "evidence_state": "DESCRIPTIVE",
-      "displayed_value": 0.0091,
+      "displayed_value": 0.008,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -194,10 +207,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": "DESCRIPTIVE",
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -207,10 +220,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": null,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
+      "source_sha256": "7a97de6765983b5491fc323ef1edecd64acf236faba2559f79bef93b482c9d8d",
       "reproduction_command": "n/a",
       "status": "UNSUPPORTED",
-      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
+      "last_verified_at": "2026-09-02T15:10:24.576067+00:00",
       "note": "Requires SUPPORTED evidence state and REPRODUCIBLE artifact; SUPPORTED is disabled for this trial."
     }
   ]
