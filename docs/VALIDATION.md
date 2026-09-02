@@ -14,6 +14,24 @@ drawdown allocation. Missing counterfactuals retain a reason code and are never
 silently dropped. The default abstention outcome is zero trading P&L minus
 inference cost; any cash benchmark must be pre-registered instead.
 
+## What n counts
+
+The pre-registered minimum is expressed in snapshots, and that is the honest
+unit: each snapshot is a distinct decision on a fresh packet with a fresh
+inference call, and the measured delta autocorrelation gives no reason to
+discount repeated decisions. Re-expressing the minimum in distinct spreads would
+discard genuine decisions because they happened to reach the same conclusion,
+which is itself a result about the AI.
+
+What n does not count is market conditions. A sample of tens of snapshots at
+20-minute spacing over one or two sessions on two correlated ETFs is a small
+number of daily market moves in a single volatility regime. The paired design
+controls for that by conditioning on the market, not by sampling more of it. Any
+result therefore supports a statement about decision-level difference on this
+tape, and nothing about another one. `score.json` reports `distinct_spreads`,
+`sessions_covered` and `max_leg_run` next to `n_observations` so a reader can
+see the difference, and `supported_enabled` stays false.
+
 ## Uncertainty
 
 The paired delta interval is a block bootstrap with `block=3`, `reps=2000`,

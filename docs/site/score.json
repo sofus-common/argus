@@ -37,6 +37,8 @@
     "quant": 2,
     "ai": 3
   },
+  "sessions_covered": 1,
+  "n_counts": "decisions, not market conditions: each snapshot is a fresh packet and a fresh inference call, but the sample spans few sessions and two correlated ETFs",
   "bootstrap": {
     "block": 3,
     "reps": 2000,

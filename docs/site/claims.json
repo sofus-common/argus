@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-02T15:04:46.093834+00:00",
+  "generated_at": "2026-09-02T15:08:01.332949+00:00",
   "run_mode": "paper",
   "claims": [
     {
@@ -9,10 +9,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 9,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -22,10 +22,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 9,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -35,10 +35,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 1,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -48,10 +48,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 0,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -61,10 +61,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 1,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -74,10 +74,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 0.8889,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -87,10 +87,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 13.4,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -100,10 +100,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 18.8,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -113,10 +113,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 5.4,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -126,10 +126,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 0.005194,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -142,10 +142,10 @@
         0.01208
       ],
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -155,10 +155,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": -9.8,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -168,10 +168,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": -24.4,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -181,10 +181,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": 0.0091,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -194,10 +194,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": "DESCRIPTIVE",
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "argus score --ledger runs\\paper\\events.jsonl --mode paper",
       "status": "RECORDED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Sample below pre-registered minimum; descriptive only."
     },
     {
@@ -207,10 +207,10 @@
       "evidence_state": "DESCRIPTIVE",
       "displayed_value": null,
       "source_artifact": "runs\\paper\\score.json",
-      "source_sha256": "e05af16f94e6ee75a76dc9564ad6790f32ce851de33b09ce9f6b9026801fbb6c",
+      "source_sha256": "14878c0a293dcc8fa33a171d138c2d19ba2b0a28a028063a98eaae3bfb72eadd",
       "reproduction_command": "n/a",
       "status": "UNSUPPORTED",
-      "last_verified_at": "2026-09-02T15:04:46.093834+00:00",
+      "last_verified_at": "2026-09-02T15:08:01.332949+00:00",
       "note": "Requires SUPPORTED evidence state and REPRODUCIBLE artifact; SUPPORTED is disabled for this trial."
     }
   ]

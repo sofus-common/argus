@@ -174,7 +174,11 @@ def render(score: dict, manifest: dict, ledger: Ledger, title: str = "ARGUS") ->
         ("Quant net", f"${_fmt(score['quant_net_total'])}", "", f"max drawdown {_fmt(score['max_drawdown_quant'])}"),
         ("AI net", f"${_fmt(score['ai_net_total'])}", "", f"max drawdown {_fmt(score['max_drawdown_ai'])}"),
         ("Inference cost", f"${_fmt(score['inference_cost_total_usd'])}", "", score["model"]),
-        ("Evidence state", score["evidence_state"], "warn", f"n ≥ {score['min_observations_for_exploratory']} needed for EXPLORATORY; SUPPORTED disabled"),
+        ("Evidence state", score["evidence_state"], "warn",
+         f"n ≥ {score['min_observations_for_exploratory']} needed for EXPLORATORY; SUPPORTED disabled. "
+         f"n counts decisions, not market conditions: {score['n_observations']} snapshots over "
+         f"{score.get('sessions_covered', 1)} session(s) on 2 correlated ETFs is {ds['ai']} distinct AI spreads. "
+         f"The interval describes decision-level difference conditional on this tape."),
     ]
 
     def card(label, val, c, sub):

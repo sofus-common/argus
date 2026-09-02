@@ -75,7 +75,9 @@ def cmd_loop(args, settings):
         try:
             clock = clock_client.get_clock()
             ledger = Ledger(p["ledger"], "paper")
-            if clock.is_open:
+            # Past the deadline the close path runs whether or not the clock says open: a restart before the
+            # open, or an unexpected early close, would otherwise leave a position on with no attempt and no alarm.
+            if clock.is_open or now >= settings.flatten_at:
                 mk = engine.mark_cycle(gw, settings, ledger, _run_id(), execute=args.execute, governor=governor)
                 print(now.isoformat(), "mark", json.dumps(mk))
                 if now < settings.flatten_at:

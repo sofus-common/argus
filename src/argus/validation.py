@@ -116,6 +116,9 @@ def score(ledger: Ledger, settings) -> dict:
         "executed_observations": sum(1 for r in rows if r["executed"]), "min_observations_for_exploratory": settings.min_observations,
         "distinct_spreads": {"quant": len(q_rows), "ai": len(a_rows)},
         "max_leg_run": {"quant": _max_run("quant"), "ai": _max_run("ai")},
+        "sessions_covered": len({r["ts"][:10] for r in rows}),
+        "n_counts": "decisions, not market conditions: each snapshot is a fresh packet and a fresh inference call, "
+                    "but the sample spans few sessions and two correlated ETFs",
         "bootstrap": {"block": 3, "reps": 2000, "seed": 7, "pre_registered": True},
         "usd_totals_basis": "distinct spreads (the observation that traded, else the earliest); n and the CI are per snapshot",
         "supported_enabled": False, "rows": rows,
