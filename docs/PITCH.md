@@ -22,7 +22,7 @@ number; governance gets one slide, because every other entry has it.
 6. **Governance in one slide.** 17 gates, hash-bound authorization, kill
    switch, Alpaca CLI reconciliation. Say "table stakes" out loud.
 7. **Evidence.** Hash-chained ledger, claim manifest with statuses, credential-
-   free replay, 15 tests. "AI beats quant: UNSUPPORTED" shown deliberately.
+   free replay, 27 tests. "AI beats quant: UNSUPPORTED" shown deliberately.
 8. **What this is for.** Any team can drop their own LLM policy into the AI
    arm and get the same paired number. Repo, board, account ID.
 
@@ -60,12 +60,12 @@ positions back and the ledger records whether broker and ledger agree."
 "Every event is hash-chained. Every number on the board maps to a claim with
 its source hash and the command that reproduces it. Replay runs with no
 credentials. And the claim 'AI beats quant' is published as UNSUPPORTED —
-because with [N] observations that's the honest state, and the apparatus is
+because with 40 observations that's the honest state, and the apparatus is
 the point."
 
 **2:35–3:00 — Close (slide 8).**
 "Swap in your own model or prompt and you get the same paired number. Paper
-account [ID], repo and live board in the description. ARGUS: does the AI earn
+account PA3OAPMCFQAY, repo and live board in the description. ARGUS: does the AI earn
 its inference bill? Now you can find out."
 
 ## Recording notes

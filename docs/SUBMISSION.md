@@ -61,7 +61,7 @@ pure function of it; every displayed value maps to a claim with a source
 artifact hash, a reproduction command, and a status (REPRODUCIBLE / RECORDED /
 UNSUPPORTED / RETRACTED). Replay ledgers cannot enter scored aggregates. With
 fewer than 30 paired observations the evidence state is DESCRIPTIVE; "AI beats
-quant" is published as UNSUPPORTED. The evidence board, `argus replay`, and 15
+quant" is published as UNSUPPORTED. The evidence board, `argus replay`, and 27
 tests run without credentials.
 
 **Scoring window.** Alpaca scores total account equity as of EOD Thursday 3 Sep.
@@ -70,9 +70,14 @@ positions at 14:30 ET Thursday and flattens at 15:30 ET, so the scored equity
 is realized cash, not broker marks on open spreads. Equity before Wednesday
 is the untouched $100,000.
 
-**Result at submission (paper account `PA3OAPMCFQAY`).** `[N]` paired
-observations, `[K]` where AI ≠ quant. AI minus quant after inference:
-`[$X.XX]`. Quant net `[$]`, AI net `[$]`, inference cost `[$]`. Evidence state
-DESCRIPTIVE — a measurement apparatus with a real number on it, not a claim.
+**Result at submission (paper account `PA3OAPMCFQAY`).** 40 paired
+observations, 38 where AI ≠ quant, 10 executed. AI minus quant after inference:
+-$267.95. Quant net -$1,165.00, AI net -$1,432.95, inference cost $0.05. Paired
+delta per snapshot -0.005 of risk budget, 95% block-bootstrap CI [-0.028, 0.017].
+Evidence state EXPLORATORY; "AI beats quant" stays UNSUPPORTED. Flattened at
+15:30 ET Thursday, all five closes filled inside their limits; final equity
+$99,349.40, all cash. A measurement apparatus with a real number on it, not a
+claim. An earlier 3-observation segment under a different settings contract is
+segmented out and disclosed on the board.
 
 Repo: https://github.com/sofus-common/argus · Board: https://sofus-common.github.io/argus/ · Video: `[VIDEO_URL]`
