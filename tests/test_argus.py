@@ -572,3 +572,13 @@ def test_a_settings_contract_change_mid_run_is_not_pooled_into_one_trial(tmp_pat
     assert sc["discarded_segments"][0]["contract_sha256"] != sc["contract_sha256"]
     # nothing is deleted: every observation is still in the ledger
     assert sum(1 for e in led.events() if e["kind"] == "ablation") == 3
+
+
+def test_next_wake_retries_every_3_minutes_inside_flatten_window():
+    from datetime import datetime, timedelta, timezone
+    from argus.engine import next_wake
+    flat = datetime(2026, 9, 3, 19, 30, tzinfo=timezone.utc)
+    assert next_wake(flat - timedelta(minutes=5), 20, flat) == flat + timedelta(seconds=15)
+    assert next_wake(flat + timedelta(seconds=15), 20, flat) == flat + timedelta(seconds=15, minutes=3)
+    assert next_wake(flat + timedelta(minutes=44), 20, flat) == flat + timedelta(minutes=47)
+    assert next_wake(flat + timedelta(minutes=46), 20, flat) == flat + timedelta(minutes=66)

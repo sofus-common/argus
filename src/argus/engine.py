@@ -339,9 +339,14 @@ def mark_cycle(gateway, settings, ledger: Ledger, run_id: str, *, execute: bool 
             "open_risk_usd": open_risk_usd(open_observations(ledger))}
 
 
+FLATTEN_RETRY_WINDOW = timedelta(minutes=45)  # flatten is 30 min before the close; covers the bell with margin
+
+
 def next_wake(now: datetime, interval_minutes: int, flatten_at: datetime) -> datetime:
     """Sleep target for the loop: never sleep past the flatten deadline."""
     nxt = now + timedelta(minutes=interval_minutes)
     if now < flatten_at < nxt:
         return flatten_at + timedelta(seconds=15)
+    if flatten_at <= now < flatten_at + FLATTEN_RETRY_WINDOW:
+        return now + timedelta(minutes=3)  # an unfilled close gets re-priced every 3 min until the bell, not every interval
     return nxt
