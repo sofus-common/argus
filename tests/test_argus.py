@@ -582,3 +582,44 @@ def test_next_wake_retries_every_3_minutes_inside_flatten_window():
     assert next_wake(flat + timedelta(seconds=15), 20, flat) == flat + timedelta(seconds=15, minutes=3)
     assert next_wake(flat + timedelta(minutes=44), 20, flat) == flat + timedelta(minutes=47)
     assert next_wake(flat + timedelta(minutes=46), 20, flat) == flat + timedelta(minutes=66)
+
+
+def test_reconcile_does_not_flag_a_close_that_filled_between_submit_and_compare(tmp_path, settings, fixture, monkeypatch):
+    # The same race in the other direction: a close fills at the broker inside the cycle that sent it, so the
+    # broker shows nothing while the ledger still carries the legs until the next reconciliation.
+    from argus import alpaca_cli
+    from argus.engine import mark_cycle
+
+    gw = FakeGateway(fixture)
+    led = Ledger(tmp_path / "e.jsonl", "paper")
+    gov = Governor(settings, tmp_path / "state")
+    now = datetime.fromisoformat(fixture["now"])
+    run_cycle(gw, settings, led, "r1", execute=True, ai_recorded=fixture["ai"], now=now, governor=gov)
+    original = gw.submit_mleg
+
+    def resting(legs, qty, limit_price, cid):
+        o = original(legs, qty, limit_price, cid)
+        o["status"] = "new"
+        return o
+
+    gw.submit_mleg = resting
+    gw.marks_active = True
+    gw.latest_option_quotes = lambda symbols: {}
+    mark_cycle(gw, settings, led, "m1", execute=True, now=settings.flatten_at + timedelta(minutes=1), governor=gov)
+    obs = next(iter(open_observations_for_all(led).values()))
+    assert obs["executed"]["close_pending"] and not obs["executed"]["closed"]
+    legs = [l["symbol"] for l in obs["candidates"][obs["ai"]]["legs"]]
+    qty = obs["candidates"][obs["ai"]]["qty"]
+
+    for broker in ([],  # close already filled: broker flat
+                   [{"symbol": legs[0], "qty": qty, "asset_class": "us_option"},
+                    {"symbol": legs[1], "qty": -qty, "asset_class": "us_option"}]):  # close still working
+        monkeypatch.setattr(alpaca_cli, "cli_json", lambda args, s, timeout=30, b=broker: (
+            {} if args[0] == "account" else (b if args[0] == "position" else []), None))
+        out = alpaca_cli.reconcile(led, settings, "m2")
+        assert out["consistent"] and not out["mismatches"], out["mismatches"]
+
+
+def open_observations_for_all(led):
+    from argus.engine import open_observations
+    return open_observations(led)

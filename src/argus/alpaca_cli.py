@@ -75,6 +75,8 @@ def reconcile(ledger, settings, run_id: str) -> dict:
             continue
         for leg in cand["legs"]:
             into[leg["symbol"]] = into.get(leg["symbol"], 0.0) + (cand["qty"] if leg["side"] == "buy" else -cand["qty"])
+            if into is ledger_legs and ex.get("close_pending"):  # a working close reads either way too, reversed
+                pending_legs[leg["symbol"]] = pending_legs.get(leg["symbol"], 0.0) - (cand["qty"] if leg["side"] == "buy" else -cand["qty"])
     broker_legs = {p.get("symbol"): float(p.get("qty", 0)) for p in (positions or []) if p.get("asset_class") == "us_option"}
     mismatches = []
     for sym in sorted(set(ledger_legs) | set(broker_legs) | set(pending_legs)):
