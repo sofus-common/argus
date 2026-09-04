@@ -18,7 +18,7 @@ with a source artifact SHA-256 and a reproduction command.
 
 ```bash
 pip install -e ".[dev]"
-pytest                    # 27 tests: determinism, AI bounding, governor gates, replay
+pytest                    # 28 tests: determinism, AI bounding, governor gates, replay
 argus replay              # credential-free: fixture → candidates → both arms → governor → fill → marks → score → site
 open runs/replay/site/index.html
 ```

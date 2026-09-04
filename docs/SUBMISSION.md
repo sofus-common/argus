@@ -61,7 +61,7 @@ pure function of it; every displayed value maps to a claim with a source
 artifact hash, a reproduction command, and a status (REPRODUCIBLE / RECORDED /
 UNSUPPORTED / RETRACTED). Replay ledgers cannot enter scored aggregates. With
 fewer than 30 paired observations the evidence state is DESCRIPTIVE; "AI beats
-quant" is published as UNSUPPORTED. The evidence board, `argus replay`, and 27
+quant" is published as UNSUPPORTED. The evidence board, `argus replay`, and 28
 tests run without credentials.
 
 **Scoring window.** Alpaca scores total account equity as of EOD Thursday 3 Sep.
@@ -73,7 +73,7 @@ is the untouched $100,000.
 **Result at submission (paper account `PA3OAPMCFQAY`).** 40 paired
 observations, 38 where AI ≠ quant, 10 executed. AI minus quant after inference:
 -$267.95. Quant net -$1,165.00, AI net -$1,432.95, inference cost $0.05. Paired
-delta per snapshot -0.005 of risk budget, 95% block-bootstrap CI [-0.028, 0.017].
+delta per snapshot -0.005 of risk budget, 95% block-bootstrap CI [-0.028, 0.016].
 Evidence state EXPLORATORY; "AI beats quant" stays UNSUPPORTED. Flattened at
 15:30 ET Thursday, all five closes filled inside their limits; final equity
 $99,349.40, all cash. A measurement apparatus with a real number on it, not a

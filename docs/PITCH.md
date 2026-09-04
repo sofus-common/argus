@@ -22,7 +22,7 @@ number; governance gets one slide, because every other entry has it.
 6. **Governance in one slide.** 17 gates, hash-bound authorization, kill
    switch, Alpaca CLI reconciliation. Say "table stakes" out loud.
 7. **Evidence.** Hash-chained ledger, claim manifest with statuses, credential-
-   free replay, 27 tests. "AI beats quant: UNSUPPORTED" shown deliberately.
+   free replay, 28 tests. "AI beats quant: UNSUPPORTED" shown deliberately.
 8. **What this is for.** Any team can drop their own LLM policy into the AI
    arm and get the same paired number. Repo, board, account ID.
 
