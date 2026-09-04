@@ -14,8 +14,8 @@
   "paired_delta_sum": -0.209875,
   "paired_delta_mean": -0.005247,
   "paired_delta_ci95": [
-    -0.02849,
-    0.01694
+    -0.02777,
+    0.01589
   ],
   "quant_net_total": -1165.0,
   "ai_net_total": -1432.95,
@@ -53,7 +53,8 @@
     "block": 3,
     "reps": 2000,
     "seed": 7,
-    "pre_registered": true
+    "pre_registered": true,
+    "sampler": "circular blocks, symmetric 2.5% tails; corrected after the run closed, see VALIDATION.md"
   },
   "usd_totals_basis": "distinct spreads (the observation that traded, else the earliest); n and the CI are per snapshot",
   "supported_enabled": false,

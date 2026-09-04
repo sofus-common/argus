@@ -623,3 +623,19 @@ def test_reconcile_does_not_flag_a_close_that_filled_between_submit_and_compare(
 def open_observations_for_all(led):
     from argus.engine import open_observations
     return open_observations(led)
+
+
+def test_block_bootstrap_is_circular_and_symmetric():
+    from argus.validation import _block_bootstrap
+    # Circular blocks: a signal that lives only in the last observation must reach the resampled mean as often as
+    # one in the first. Truncated blocks would draw the last index block times less often.
+    n = 12
+    tail = [0.0] * (n - 1) + [1.0]
+    head = [1.0] + [0.0] * (n - 1)
+    assert _block_bootstrap(tail) == _block_bootstrap(head, seed=7) or abs(_block_bootstrap(tail)[1] - _block_bootstrap(head)[1]) < 0.02
+    # Symmetric tails: flipping the sign of the series flips and swaps the interval exactly.
+    d = [0.3, -0.1, 0.2, 0.05, -0.4, 0.1, 0.0, 0.25, -0.05, 0.15]
+    lo, hi = _block_bootstrap(d)
+    nlo, nhi = _block_bootstrap([-x for x in d])
+    assert (nlo, nhi) == (-hi, -lo)
+    assert lo <= sum(d) / len(d) <= hi

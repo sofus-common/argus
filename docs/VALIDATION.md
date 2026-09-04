@@ -50,10 +50,26 @@ often than the rest, which biases the resampled mean toward early observations
 and slightly narrows the interval; the effect scales as block/n. And the
 percentile indices are taken as `int(0.025*reps)` and `int(0.975*reps)`, which
 read the 2.55th and 97.55th percentiles rather than the 2.5th and 97.5th,
-displacing the interval marginally upward. Both are corrected after the run and
-reported as a documented sensitivity check, not as a revision: editing the
-sampler after seeing the interval it produces, in the direction that widens it,
-is not distinguishable from tuning it.
+displacing the interval marginally upward. Both were corrected after the run
+closed and reported here as a sensitivity check, not as a revision: editing the
+sampler after seeing the interval it produces is not distinguishable from
+tuning it unless both intervals are shown.
+
+Sensitivity check, run 2026-09-04 on the closed ledger, n = 40, same
+`block=3`, `reps=2000`, `seed=7`:
+
+| sampler | 95% interval of the mean paired delta |
+|---|---|
+| as implemented during the run (truncated blocks, indices 50 and 1950) | [-0.02849, 0.01694] |
+| corrected (circular blocks, indices 50 and 1949: exactly 50 resampled means in each tail) | [-0.02777, 0.01589] |
+
+The correction moved both ends by less than 0.0011 and narrowed the interval by
+about 4%, not widened it as the paragraph above predicted; the prediction about
+direction was wrong, the magnitude estimate was right. Zero is inside both.
+Evidence state and every published claim are unchanged. `score.json` now
+carries the corrected interval and names the sampler in its `bootstrap` field;
+the interval published during the run is preserved in the board commits and in
+the ledger note recording this check.
 
 The interval describes the mean paired delta per snapshot under the registered
 resampling scheme. It is not a forecast of realized AI-versus-quant return, and

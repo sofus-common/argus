@@ -27,10 +27,11 @@ def _block_bootstrap(deltas: list[float], block: int = 3, reps: int = 2000, seed
         sample: list[float] = []
         while len(sample) < n:
             start = rng.randrange(n)
-            sample.extend(deltas[start:start + block])
+            sample.extend(deltas[(start + i) % n] for i in range(block))  # circular: every index equally likely
         means.append(sum(sample[:n]) / n)
     means.sort()
-    return (round(means[int(0.025 * reps)], 5), round(means[int(0.975 * reps)] - 1e-12, 5))
+    k = int(0.025 * reps)  # exactly k resampled means below lo and k above hi: symmetric 2.5% tails
+    return (round(means[k], 5), round(means[reps - 1 - k], 5))
 
 
 def _representative(rows: list[dict], key, prefer_executed: bool) -> list[dict]:
@@ -138,7 +139,8 @@ def score(ledger: Ledger, settings) -> dict:
         "contract_sha256": scored_contract, "discarded_segments": discarded,
         "n_counts": "decisions, not market conditions: each snapshot is a fresh packet and a fresh inference call, "
                     "but the sample spans few sessions and two correlated ETFs",
-        "bootstrap": {"block": 3, "reps": 2000, "seed": 7, "pre_registered": True},
+        "bootstrap": {"block": 3, "reps": 2000, "seed": 7, "pre_registered": True,
+                      "sampler": "circular blocks, symmetric 2.5% tails; corrected after the run closed, see VALIDATION.md"},
         "usd_totals_basis": "distinct spreads (the observation that traded, else the earliest); n and the CI are per snapshot",
         "supported_enabled": False, "rows": rows,
     }
