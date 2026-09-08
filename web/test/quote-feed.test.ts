@@ -6,7 +6,7 @@ const env = { TASTYTRADE_CLIENT_SECRET: "private-secret", TASTYTRADE_REFRESH_TOK
 const contractId = "SPY   260918C00100000";
 const selection = { underlying: "SPY", contractIds: [contractId] };
 const fields = { Quote: ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime"], Greeks: ["eventType", "eventSymbol", "volatility", "time"] };
-function fixture(partialConfig = false, silent = false, candleReply = false) {
+function fixture(partialConfig = false, silent = false, candleReply = false, cashIndex = false) {
   const upstreams: WebSocket[] = [];
   const receivers: WebSocket[] = [];
   const subscriptions: any[] = [];
@@ -33,7 +33,7 @@ function fixture(partialConfig = false, silent = false, candleReply = false) {
             pair[1].send(JSON.stringify({ type: "FEED_DATA", channel: 3, data: ["Quote", ["Quote", ".SPY260918C100", 1, 2, 0, 0]] }));
             pair[1].send(JSON.stringify({ type: "FEED_CONFIG", channel: 3, dataFormat: "COMPACT", eventFields: { Greeks: fields.Greeks } }));
             pair[1].send(JSON.stringify({ type: "FEED_DATA", channel: 3, data: ["Greeks", ["Greeks", ".SPY260918C100", 0.25, 0]] }));
-          } else pair[1].send(JSON.stringify({ type: "FEED_CONFIG", channel: 3, dataFormat: "COMPACT", eventFields: fields }));
+          } else pair[1].send(JSON.stringify({ type: "FEED_CONFIG", channel: 3, dataFormat: "COMPACT", eventFields: { ...fields, ...(cashIndex ? { Trade: ["eventType", "eventSymbol", "time", "price"] } : {}) } }));
         }
         else if (message.type === "FEED_SUBSCRIPTION") {
           subscriptions.push(message);
@@ -54,7 +54,9 @@ function fixture(partialConfig = false, silent = false, candleReply = false) {
     }
     if (url.pathname === "/api-quote-tokens") return Response.json({ data: { token: "private-quote-token".repeat(100), "dxlink-url": "wss://test.dxfeed.com/feed" } });
     if (url.pathname === "/instruments/equities/SPY") return Response.json({ data: { symbol: "SPY", "streamer-symbol": "SPY" } });
+    if (cashIndex && url.pathname === "/instruments/equities/XSP") return Response.json({ data: { symbol: "XSP", "streamer-symbol": "XSP", "is-index": true, "instrument-sub-type": "INDEX" } });
     const id = decodeURIComponent(url.pathname.split("/").at(-1)!);
+    if (cashIndex && id.startsWith("XSP   ")) return Response.json({ data: { symbol: id, "streamer-symbol": ".XSP260918C100", "underlying-symbol": "XSP", "root-symbol": "XSP", "shares-per-contract": 100, "option-chain-type": "Standard", "exercise-style": "European", "settlement-type": "PM", "option-type": "C", "strike-price": "100", "expiration-date": "2026-09-18" } });
     return Response.json({ data: { symbol: id, "streamer-symbol": `.SPY260918${id[12]}${Number(id.slice(13)) / 1000}`, "underlying-symbol": "SPY", "root-symbol": "SPY", "shares-per-contract": 100, "option-chain-type": "Standard", "exercise-style": "American", "settlement-type": "PM", "option-type": id[12], "strike-price": String(Number(id.slice(13)) / 1000), "expiration-date": "2026-09-18" } });
   });
   return { fetcher, upstreams, receivers, subscriptions };
@@ -70,6 +72,122 @@ function client() {
 function captureEvents(socket: WebSocket, time = Date.now(), greekTime = time) {
   socket.send(JSON.stringify({ type: "FEED_DATA", channel: 3, data: ["Quote", ["Quote", "SPY", 99, 101, time, time, "Quote", ".SPY260918C100", 1, 2, time, time], "Greeks", ["Greeks", ".SPY260918C100", 0.25, greekTime]] }));
 }
+
+const indexSelection = { underlying: "XSP", underlyingKind: "cash-index" as const, contractIds: ["XSP   260918C00100000"] };
+function indexEvents(socket: WebSocket, time = Date.now(), price = 100, optionTime = time) {
+  socket.send(JSON.stringify({ type: "FEED_DATA", channel: 3, data: ["Trade", ["Trade", "XSP", time, price], "Quote", ["Quote", ".XSP260918C100", 1, 2, optionTime, optionTime], "Greeks", ["Greeks", ".XSP260918C100", .25, optionTime]] }));
+}
+
+it("subscribes typed index values, captures their original time and isolates equity events", async () => {
+  const f = fixture(false, false, false, true), relay = createQuoteRelay(env, f.fetcher), a = client(), b = client();
+  try {
+    await relay.attach(a.socket, indexSelection, Date.now() + 60_000);
+    await relay.attach(b.socket, selection, Date.now() + 60_000);
+    await vi.waitFor(() => expect(a.messages.at(-1)?.state).toBe("connected"));
+    await vi.waitFor(() => expect(b.messages.at(-1)?.state).toBe("connected"));
+    expect(f.subscriptions.at(-1).add).toEqual(expect.arrayContaining([{ type: "Trade", symbol: "XSP" }, { type: "Quote", symbol: ".XSP260918C100" }, { type: "Greeks", symbol: ".XSP260918C100" }, { type: "Quote", symbol: "SPY" }]));
+    expect(f.subscriptions.at(-1).add).not.toContainEqual({ type: "Quote", symbol: "XSP" });
+    const time = Date.now() - 1000;
+    indexEvents(f.upstreams[0], time);
+    captureEvents(f.upstreams[0], time);
+    await vi.waitFor(() => expect(() => relay.capture(indexSelection)).not.toThrow());
+    expect(relay.capture(indexSelection).underlying).toEqual({ kind: "index", price: 100, time, receivedAt: expect.any(String) });
+    expect(a.messages).toContainEqual({ type: "index", price: 100, time, receivedAt: expect.any(String), contractId: "XSP" });
+    expect(() => relay.capture({ underlying: "XSP", contractIds: indexSelection.contractIds })).toThrow();
+    f.upstreams[0].send(JSON.stringify({ type: "FEED_DATA", channel: 3, data: ["Quote", ["Quote", "XSP", 98, 102, time, time], "Trade", ["Trade", "SPY", time, 999], "Quote", ["Quote", ".SPY260918C100", 1.5, 2, time, time]] }));
+    await vi.waitFor(() => expect(relay.capture(selection).contracts[0].quote.bid).toBe(1.5));
+    expect(relay.capture(selection).underlying).toMatchObject({ bid: 99, ask: 101 });
+    expect(relay.capture(indexSelection).underlying).toMatchObject({ kind: "index", price: 100 });
+    expect(a.messages.some(message => message.type === "quote" && message.contractId === "XSP")).toBe(false);
+    expect(b.messages.some(message => message.type === "index")).toBe(false);
+  } finally { a.browser.close(1000); b.browser.close(1000); }
+  await vi.waitFor(() => expect(f.upstreams[0].readyState).toBe(WebSocket.CLOSED));
+});
+
+it("rejects unqualified index metadata, kind contradictions and index candle history", async () => {
+  for (const [selected, mutation] of [
+    [{ ...indexSelection, underlyingKind: "other" }, {}],
+    [{ ...indexSelection, underlyingKind: null }, {}],
+    [{ ...indexSelection, contractIds: [] }, {}],
+    [{ underlying: "XSP", contractIds: indexSelection.contractIds }, {}],
+    [selection, { "is-index": true }],
+    [selection, { "instrument-sub-type": "INDEX" }],
+    [indexSelection, { "is-index": false }],
+    [indexSelection, { "instrument-sub-type": "COMMON" }],
+    [indexSelection, { "exercise-style": "American" }],
+    [indexSelection, { "settlement-type": "AM" }],
+  ] as const) {
+    const f = fixture(false, false, false, true), a = client();
+    const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+      const response = await f.fetcher(url, init);
+      if (!String(url).includes("/instruments/")) return response;
+      const body = await response.json() as any;
+      return Response.json({ data: { ...body.data, ...mutation } });
+    });
+    await createQuoteRelay(env, fetcher).attach(a.socket, selected as typeof indexSelection, Date.now() + 60_000);
+    await vi.waitFor(() => expect(a.socket.readyState).toBe(WebSocket.CLOSED));
+    expect(f.upstreams).toHaveLength(0);
+  }
+  const f = fixture(false, false, false, true), relay = createQuoteRelay(env, f.fetcher);
+  for (const mode of ["price", "iv"] as const) await expect(relay.history(indexSelection, historyRange, Date.now() + 60_000, mode)).rejects.toThrow();
+  expect(f.fetcher).not.toHaveBeenCalled();
+});
+
+it("requires dated fresh index sources, preserves monotonic time through unknown events and invalidates on reconnect", async () => {
+  const f = fixture(false, false, false, true), relay = createQuoteRelay(env, f.fetcher), a = client();
+  try {
+    await relay.attach(a.socket, indexSelection, Date.now() + 3_600_000);
+    await vi.waitFor(() => expect(a.messages.at(-1)?.state).toBe("connected"));
+    const time = Date.now() - 1000;
+    const indexValue = (sourceTime: number, price = 100) => f.upstreams[0].send(JSON.stringify({ type: "FEED_DATA", channel: 3, data: ["Trade", ["Trade", "XSP", sourceTime, price]] }));
+    indexEvents(f.upstreams[0], time - 300_001, 100, time);
+    await vi.waitFor(() => expect(a.messages.some(message => message.type === "index")).toBe(true));
+    expect(() => relay.capture(indexSelection)).toThrow();
+    indexValue(time - 60_001);
+    await vi.waitFor(() => expect(a.messages.filter(message => message.type === "index").at(-1)?.time).toBe(time - 60_001));
+    expect(() => relay.capture(indexSelection)).toThrow();
+    indexEvents(f.upstreams[0], time);
+    await vi.waitFor(() => expect(() => relay.capture(indexSelection)).not.toThrow());
+    for (const invalidTime of [0, time + .5, Date.now() + 60_000]) {
+      const count = a.messages.filter(message => message.type === "index").length;
+      indexValue(invalidTime);
+      await vi.waitFor(() => expect(a.messages.filter(message => message.type === "index")).toHaveLength(count + 1));
+      await vi.waitFor(() => expect(a.messages.filter(message => message.type === "index").at(-1)?.time).toBeNull());
+      expect(() => relay.capture(indexSelection)).toThrow();
+    }
+    indexValue(time, 101);
+    await vi.waitFor(() => expect(relay.capture(indexSelection).underlying).toMatchObject({ price: 101 }));
+    const clock = vi.spyOn(Date, "now").mockReturnValue(time + 300_001);
+    try { expect(() => relay.capture(indexSelection)).toThrow(); } finally { clock.mockRestore(); }
+    const receiptClock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(relay.capture(indexSelection).underlying.receivedAt) + 60_001);
+    try { expect(() => relay.capture(indexSelection)).toThrow(); } finally { receiptClock.mockRestore(); }
+    f.upstreams[0].close(1000);
+    await vi.waitFor(() => expect(a.messages.at(-1)?.state).toBe("reconnecting"));
+    expect(() => relay.capture(indexSelection)).toThrow();
+    await vi.waitFor(() => expect(f.upstreams).toHaveLength(2), { timeout: 3000 });
+    await vi.waitFor(() => expect(a.messages.at(-1)?.state).toBe("connected"));
+    expect(() => relay.capture(indexSelection)).toThrow();
+    indexEvents(f.upstreams[1], time);
+    await vi.waitFor(() => expect(() => relay.capture(indexSelection)).not.toThrow());
+    indexEvents(f.upstreams[1], 0);
+    await vi.waitFor(() => expect(a.messages.filter(message => message.type === "index").at(-1)?.time).toBeNull());
+    indexEvents(f.upstreams[1], time - 1);
+    await vi.waitFor(() => expect(a.socket.readyState).toBe(WebSocket.CLOSED));
+    expect(() => relay.capture(indexSelection)).toThrow();
+  } finally { a.browser.close(1000); }
+});
+
+it("rejects invalid index values without publishing a capture", async () => {
+  for (const price of [0, -1, "100", null, 1_000_001]) {
+    const f = fixture(false, false, false, true), relay = createQuoteRelay(env, f.fetcher), a = client();
+    await relay.attach(a.socket, indexSelection, Date.now() + 60_000);
+    await vi.waitFor(() => expect(a.messages.at(-1)?.state).toBe("connected"));
+    f.upstreams[0].send(JSON.stringify({ type: "FEED_DATA", channel: 3, data: ["Trade", ["Trade", "XSP", Date.now(), price]] }));
+    await vi.waitFor(() => expect(a.socket.readyState).toBe(WebSocket.CLOSED));
+    expect(a.messages.some(message => message.type === "index")).toBe(false);
+    expect(() => relay.capture(indexSelection)).toThrow();
+  }
+});
 
 it("subscribes and captures underlying-only quotes without option or Greeks requirements", async () => {
   const f = fixture(), relay = createQuoteRelay(env, f.fetcher), a = client(), stock = { underlying: "SPY", contractIds: [] };

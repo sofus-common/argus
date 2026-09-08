@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added typed cash-index streaming and capture: provider-validated index metadata
+  selects DXLink Trade events, while options retain Quote/Greeks and equities retain
+  bid/ask. Owner-validated snapshot kind controls internal routing. Captures preserve
+  index event time, reject imported index provenance promotion, and enforce freshness,
+  source ordering and reconnect invalidation. The UI labels index levels and their
+  dxFeed Trade timestamp without implying executable quotes or official settlement.
+  Verified 110 focused tests, TypeScript/build and independent review. Initial XSP
+  chain loading, index history and real-session reliability remain incomplete; no
+  new inference, dependencies or deployment.
+
 - Added the cash-index state foundation for XSP: explicit European cash terms,
   no-share and physical-assignment guards, durable instrument identity through
   construction, search, lot records and draft recovery, and separate DXLink Trade

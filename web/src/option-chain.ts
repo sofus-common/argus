@@ -154,7 +154,8 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       selectedIds = structuredClone(selectedIds); capture = structuredClone(capture);
       const base = await get(baseSnapshot?.id, env, owner);
       if (!base) throw new Error("Snapshot unavailable");
-      if (base.underlyingKind === 'cash-index') throw new Error('Index capture requires an index-level feed');
+      const index = base.underlyingKind === 'cash-index';
+      if (index && (base.imported || !selectedIds.length)) throw new Error('Verified index option selection required');
       if (!Array.isArray(selectedIds) || selectedIds.length > MAX_OPTION_LEGS || new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => typeof id !== "string" || !base.contracts.some(c => c.contractId === id && Date.parse(c.expiry) > Date.now()))) throw new Error("Invalid capture selection");
       const retrievedAt = timestamp(capture?.capturedAt), at = Date.parse(retrievedAt);
       if (at > Date.now() || Date.now() - at > 60_000 || !Array.isArray(capture.contracts) || capture.contracts.length !== selectedIds.length || new Set(capture.contracts.map(c => c?.contractId)).size !== selectedIds.length || capture.contracts.some(c => !selectedIds.includes(c?.contractId))) throw new Error("Invalid capture");
@@ -163,14 +164,26 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         return new Date(value).toISOString();
       };
       const received = (value: unknown) => { const time = Date.parse(timestamp(value)); if (time > at || at - time > 60_000) throw new Error("Invalid receipt time"); };
-      const prices = (value: StreamCapture["underlying"]) => {
+      const prices = (value: StreamCapture['contracts'][number]['quote']) => {
+        if (!value || value.kind !== undefined) throw new Error('Invalid capture quote kind');
         received(value?.receivedAt);
         const bid = value?.bid, ask = value?.ask;
         if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid < 0 || ask <= 0 || ask < bid || ask > 100_000) throw new Error("Invalid capture quote");
         const sourceTimes = { bid: sourceTime(value.bidTime), ask: sourceTime(value.askTime) };
         return { bid, ask, sourceTimes };
       };
-      const underlying = prices(capture.underlying);
+      let underlying: Pick<MarketSnapshot, 'spot' | 'spotAsOf' | 'spotSourceTimes' | 'indexSourceTime' | 'underlyingKind'>;
+      if (index) {
+        const value = capture.underlying;
+        if (!value || value.kind !== 'index' || !Number.isFinite(value.price) || value.price <= 0 || value.price > 1_000_000) throw new Error('Invalid index capture');
+        received(value.receivedAt);
+        const indexSourceTime = sourceTime(value.time);
+        underlying = { underlyingKind: 'cash-index', spot: value.price, spotAsOf: indexSourceTime, indexSourceTime };
+      } else {
+        if (!capture.underlying || capture.underlying.kind !== undefined) throw new Error('Invalid equity capture');
+        const value = prices(capture.underlying);
+        underlying = { spot: (value.bid + value.ask) / 2, spotAsOf: Object.values(value.sourceTimes).sort()[0], spotSourceTimes: value.sourceTimes };
+      }
       const contracts: MarketContract[] = selectedIds.map(id => {
         const { contractId, type, strike, expiry, multiplier } = base.contracts.find(c => c.contractId === id)!;
         const update = capture.contracts.find(c => c.contractId === id)!, values = prices(update.quote), iv = update.greeks?.iv;
@@ -179,7 +192,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         const sourceTimes = { ...values.sourceTimes, iv: sourceTime(update.greeks.time) };
         return { contractId, type, strike, expiry, multiplier, bid: values.bid, ask: values.ask, iv, sourceTimes, quoteAsOf: Object.values(sourceTimes).sort()[0] };
       });
-      const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: base.underlying, strikeCenter: base.strikeCenter, source: "Tastytrade", captureSource: "DXLink", retrievedAt, spot: (underlying.bid + underlying.ask) / 2, spotAsOf: Object.values(underlying.sourceTimes).sort()[0], spotSourceTimes: underlying.sourceTimes, availableExpiries: [...new Set(contracts.map(c => c.expiry.slice(0, 10)))].sort(), contracts };
+      const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: base.underlying, strikeCenter: base.strikeCenter, source: "Tastytrade", captureSource: "DXLink", retrievedAt, ...underlying, availableExpiries: [...new Set(contracts.map(c => c.expiry.slice(0, 10)))].sort(), contracts };
       if (contracts.length && base.contractTerms && !base.imported) snapshot.contractTerms = { ...base.contractTerms };
       capturedProvenance(snapshot);
       return register(snapshot, env, owner);

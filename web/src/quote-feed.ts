@@ -5,39 +5,44 @@ import { createCandleSnapshot } from "./candle-history";
 import { readCandleFeed } from "./candle-feed";
 import { streamFreshness } from "./stream-freshness";
 
-type Selection = { underlying: string; contractIds: string[] };
-type CapturedQuote = { bid: number; ask: number; bidTime: number; askTime: number; receivedAt: string };
+type Selection = { underlying: string; underlyingKind?: "cash-index"; contractIds: string[] };
+type CapturedQuote = { kind?: never; bid: number; ask: number; bidTime: number; askTime: number; receivedAt: string };
+type CapturedIndex = { kind: "index"; price: number; time: number; receivedAt: string };
 type CapturedGreeks = { iv: number; time: number; receivedAt: string };
-export type StreamCapture = { capturedAt: string; underlying: CapturedQuote; contracts: Array<{ contractId: string; quote: CapturedQuote; greeks: CapturedGreeks }> };
+export type StreamCapture = { capturedAt: string; underlying: CapturedQuote | CapturedIndex; contracts: Array<{ contractId: string; quote: CapturedQuote; greeks: CapturedGreeks }> };
 type LatestQuote = Omit<CapturedQuote, "bidTime" | "askTime"> & { bidTime: number | null; askTime: number | null };
+type LatestIndex = Omit<CapturedIndex, "kind" | "time"> & { time: number | null };
 type LatestGreeks = Omit<CapturedGreeks, "time"> & { time: number | null };
+type Instrument = { id: string; option: boolean; index: boolean };
 const CAPTURE_UNAVAILABLE = "Dated stream capture unavailable; refresh quotes.";
 function validSelection(selection: Selection): boolean {
-  return !!selection && typeof selection.underlying === "string" && /^[A-Z]{1,6}$/.test(selection.underlying) && Array.isArray(selection.contractIds) && selection.contractIds.length <= MAX_OPTION_LEGS && new Set(selection.contractIds).size === selection.contractIds.length && selection.contractIds.every(id => typeof id === "string" && id.length === 21 && id.slice(0, 6) === selection.underlying.padEnd(6) && /^\d{6}[CP]\d{8}$/.test(id.slice(6)));
+  return !!selection && (selection.underlyingKind === undefined || selection.underlyingKind === "cash-index") && typeof selection.underlying === "string" && /^[A-Z]{1,6}$/.test(selection.underlying) && Array.isArray(selection.contractIds) && (selection.underlyingKind !== "cash-index" || selection.contractIds.length > 0) && selection.contractIds.length <= MAX_OPTION_LEGS && new Set(selection.contractIds).size === selection.contractIds.length && selection.contractIds.every(id => typeof id === "string" && id.length === 21 && id.slice(0, 6) === selection.underlying.padEnd(6) && /^\d{6}[CP]\d{8}$/.test(id.slice(6)));
 }
 class FeedProtocolError extends Error {}
-const fields: Record<string, string[]> = { Quote: ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime"], Greeks: ["eventType", "eventSymbol", "volatility", "time"] };
+const fields: Record<string, string[]> = { Quote: ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime"], Greeks: ["eventType", "eventSymbol", "volatility", "time"], Trade: ["eventType", "eventSymbol", "time", "price"] };
 const stamp = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value > 0 && value <= Date.now() ? value : null;
 const symbolValid = (value: unknown): value is string => typeof value === "string" && value.length <= 128 && value.length > 0 && !/[\s\x00-\x1f]/.test(value);
 
 function mapInstruments(selection: Selection, instruments: any[]) {
-  const mapped = new Map<string, { id: string; option: boolean }>();
+  const mapped = new Map<string, Instrument>();
+  const cashIndex = selection.underlyingKind === "cash-index";
   instruments.forEach(({ data }, index) => {
     const id = index === 0 ? selection.underlying : selection.contractIds[index - 1];
     if (data?.symbol !== id || !symbolValid(data?.["streamer-symbol"])) throw new Error("Invalid instrument");
-    if (index > 0 && (data["underlying-symbol"] !== selection.underlying || data["root-symbol"] !== selection.underlying || data["shares-per-contract"] !== 100 || data["option-chain-type"] !== "Standard" || data["exercise-style"] !== "American" || data["settlement-type"] !== "PM" || data["option-type"] !== id[12] || Number(data["strike-price"]) !== Number(id.slice(13)) / 1000 || typeof data["expiration-date"] !== "string" || data["expiration-date"].slice(2).replaceAll("-", "") !== id.slice(6, 12))) throw new Error("Invalid option");
+    if (index === 0 && (cashIndex ? data["is-index"] !== true || data["instrument-sub-type"] !== "INDEX" : data["is-index"] !== undefined && data["is-index"] !== false || data["instrument-sub-type"] === "INDEX")) throw new Error("Invalid underlying kind");
+    if (index > 0 && (data["underlying-symbol"] !== selection.underlying || data["root-symbol"] !== selection.underlying || data["shares-per-contract"] !== 100 || data["option-chain-type"] !== "Standard" || data["exercise-style"] !== (cashIndex ? "European" : "American") || data["settlement-type"] !== "PM" || data["option-type"] !== id[12] || Number(data["strike-price"]) !== Number(id.slice(13)) / 1000 || typeof data["expiration-date"] !== "string" || data["expiration-date"].slice(2).replaceAll("-", "") !== id.slice(6, 12))) throw new Error("Invalid option");
     if (mapped.has(data["streamer-symbol"])) throw new Error("Duplicate identity");
-    mapped.set(data["streamer-symbol"], { id, option: index > 0 });
+    mapped.set(data["streamer-symbol"], { id, option: index > 0, index: index === 0 && cashIndex });
   });
   return mapped;
 }
 
 export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fetch) {
   const request = createBrokerRequest(fetcher);
-  const clients = new Map<WebSocket, Map<string, { id: string; option: boolean }>>();
+  const clients = new Map<WebSocket, Map<string, Instrument>>();
   const leases = new Map<WebSocket, { expiresAt: number; timer?: ReturnType<typeof setTimeout> }>();
-  const latest = new Map<string, { quote?: LatestQuote; greeks?: LatestGreeks }>();
-  const sourceTimes = new Map<string, { bid?: number; ask?: number; iv?: number }>();
+  const latest = new Map<string, { quote?: LatestQuote; greeks?: LatestGreeks; index?: LatestIndex }>();
+  const sourceTimes = new Map<string, { bid?: number; ask?: number; iv?: number; index?: number }>();
   let upstream: WebSocket | undefined;
   let connecting: Promise<void> | undefined;
   let auth: Promise<string> | undefined;
@@ -114,9 +119,9 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
     const active = new Set([...clients.values()].flatMap(selection => [...selection.values()].map(item => item.id)));
     for (const id of latest.keys()) if (!active.has(id)) { latest.delete(id); sourceTimes.delete(id); }
     if (!upstream || !["channel", "ready"].includes(phase)) return;
-    const union = new Map<string, boolean>();
-    for (const selection of clients.values()) for (const [symbol, item] of selection) union.set(symbol, item.option);
-    try { send(upstream, { type: "FEED_SUBSCRIPTION", channel: 3, reset: true, add: [...union].flatMap(([symbol, option]) => [{ type: "Quote", symbol }, ...(option ? [{ type: "Greeks", symbol }] : [])]) }); } catch { recover(); }
+    const union = new Map<string, Instrument>();
+    for (const selection of clients.values()) for (const [symbol, item] of selection) union.set(symbol, item);
+    try { send(upstream, { type: "FEED_SUBSCRIPTION", channel: 3, reset: true, add: [...union].flatMap(([symbol, item]) => [{ type: item.index ? "Trade" : "Quote", symbol }, ...(item.option ? [{ type: "Greeks", symbol }] : [])]) }); } catch { recover(); }
   }
   async function connect(): Promise<void> {
     if (retry || upstream || connecting) return connecting;
@@ -188,10 +193,13 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
               for (let j = 0; j < values.length; j += names.length) {
                 const value = Object.fromEntries(names.map((name, index) => [name, values[j + index]]));
                 if (value.eventType !== type || !symbolValid(value.eventSymbol)) throw new Error("Invalid event");
-                let normalized: ({ type: "quote" } & Omit<LatestQuote, "receivedAt">) | ({ type: "greeks" } & Omit<LatestGreeks, "receivedAt">);
+                let normalized: ({ type: "quote" } & Omit<LatestQuote, "receivedAt">) | ({ type: "greeks" } & Omit<LatestGreeks, "receivedAt">) | ({ type: "index" } & Omit<LatestIndex, "receivedAt">);
                 if (type === "Quote") {
                   if (typeof value.bidPrice !== "number" || typeof value.askPrice !== "number" || !Number.isFinite(value.bidPrice) || !Number.isFinite(value.askPrice) || value.bidPrice < 0 || value.askPrice <= 0 || value.askPrice < value.bidPrice || value.askPrice > 100_000) throw new Error("Invalid quote");
                   normalized = { type: "quote", bid: value.bidPrice, ask: value.askPrice, bidTime: stamp(value.bidTime), askTime: stamp(value.askTime) };
+                } else if (type === "Trade") {
+                  if (typeof value.price !== "number" || !Number.isFinite(value.price) || value.price <= 0 || value.price > 1_000_000) throw new Error("Invalid index value");
+                  normalized = { type: "index", price: value.price, time: Number.isSafeInteger(value.time) ? stamp(value.time) : null };
                 } else {
                   if (typeof value.volatility !== "number" || !Number.isFinite(value.volatility) || value.volatility <= 0 || value.volatility > 10) throw new Error("Invalid Greeks");
                   normalized = { type: "greeks", iv: value.volatility, time: stamp(value.time) };
@@ -199,15 +207,15 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
                 for (const [client, selection] of clients) {
                   if (!active(client)) continue;
                   const selected = selection.get(value.eventSymbol);
-                  if (selected && (type === "Quote" || selected.option)) {
+                  if (selected && (type === "Trade" ? selected.index : type === "Quote" ? !selected.index : selected.option)) {
                     const previous = sourceTimes.get(selected.id);
                     const regressed = (next: number | null, before: number | null | undefined) => next !== null && before != null && next < before;
                     if (normalized.type === "quote"
                       ? regressed(normalized.bidTime, previous?.bid) || regressed(normalized.askTime, previous?.ask)
-                      : regressed(normalized.time, previous?.iv)) throw new FeedProtocolError("Source time regressed; reconnect required");
+                      : regressed(normalized.time, normalized.type === "index" ? previous?.index : previous?.iv)) throw new FeedProtocolError("Source time regressed; reconnect required");
                     sourceTimes.set(selected.id, normalized.type === "quote"
                       ? { ...previous, bid: normalized.bidTime ?? previous?.bid, ask: normalized.askTime ?? previous?.ask }
-                      : { ...previous, iv: normalized.time ?? previous?.iv });
+                      : normalized.type === "index" ? { ...previous, index: normalized.time ?? previous?.index } : { ...previous, iv: normalized.time ?? previous?.iv });
                     const receivedAt = new Date().toISOString();
                     const { type: kind, ...mark } = normalized;
                     latest.set(selected.id, { ...latest.get(selected.id), [kind]: { ...mark, receivedAt } });
@@ -230,7 +238,7 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
   }
   return {
     async history(selection: Selection, range: { start: number; end: number }, expiresAt: number, mode: 'price' | 'iv' = 'price') {
-      if (!validSelection(selection) || mode === 'iv' && !selection.contractIds.length || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error("Invalid history selection or session deadline");
+      if (!validSelection(selection) || selection.underlyingKind === "cash-index" || mode === 'iv' && !selection.contractIds.length || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error("Invalid history selection or session deadline");
       selection = { underlying: selection.underlying, contractIds: [...selection.contractIds] };
       range = { start: range?.start, end: range?.end };
       createCandleSnapshot([selection.underlying], range, mode);
@@ -271,7 +279,7 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
       for (const socket of clients.keys()) active(socket);
       if (!validSelection(selection) || phase !== "ready") throw new Error(CAPTURE_UNAVAILABLE);
       const subscribed = [...clients.values()].flatMap(mapped => [...mapped.values()]);
-      if (!subscribed.some(item => item.id === selection.underlying && !item.option) || selection.contractIds.some(id => !subscribed.some(item => item.id === id && item.option))) throw new Error(CAPTURE_UNAVAILABLE);
+      if (!subscribed.some(item => item.id === selection.underlying && !item.option && item.index === (selection.underlyingKind === "cash-index")) || selection.contractIds.some(id => !subscribed.some(item => item.id === id && item.option))) throw new Error(CAPTURE_UNAVAILABLE);
       const now = Date.now(), times: number[] = [], receipts: number[] = [];
       const source = (time: number | null) => {
         if (time === null) throw new Error(CAPTURE_UNAVAILABLE);
@@ -286,7 +294,13 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
         receipt(value.receivedAt);
         return { ...value, bidTime: source(value.bidTime), askTime: source(value.askTime) };
       };
-      const underlying = quote(selection.underlying);
+      let underlying: StreamCapture["underlying"];
+      if (selection.underlyingKind === "cash-index") {
+        const value = latest.get(selection.underlying)?.index;
+        if (!value) throw new Error(CAPTURE_UNAVAILABLE);
+        receipt(value.receivedAt);
+        underlying = { ...value, kind: "index", time: source(value.time) };
+      } else underlying = quote(selection.underlying);
       const contracts = selection.contractIds.map(contractId => {
         const value = latest.get(contractId)?.greeks;
         if (!value) throw new Error(CAPTURE_UNAVAILABLE);
@@ -299,6 +313,7 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
     async attach(socket: WebSocket, selection: Selection, expiresAt: number) {
       try {
         if (!validSelection(selection) || clients.size >= 32 || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error("Invalid selection or session deadline");
+        selection = { ...selection, contractIds: [...selection.contractIds] };
         clients.set(socket, new Map());
         leases.set(socket, { expiresAt });
         scheduleExpiry(socket);

@@ -17,6 +17,21 @@ it('restores cash-index terms without converting equity-shaped captures into ind
   const restored = await store.restore(index, env, 'index-owner');
   expect(await store.get(restored.id, env, 'index-owner')).toEqual(restored);
   await expect(store.capture(restored, [restored.contracts[0].contractId], streamed(restored.contracts[0].contractId), env, 'index-owner')).rejects.toThrow();
+  const stream = streamed(restored.contracts[0].contractId);
+  const capture = { ...stream, underlying: { kind: 'index' as const, price: 102, time: Date.now() - 4000, receivedAt: stream.underlying.receivedAt } };
+  const captured = await store.capture(restored, [restored.contracts[0].contractId], capture, env, 'index-owner');
+  expect(captured).toMatchObject({ underlyingKind: 'cash-index', spot: 102, indexSourceTime: new Date(capture.underlying.time).toISOString(), contractTerms: index.contractTerms });
+  expect(captured.spotSourceTimes).toBeUndefined();
+  expect(captured.historical).toBeUndefined();
+  expect(await store.get(captured.id, env, 'index-owner')).toEqual(captured);
+  const capturedAt = Date.parse(capture.capturedAt);
+  for (const patch of [{ price: 0 }, { price: NaN }, { time: capturedAt + 1 }, { time: capturedAt - 300001 }, { receivedAt: new Date(capturedAt - 60001).toISOString() }]) {
+    await expect(store.capture(restored, [restored.contracts[0].contractId], { ...capture, underlying: { ...capture.underlying, ...patch } }, env, 'index-owner')).rejects.toThrow();
+  }
+  await expect(store.capture(restored, [], { ...capture, contracts: [] }, env, 'index-owner')).rejects.toThrow();
+  await expect(store.capture(equity, [equity.contracts[0].contractId], { ...capture, contracts: streamed(equity.contracts[0].contractId).contracts }, env, 'index-owner')).rejects.toThrow();
+  const imported = await store.restore({ ...restored, imported: true }, env, 'index-owner');
+  await expect(store.capture(imported, [restored.contracts[0].contractId], capture, env, 'index-owner')).rejects.toThrow();
 });
 
 it('reports bounded load failure stages without raw provider or storage errors', async () => {

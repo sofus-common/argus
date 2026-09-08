@@ -489,7 +489,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     let history: ReturnType<typeof buildIntradayHistory> | ReturnType<typeof buildIvHistory>;
     try {
       const response = await (await feedStub(c.env)).fetch(new Request(`https://feed.internal/${iv ? 'history-iv' : 'history'}`, { method: 'POST', headers: {
-        'X-ARGUS-Feed-Selection': JSON.stringify({ underlying: snapshot.underlying, contractIds: body.state.legs.map((leg: StrategyState['legs'][number]) => leg.contractId) }),
+        'X-ARGUS-Feed-Selection': JSON.stringify({ underlying: snapshot.underlying, ...(snapshot.underlyingKind ? { underlyingKind: snapshot.underlyingKind } : {}), contractIds: body.state.legs.map((leg: StrategyState['legs'][number]) => leg.contractId) }),
         'X-ARGUS-Feed-Expires-At': String(session.expiresAt), 'X-ARGUS-History-Range': JSON.stringify(body.range),
       } }));
       if (!response.ok || Date.now() >= session.expiresAt) throw new Error();
@@ -525,7 +525,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     if (!c.env.FEED || !c.env.TASTYTRADE_CLIENT_SECRET || !c.env.TASTYTRADE_REFRESH_TOKEN) return c.json({ error: { code: "feed_unavailable" } }, 503);
     const limited = await c.env.SPARRING_RATE_LIMITER?.limit({ key: c.get("session").owner });
     if (limited && !limited.success) return c.json({ error: { code: "rate_limited" } }, 429);
-    return (await feedStub(c.env)).fetch(new Request("https://feed.internal/", { headers: { Upgrade: "websocket", "X-ARGUS-Feed-Selection": JSON.stringify({ underlying: snapshot.underlying, contractIds }), "X-ARGUS-Feed-Expires-At": String(c.get("session").expiresAt) } }));
+    return (await feedStub(c.env)).fetch(new Request("https://feed.internal/", { headers: { Upgrade: "websocket", "X-ARGUS-Feed-Selection": JSON.stringify({ underlying: snapshot.underlying, ...(snapshot.underlyingKind ? { underlyingKind: snapshot.underlyingKind } : {}), contractIds }), "X-ARGUS-Feed-Expires-At": String(c.get("session").expiresAt) } }));
   });
 
   app.post("/api/feed/capture", async c => {
@@ -540,7 +540,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     const limited = await c.env.SPARRING_RATE_LIMITER?.limit({ key: owner });
     if (limited && !limited.success) return c.json({ error: { code: "rate_limited" } }, 429);
     try {
-      const response = await (await feedStub(c.env)).fetch(new Request("https://feed.internal/capture", { method: "POST", headers: { "X-ARGUS-Feed-Selection": JSON.stringify({ underlying: base.underlying, contractIds: body.contractIds }) } }));
+      const response = await (await feedStub(c.env)).fetch(new Request("https://feed.internal/capture", { method: "POST", headers: { "X-ARGUS-Feed-Selection": JSON.stringify({ underlying: base.underlying, ...(base.underlyingKind ? { underlyingKind: base.underlyingKind } : {}), contractIds: body.contractIds }) } }));
       if (!response.ok) throw new Error("Capture unavailable");
       const capture = await response.json() as import("./quote-feed").StreamCapture;
       return c.json({ snapshot: await chains.capture(base, body.contractIds, capture, c.env, owner) });

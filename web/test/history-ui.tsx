@@ -1128,6 +1128,29 @@ async function run() {
         assert(comparison()!.querySelectorAll('dd')[1].textContent === 'Unavailable' && comparison()!.querySelectorAll('dd')[2].textContent === '—', 'Failed valuation retained previous model P/L or difference');
       } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = originalSocket; window.Worker = originalWorker }
     });
+    await test('Index streams display levels and require dated index, option and IV coverage', async () => {
+      await unmount(); const originalSocket = window.WebSocket;
+      let socket: { onmessage?: (event: { data: string }) => void } | undefined;
+      window.WebSocket = class { constructor() { socket = this } onmessage?: (event: { data: string }) => void; close() {} } as unknown as typeof WebSocket;
+      const emit = async (value: unknown) => { await act(async () => socket?.onmessage?.({ data: JSON.stringify(value) })) };
+      const contract = 'XSP   261009C00768000', receivedAt = new Date(fixedNow).toISOString();
+      const capture = () => [...fixture.querySelectorAll('button')].find(button => button.textContent === 'Capture for analysis')!;
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<StreamedMarks snapshot={{ id: 'index-ui', underlying: 'XSP', underlyingKind: 'cash-index' } as any} contracts={[contract]} captureEnabled reviewEnabled onCapture={() => {}} onReview={() => {}} automatic={false} onAutomatic={() => {}} onTick={async () => {}} />));
+        await click('Connect live feed'); await emit({ type: 'status', state: 'connected', message: 'Connected' });
+        await emit({ type: 'index', contractId: 'XSP', price: 768.25, time: fixedNow, receivedAt });
+        assert(fixture.textContent?.includes('Index level 768.25') && fixture.textContent.includes('dxFeed Trade timestamp'), 'Index event was not displayed with its source semantics');
+        assert(capture().disabled, 'Index alone admitted without option coverage');
+        await emit({ type: 'quote', contractId: contract, bid: 2, ask: 3, bidTime: fixedNow, askTime: fixedNow, receivedAt });
+        await emit({ type: 'greeks', contractId: contract, iv: .2, time: fixedNow, receivedAt });
+        assert(!capture().disabled, 'Complete index capture was not eligible');
+        await emit({ type: 'status', state: 'reconnecting', message: 'Retry' });
+        assert(capture().disabled && !fixture.textContent?.includes('Index level 768.25'), 'Reconnect retained index marks');
+        await emit({ type: 'status', state: 'connected', message: 'Connected' });
+        await emit({ type: 'quote', contractId: 'XSP', bid: 768, ask: 769, bidTime: fixedNow, askTime: fixedNow, receivedAt });
+        assert(capture().disabled && fixture.textContent?.includes('Feed unavailable'), 'Index accepted an equity-shaped quote');
+      } finally { await unmount(); window.WebSocket = originalSocket }
+    });
     await test('Stream eligibility ages without events, stops automatic capture and requires explicit recovery', async () => {
       await unmount(); const originalSocket = window.WebSocket;
       let socket: { onmessage?: (event: { data: string }) => void } | undefined, ticks = 0;

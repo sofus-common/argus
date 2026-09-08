@@ -299,19 +299,21 @@ export function SnapshotAge({ snapshot, contracts }: { snapshot: MarketSnapshot;
 export function StreamedMarks({ snapshot, contracts, onCapture, captureEnabled, onReview, reviewEnabled, automatic, onAutomatic, onTick }: { snapshot: MarketSnapshot; contracts: string[]; onCapture: () => void; captureEnabled: boolean; onReview: () => void; reviewEnabled: boolean; automatic: boolean; onAutomatic: (enabled: boolean) => void; onTick: () => Promise<unknown> }) {
   type Quote = { bid: number; ask: number; bidTime: number | null; askTime: number | null; receivedAt: string }
   type Greeks = { iv: number; time: number | null; receivedAt: string }
+  type Index = { price: number; time: number | null; receivedAt: string }
   const socket = useRef<WebSocket | null>(null)
   const [status, setStatus] = useState('Disconnected')
   const [active, setActive] = useState(false)
-  const [marks, setMarks] = useState<Record<string, { quote?: Quote; greeks?: Greeks }>>({})
+  const [marks, setMarks] = useState<Record<string, { quote?: Quote; greeks?: Greeks; index?: Index }>>({})
   const [clock, setClock] = useState(Date.now)
   useEffect(() => {
     if (!active) return
     const timer = window.setInterval(() => setClock(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [active])
-  const complete = !!marks[snapshot.underlying]?.quote && contracts.every(id => marks[id]?.quote && marks[id]?.greeks)
-  const sources = [marks[snapshot.underlying]?.quote?.bidTime ?? null, marks[snapshot.underlying]?.quote?.askTime ?? null, ...contracts.flatMap(id => [marks[id]?.quote?.bidTime ?? null, marks[id]?.quote?.askTime ?? null, marks[id]?.greeks?.time ?? null])]
-  const receipts = [marks[snapshot.underlying]?.quote?.receivedAt, ...contracts.flatMap(id => [marks[id]?.quote?.receivedAt, marks[id]?.greeks?.receivedAt])].map(value => value ? Date.parse(value) : NaN)
+  const index = snapshot.underlyingKind === 'cash-index', underlying = marks[snapshot.underlying]
+  const complete = !!(index ? underlying?.index : underlying?.quote) && contracts.every(id => marks[id]?.quote && marks[id]?.greeks)
+  const sources = [...(index ? [underlying?.index?.time ?? null] : [underlying?.quote?.bidTime ?? null, underlying?.quote?.askTime ?? null]), ...contracts.flatMap(id => [marks[id]?.quote?.bidTime ?? null, marks[id]?.quote?.askTime ?? null, marks[id]?.greeks?.time ?? null])]
+  const receipts = [index ? underlying?.index?.receivedAt : underlying?.quote?.receivedAt, ...contracts.flatMap(id => [marks[id]?.quote?.receivedAt, marks[id]?.greeks?.receivedAt])].map(value => value ? Date.parse(value) : NaN)
   const freshness = streamFreshness(sources, receipts, Math.max(clock, Date.now()))
   const capturable = status.startsWith('Connected') && complete && freshness === 'ready'
   const freshnessLabel = !complete ? 'Waiting for complete quote and IV coverage' : { ready: 'Within dated-capture limits', unknown: 'Source timestamps unknown', future: 'Future timestamps · capture unavailable', 'stale-source': 'Source data too old · capture unavailable', 'stale-receipt': 'Stream updates too old · capture unavailable', skewed: 'Source times too far apart · capture unavailable' }[freshness]
@@ -362,10 +364,15 @@ export function StreamedMarks({ snapshot, contracts, onCapture, captureEnabled, 
             }
             return
           }
-          if (!value || !['quote', 'greeks'].includes(value.type) || ![snapshot.underlying, ...contracts].includes(value.contractId) || typeof value.receivedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value.receivedAt) || !Number.isFinite(Date.parse(value.receivedAt))) throw Error()
+          if (!value || !['quote', 'greeks', 'index'].includes(value.type) || ![snapshot.underlying, ...contracts].includes(value.contractId) || typeof value.receivedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value.receivedAt) || !Number.isFinite(Date.parse(value.receivedAt))) throw Error()
           if (!ready) return
           const time = (stamp: unknown) => { if (stamp === null || stamp === 0) return null; if (typeof stamp !== 'number' || !Number.isSafeInteger(stamp) || stamp <= 0 || !Number.isFinite(new Date(stamp).getTime())) throw Error(); return stamp }
-          if (value.type === 'quote') {
+          if (value.type === 'index') {
+            if (!index || value.contractId !== snapshot.underlying || typeof value.price !== 'number' || !Number.isFinite(value.price) || value.price <= 0 || value.price > 1_000_000) throw Error()
+            const mark = { price: value.price, time: time(value.time), receivedAt: value.receivedAt }
+            setMarks(previous => ({ ...previous, [value.contractId]: { index: mark } }))
+          } else if (value.type === 'quote') {
+            if (index && value.contractId === snapshot.underlying) throw Error()
             if (typeof value.bid !== 'number' || typeof value.ask !== 'number' || !Number.isFinite(value.bid) || !Number.isFinite(value.ask) || value.bid < 0 || value.ask <= 0 || value.ask < value.bid || value.ask > 1_000_000) throw Error()
             const quote = { bid: value.bid, ask: value.ask, bidTime: time(value.bidTime), askTime: time(value.askTime), receivedAt: value.receivedAt }
             setMarks(previous => ({ ...previous, [value.contractId]: { ...previous[value.contractId], quote } }))
@@ -381,7 +388,7 @@ export function StreamedMarks({ snapshot, contracts, onCapture, captureEnabled, 
   const dated = (time: number | null) => time === null ? 'unknown' : new Date(time).toISOString()
   return <div className="streamed-marks" aria-label="Streamed market marks"><button onClick={active ? disconnect : connect}>{active ? 'Disconnect' : 'Connect live feed'}</button><span role="status">{status.startsWith('Connected') ? `Connected · ${freshnessLabel}` : status}</span><details><summary>Streamed marks · separate from position snapshot</summary><label><input type="checkbox" aria-label="Automatic repricing" checked={automatic} disabled={!automatic && (!captureEnabled || !reviewEnabled || !capturable)} onChange={event => onAutomatic(event.target.checked)} />Automatic repricing · every 15s</label><button disabled={!captureEnabled || !capturable} onClick={onCapture}>Capture for analysis</button><button disabled={!captureEnabled || !reviewEnabled || !capturable} onClick={onReview}>Capture and review</button><small>Capture and review updates the position snapshot, then requests AI analysis. If capture fails, no review starts.</small><small>Dated-capture limits: source age ≤5 minutes, receipt age ≤1 minute, source-time spread ≤1 minute. These limits do not guarantee current or executable prices.</small><small>Keep entry costs first. Capture requires complete recent source times; Now advances to capture time, future scenarios stay fixed. Only selected contracts are captured.</small><small>Without automatic repricing, marks are display-only until captured. Automatic mode follows spot when the scenario equals the previous quote spot; other targets stay fixed. Edits, AI review, hidden tabs and feed interruptions stop automatic mode. Held costs stay fixed. Receipt time does not establish market freshness.</small>{[snapshot.underlying, ...contracts].map(id => {
     const mark = marks[id]
-    return mark && <div key={id}><b>{id}</b>{mark.quote && <><span>Bid ${mark.quote.bid.toFixed(2)} / ask ${mark.quote.ask.toFixed(2)}</span><small>Bid time {dated(mark.quote.bidTime)} · ask time {dated(mark.quote.askTime)} · received {mark.quote.receivedAt}</small></>}{mark.greeks && <><span>IV {(mark.greeks.iv * 100).toFixed(2)}%</span><small>IV time {dated(mark.greeks.time)} · received {mark.greeks.receivedAt}</small></>}</div>
+    return mark && <div key={id}><b>{id}</b>{mark.index && <><span>Index level {mark.index.price.toFixed(2)}</span><small>dxFeed Trade timestamp {dated(mark.index.time)} · received {mark.index.receivedAt}. Not an executable quote or official settlement.</small></>}{mark.quote && <><span>Bid ${mark.quote.bid.toFixed(2)} / ask ${mark.quote.ask.toFixed(2)}</span><small>Bid time {dated(mark.quote.bidTime)} · ask time {dated(mark.quote.askTime)} · received {mark.quote.receivedAt}</small></>}{mark.greeks && <><span>IV {(mark.greeks.iv * 100).toFixed(2)}%</span><small>IV time {dated(mark.greeks.time)} · received {mark.greeks.receivedAt}</small></>}</div>
   })}</details></div>
 }
 

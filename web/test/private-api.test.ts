@@ -28,6 +28,33 @@ beforeAll(async () => {
 });
 const bindings = (): Bindings => ({ DB: db, ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUD: "private-tests", APP_ORIGIN: application, TASTYTRADE_CLIENT_SECRET: "test", TASTYTRADE_REFRESH_TOKEN: "test" });
 
+it('routes owned index feed selections and captures without trusting caller instrument metadata', async () => {
+  const app = authenticatedApp(), at = new Date().toISOString(), contractId = 'XSP   990918C00100000';
+  const snapshot: MarketSnapshot = { id: 'index-original', underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, indexSourceTime: at,
+    contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, availableExpiries: ['2099-09-18'], contracts: [{ contractId, type: 'call', strike: 100, expiry: '2099-09-18T20:00:00.000Z', multiplier: 100, bid: 1, ask: 3, iv: .2, quoteAsOf: at }] };
+  const state = createMarketStrategy('long-call', snapshot);
+  state.pricing!.entryMode = 'fixed'; state.legs[0].entryPrice = 1.23;
+  const saved = await createSavedStore(db).create(JSON.stringify([issuer, subjectOne]), 'Index', state, snapshot);
+  const { record } = await (await call(app, `/api/strategies/${saved.id}`)).json() as any;
+  const relay = vi.fn(async (request: Request) => {
+    expect(JSON.parse(request.headers.get('X-ARGUS-Feed-Selection')!)).toEqual({ underlying: 'XSP', underlyingKind: 'cash-index', contractIds: [contractId] });
+    const time = Date.now(), receivedAt = new Date(time).toISOString();
+    return new URL(request.url).pathname === '/capture' ? Response.json({ capturedAt: receivedAt, underlying: { kind: 'index', price: 102, time, receivedAt }, contracts: [{ contractId, quote: { bid: 3, ask: 4, bidTime: time, askTime: time, receivedAt }, greeks: { iv: .3, time, receivedAt } }] }) : new Response('routed');
+  });
+  const feedEnv = { ...bindings(), FEED: { getByName: () => ({ fetch: relay }) } as unknown as DurableObjectNamespace };
+  const url = `${application}/api/feed?snapshot=${record.snapshot.id}&contracts=${encodeURIComponent(contractId)}`;
+  expect((await app.request(url, { headers: { Upgrade: 'websocket', Origin: application, 'Cf-Access-Jwt-Assertion': jwtOne, 'X-ARGUS-Feed-Selection': 'forged' } }, feedEnv)).status).toBe(200);
+  const body = { snapshotId: record.snapshot.id, contractIds: [contractId] };
+  expect((await call(app, '/api/feed/capture', 'POST', body, jwtTwo, feedEnv)).status).toBe(409);
+  expect(relay).toHaveBeenCalledOnce();
+  const result = await call(app, '/api/feed/capture', 'POST', body, jwtOne, feedEnv);
+  expect(result.status).toBe(200);
+  const fresh = (await result.json() as any).snapshot;
+  expect(fresh).toMatchObject({ underlyingKind: 'cash-index', spot: 102, contractTerms: snapshot.contractTerms });
+  expect(fresh.spotSourceTimes).toBeUndefined();
+  expect(record.state.legs[0].entryPrice).toBe(1.23);
+});
+
 it('persists exclusions and empty construction through owned save, reload and import', async () => {
   const app = authenticatedApp();
   for (const empty of [false, true]) {
