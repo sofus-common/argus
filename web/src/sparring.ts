@@ -265,6 +265,9 @@ async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussio
   let verification = false;
   let reason: AnalysisVerificationError["reason"] = "provider_error";
   const complete = async (reply?: LotDiscussionReply, resumed = false) => {
+    let phase = 'fetch';
+    const call = reply ? 'verification' : 'generation';
+    try {
     if (Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
     const selectingTool = !reply && kind === "lots" && !toolMessages.length;
     const content = JSON.stringify({ ...JSON.parse(frozen), requestedScenarios, ...(selectingTool ? { reply_schema: LOT_DISCUSSION_SCHEMA.schema } : {}), ...(reply ? { reply } : {}) });
@@ -278,6 +281,8 @@ async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussio
         provider: { allow_fallbacks: false, data_collection: "deny", require_parameters: true },
       }),
     })]);
+    observeAnalysis(observer, { stage: 'transport', reason: 'headers-received', output: { call, resumed, status: response.status } });
+    phase = 'body';
     if (!response.ok) { observeAnalysis(observer, { stage: reply ? "verification-output" : "generation-output", reason: "http-error", output: { status: response.status } }); await Promise.race([deadline, response.body?.cancel()]); throw new Error("Lot discussion provider failed"); }
     reason = "invalid_output";
     if (!response.body) throw new Error("Missing provider body");
@@ -288,6 +293,7 @@ async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussio
         let size = 0, body = "";
         const decoder = new TextDecoder();
         for (;;) { const chunk = await reader.read(); if (chunk.done) break; size += chunk.value.byteLength; if (size > 64 * 1024) throw new Error("Oversized provider response"); body += decoder.decode(chunk.value, { stream: true }); }
+        if (!controller.signal.aborted) { observeAnalysis(observer, { stage: 'transport', reason: 'body-complete', output: { call, resumed, bytes: size } }); phase = 'parse'; }
         return JSON.parse(body + decoder.decode()) as ProviderResponse;
       })()]);
       const message = provider.choices?.[0]?.message;
@@ -295,6 +301,10 @@ async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussio
       observeProviderOutput(observer, !!reply, resumed, message, provider.usage);
       return message;
     } finally { controller.signal.removeEventListener("abort", cancel); cancel(); }
+    } catch (error) {
+      observeAnalysis(observer, { stage: 'transport', reason: 'provider-failed', output: { call, resumed, phase, deadlineAborted: controller.signal.aborted, errorName: error instanceof SyntaxError ? 'SyntaxError' : error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : 'UnknownError' } });
+      throw error;
+    }
   };
   try {
     let message = await complete();
@@ -1057,6 +1067,9 @@ export async function spar(
   let draftMessages: Array<Record<string, unknown>> | undefined;
   let boundPassages: Array<{ id: string; text: string }> | undefined;
   const complete = async (verification?: unknown, resumed = false): Promise<ProviderResponse> => {
+    let phase = 'fetch';
+    const call = verification ? 'verification' : 'generation';
+    try {
     if (Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
     const selectingTool = !verification && !preview && !firstExpiryBounds && !request.candidate_selection && !request.discovery && !toolMessages.length;
     const response = await Promise.race([deadline, providerFetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -1104,6 +1117,8 @@ export async function spar(
       }),
       signal: controller.signal,
     })]);
+    observeAnalysis(observer, { stage: 'transport', reason: 'headers-received', output: { call, resumed, status: response.status } });
+    phase = 'body';
     if (!response.ok) { observeAnalysis(observer, { stage: verification ? "verification-output" : "generation-output", reason: "http-error", output: { status: response.status } }); await Promise.race([deadline, response.body?.cancel()]); throw new Error(`Provider returned ${response.status}`); }
     if (!response.body) {
       if (verification) verificationReason = "invalid_output";
@@ -1128,6 +1143,7 @@ export async function spar(
           body += decoder.decode(chunk.value, { stream: true });
         }
         if (verification) verificationReason = "invalid_output";
+        if (!controller.signal.aborted) { observeAnalysis(observer, { stage: 'transport', reason: 'body-complete', output: { call, resumed, bytes: size } }); phase = 'parse'; }
         const parsed = JSON.parse(body + decoder.decode()) as ProviderResponse;
         observeProviderOutput(observer, !!verification, resumed, parsed.choices?.[0]?.message, parsed.usage);
         return parsed;
@@ -1135,6 +1151,10 @@ export async function spar(
     } finally {
       controller.signal.removeEventListener("abort", cancel);
       cancel();
+    }
+    } catch (error) {
+      observeAnalysis(observer, { stage: 'transport', reason: 'provider-failed', output: { call, resumed, phase, deadlineAborted: controller.signal.aborted, errorName: error instanceof SyntaxError ? 'SyntaxError' : error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : 'UnknownError' } });
+      throw error;
     }
   };
   try {

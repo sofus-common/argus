@@ -1,7 +1,7 @@
 import { loadAnalysisPrompts, promptDigest, ANALYSIS_ENGINE_VERSION } from "./analysis-config";
 import type { AnalysisPrompts } from "./analysis-prompts";
 
-type Stage = "configuration" | "facts" | "generation-request" | "generation-output" | "tool-request" | "tool-admission" | "tool-result" | "tool-rejection" | "verification-request" | "verification-output" | "proposal-check" | "completion" | "failure";
+type Stage = "configuration" | "facts" | "generation-request" | "generation-output" | "tool-request" | "tool-admission" | "tool-result" | "tool-rejection" | "verification-request" | "verification-output" | "proposal-check" | "completion" | "failure" | "transport";
 export type AnalysisObserver = (event: { stage: Stage; reason: string; input?: unknown; output?: unknown }) => void;
 export class AnalysisTraceError extends Error { constructor() { super("Analysis trace unavailable"); } }
 type TraceContext = {

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added bounded transport milestones to sparring and read-only discussions:
+  response status, completed body byte count, and failure phase/deadline state
+  with fixed error categories. No private headers, raw bodies or exception text
+  are added; prompts, requests, call counts and deadlines are unchanged.
+  Offline checks distinguish stalled fetch/body, malformed JSON and private
+  exception leakage; resumed generation and verification retain ordered traces.
+  Independent review, 764 tests, TypeScript and build passed. One repeat of the
+  failed local clarification succeeded: headers at 2.08 seconds, completed body
+  at 2.56 seconds, valid missing-input clarification and unchanged holdings.
+  This verifies diagnostics, not a fix for the prior intermittent failure.
+  V16 was restored through the full regression gate and independently read back;
+  no deployment or additional paid retry occurred.
+
 - Exercised local V18 activation and rollback through the existing checked tool.
   Both full regression runs passed 762 tests. The actual application exposed
   discovery, but a one-message clarification canary failed near the 20-second

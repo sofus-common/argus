@@ -40,7 +40,8 @@ it('uses two frozen, tool-free calls with calculated IV facts and traces', async
     expect(body.tools).toBeUndefined(); expect(body.tool_choice).toBeUndefined();
     expect(inputs[i].historyDisplay).toBeUndefined(); expect(inputs[i].facts.state).toBeUndefined();
   }
-  expect(events.map(event => event.stage)).toEqual(['facts', 'generation-request', 'generation-output', 'proposal-check', 'verification-request', 'verification-output', 'completion']);
+  expect(events.map(event => event.stage)).toEqual(['facts', 'generation-request', 'transport', 'transport', 'generation-output', 'proposal-check', 'verification-request', 'transport', 'transport', 'verification-output', 'completion']);
+  expect(events.filter(event => event.stage === 'transport').map(event => event.reason)).toEqual(['headers-received', 'body-complete', 'headers-received', 'body-complete']);
 });
 
 it('rejects invalid bindings or missing prompts before inference', async () => {
