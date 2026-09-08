@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added initial XSP chain loading using a bounded index-level read through the
+  existing shared feed. Verified cash/European catalog metadata and dated index
+  provenance determine nearby strikes; no REST timestamp substitution. Internal
+  reads respect session deadlines and clean up temporary subscriptions. Focused
+  tests cover loader admission, feed cleanup and stored-identity calculation.
+  Local live loading currently returns 503 during acquisition; its cause remains
+  unresolved. Full XSP UI/history and trading-session reliability are not claimed.
+  No new inference calls, dependencies or deployment.
+
 - Added typed cash-index streaming and capture: provider-validated index metadata
   selects DXLink Trade events, while options retain Quote/Greeks and equities retain
   bid/ask. Owner-validated snapshot kind controls internal routing. Captures preserve

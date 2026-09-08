@@ -6,7 +6,7 @@ import { createSavedStore, savedPosition, SavedStoreError } from "./saved-strate
 import { projectPosition, recordClose, recordCloseVoid, recordPriceCorrection, valuePosition, type CloseRequest, type CloseVoid, type PriceCorrection } from "./position-lifecycle";
 import { projectPositionLots, upgradePositionLots, valuePositionLots, recordLotTransaction, recordLotPriceCorrection, recordLotOpeningPriceCorrection, recordLotCloseVoid, type OpeningPriceCorrection, type LotTransaction } from "./position-lots";
 import { createMarketContextLoader, type MarketBindings } from "./market-context";
-import { createBrokerContextLoader, createThetaRequest, thetaRelayConfig, searchSymbols, type BrokerBindings } from "./broker-context";
+import { createBrokerContextLoader, createBrokerRequest, createThetaRequest, thetaRelayConfig, searchSymbols, type BrokerBindings } from "./broker-context";
 import { buildPriceHistory, loadPriceHistory } from "./price-history";
 import { loadPositionPerformance, preparePositionPerformance, validatePerformanceRange } from "./position-performance";
 import { buildIntradayHistory, buildIvHistory } from "./intraday-history";
@@ -96,7 +96,14 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
   const marketContext = createMarketContextLoader(providerFetch);
   const thetaRequest = createThetaRequest(providerFetch);
   const brokerContext = createBrokerContextLoader(providerFetch, thetaRequest);
-  const chains = createOptionChainStore(providerFetch);
+  const chains = createOptionChainStore(providerFetch, async (symbol, env, expiresAt) => {
+    if (!(env as Bindings).FEED) throw new Error('Not configured');
+    const stub = await feedStub(env);
+    return createBrokerRequest((url, init) => stub.fetch(url, init))('https://feed.internal/index-level', { method: 'POST', headers: {
+      'X-ARGUS-Feed-Selection': JSON.stringify({ underlying: symbol, underlyingKind: 'cash-index', contractIds: [] }),
+      'X-ARGUS-Feed-Expires-At': String(expiresAt),
+    } }, 4096, Math.max(1, Math.min(10_000, expiresAt - Date.now())));
+  });
 
   async function loadContext(env: Bindings, symbol: string) {
     const [context, brokerSources] = await Promise.all([marketContext(env, symbol), brokerContext(env, symbol)]);
@@ -420,7 +427,8 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     const limited = await c.env?.SPARRING_RATE_LIMITER?.limit({ key: c.get("session").owner });
     if (limited && !limited.success) return c.json({ error: { code: "rate_limited", message: "Try refreshing later." } }, 429);
     try {
-      const snapshot = await chains.load(c.env ?? {}, dates, c.get("session").owner, symbol, { center, retain });
+      const snapshot = await chains.load(c.env ?? {}, dates, c.get("session").owner, symbol, { center, retain }, c.get('session').expiresAt);
+      if (Date.now() >= c.get('session').expiresAt) throw new Error('Session expired');
       c.header("Cache-Control", "no-store");
       return c.json({ snapshot });
     } catch (error) {

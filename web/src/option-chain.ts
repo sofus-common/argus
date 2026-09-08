@@ -35,7 +35,7 @@ function quote(value: any) {
 }
 
 
-export function createOptionChainStore(fetcher: typeof fetch = fetch) {
+export function createOptionChainStore(fetcher: typeof fetch = fetch, readIndex?: (symbol: string, env: OptionChainBindings, expiresAt: number) => Promise<unknown>) {
   const request = createBrokerRequest(fetcher);
   async function register(snapshot: MarketSnapshot, env: OptionChainBindings, owner: string) {
     const db = database(env), frozen = structuredClone(snapshot), json = JSON.stringify(frozen), now = Date.now();
@@ -58,7 +58,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       return validatedSnapshot(snapshot);
     } catch { return undefined; }
   }
-  async function load(env: OptionChainBindings, expiries?: string[], owner = "local-development", symbol = "SPY", window: { center?: number; retain?: string[] } = {}): Promise<MarketSnapshot> {
+  async function load(env: OptionChainBindings, expiries?: string[], owner = "local-development", symbol = "SPY", window: { center?: number; retain?: string[] } = {}, expiresAt = Date.now() + 30_000): Promise<MarketSnapshot> {
     let stage: OptionChainLoadError['stage'] = 'storage';
     try {
       database(env);
@@ -67,7 +67,8 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       if (!window || typeof window !== "object" || window.center !== undefined && (!Number.isFinite(window.center) || window.center <= 0 || window.center > 1_000_000)) throw new Error("Invalid strike center");
       const retain = window.retain === undefined ? [] : window.retain;
       if (!Array.isArray(retain) || retain.length > MAX_OPTION_LEGS || new Set(retain).size !== retain.length || retain.some(id => typeof id !== "string" || id.length !== 21 || id.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(id.slice(6)))) throw new Error("Invalid retained contracts");
-      const deadline = Date.now() + 30_000;
+      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error('Invalid expiry');
+      const deadline = Math.min(expiresAt, Date.now() + 30_000), index = symbol === 'XSP';
       stage = 'authentication';
       const token = await tastyToken(env, request);
       const get = (path: string, limit?: number) => {
@@ -78,7 +79,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         stage = 'instruments';
         const schedules = await Promise.all(representatives.map(async c => {
           const instrument = (await get(`/instruments/equity-options/${encodeURIComponent(c.contractId)}`)).data;
-          if (instrument?.symbol !== c.contractId || instrument["underlying-symbol"] !== symbol || instrument["root-symbol"] !== symbol || instrument["shares-per-contract"] !== 100 || instrument["exercise-style"] !== "American" || instrument["settlement-type"] !== "PM" || instrument["option-chain-type"] !== "Standard" || instrument["option-type"] !== (c.type === "call" ? "C" : "P") || number(instrument["strike-price"]) !== c.strike || instrument["expiration-date"] !== c.date) throw new Error("Invalid instrument");
+          if (instrument?.symbol !== c.contractId || instrument["underlying-symbol"] !== symbol || instrument["root-symbol"] !== symbol || instrument["shares-per-contract"] !== 100 || instrument["exercise-style"] !== (index ? "European" : "American") || instrument["settlement-type"] !== "PM" || instrument["option-chain-type"] !== "Standard" || instrument["option-type"] !== (c.type === "call" ? "C" : "P") || number(instrument["strike-price"]) !== c.strike || instrument["expiration-date"] !== c.date) throw new Error("Invalid instrument");
           const expiry = timestamp(instrument["stops-trading-at"]), expiresAt = timestamp(instrument["expires-at"]);
           if (expiry.slice(0, 10) !== c.date || Date.parse(expiry) > Date.parse(expiresAt)) throw new Error("Invalid expiry");
           return { date: c.date, expiry, expiresAt };
@@ -87,13 +88,25 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         return schedules;
       };
       stage = 'catalog';
-      const [rawChain, rawSpot] = await Promise.all([get(`/option-chains/${symbol}/nested`, 2_097_152), get(`/market-data/by-type?equity=${symbol}`)]);
-      const underlying = quote(items(rawSpot).find(x => x.symbol === symbol));
-      const spot = (underlying.bid + underlying.ask) / 2;
+      const [rawChain, rawSpot] = await Promise.all([get(`/option-chains/${symbol}/nested`, 2_097_152), get(index ? `/instruments/equities/${symbol}` : `/market-data/by-type?equity=${symbol}`)]);
+      const chains = items(rawChain).filter(x => x["underlying-symbol"] === symbol && x["root-symbol"] === symbol && x["option-chain-type"] === "Standard" && x["shares-per-contract"] === 100 && Array.isArray(x.deliverables) && x.deliverables.length === 1 && (index
+        ? x.deliverables[0]['deliverable-type'] === 'Cash' && x.deliverables[0]['root-symbol'] === symbol && number(x.deliverables[0].amount) === 0 && number(x.deliverables[0].percent) === 100
+        : x.deliverables[0].symbol === symbol && x.deliverables[0]["deliverable-type"] === "Shares" && number(x.deliverables[0].amount) === 100));
+      let spot: number, spotAsOf: string;
+      if (index) {
+        if (!chains.length || rawSpot?.data?.symbol !== symbol || rawSpot.data['is-index'] !== true || rawSpot.data['instrument-sub-type'] !== 'INDEX') throw new Error('Invalid instrument');
+        if (!readIndex) throw new Error('Not configured');
+        const value = await readIndex(symbol, env, deadline) as any;
+        const now = Date.now(), receipt = Date.parse(timestamp(value?.receivedAt));
+        if (value?.kind !== 'index' || typeof value.price !== 'number' || !Number.isFinite(value.price) || value.price <= 0 || value.price > 1_000_000 || !Number.isSafeInteger(value.time) || value.time <= 0 || value.time > now || now - value.time > 300_000 || receipt > now || now - receipt > 60_000) throw new Error('Invalid quote');
+        spot = value.price; spotAsOf = new Date(value.time).toISOString();
+      } else {
+        const underlying = quote(items(rawSpot).find(x => x.symbol === symbol));
+        spot = (underlying.bid + underlying.ask) / 2; spotAsOf = underlying.quoteAsOf;
+      }
       const strikeCenter = window.center ?? spot;
       if (spot <= 0) throw new Error("Invalid spot");
       stage = 'selection';
-      const chains = items(rawChain).filter(x => x["underlying-symbol"] === symbol && x["root-symbol"] === symbol && x["option-chain-type"] === "Standard" && x["shares-per-contract"] === 100 && Array.isArray(x.deliverables) && x.deliverables.length === 1 && x.deliverables[0].symbol === symbol && x.deliverables[0]["deliverable-type"] === "Shares" && number(x.deliverables[0].amount) === 100);
       const today = new Date().toISOString().slice(0, 10);
       let windows = chains.flatMap(x => Array.isArray(x.expirations) ? x.expirations : []).filter(x => typeof x["expiration-date"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x["expiration-date"]) && Number.isFinite(Date.parse(x["expiration-date"])) && new Date(x["expiration-date"]).toISOString().slice(0, 10) === x["expiration-date"] && x["expiration-date"] >= today && x["settlement-type"] === "PM" && Array.isArray(x.strikes));
       const sameDay = windows.find(x => x["expiration-date"] === today);
@@ -141,9 +154,10 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         return { contractId: c.contractId, type: c.type, strike: c.strike, expiry, multiplier: 100, ...prices, iv, ...(Number.isSafeInteger(volume) && volume >= 0 ? { volume } : {}), ...(Number.isSafeInteger(openInterest) && openInterest >= 0 ? { openInterest } : {}) };
       });
       if (Date.now() > deadline) throw new Error("Timed out");
-      const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: symbol, strikeCenter, source: "Tastytrade", retrievedAt: new Date().toISOString(), spot, spotAsOf: underlying.quoteAsOf, availableExpiries, contracts: normalized };
+      const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: symbol, ...(index ? { underlyingKind: 'cash-index' as const, indexSourceTime: spotAsOf } : {}), strikeCenter, source: "Tastytrade", retrievedAt: new Date().toISOString(), spot, spotAsOf, availableExpiries, contracts: normalized };
       if (normalized.some(c => c.expiry <= snapshot.retrievedAt)) throw new Error("Invalid expiry");
-      snapshot.contractTerms = { exerciseStyle: "American", settlement: "physical-shares", sharesPerContract: 100, settlementSession: "PM" };
+      snapshot.contractTerms = index ? { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' } : { exerciseStyle: "American", settlement: "physical-shares", sharesPerContract: 100, settlementSession: "PM" };
+      if (index) validatedSnapshot(snapshot);
       stage = 'storage';
       return await register(snapshot, env, owner);
     } catch (error) { throw new OptionChainLoadError(stage, error); }

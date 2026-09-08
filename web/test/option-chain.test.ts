@@ -8,6 +8,37 @@ const db = (workerEnv as { DB: D1Database }).DB;
 beforeAll(async () => { await db.batch(migration.split(";").filter(sql => sql.trim()).map(sql => db.prepare(sql))); });
 const env = { DB: db, TASTYTRADE_CLIENT_SECRET: "secret", TASTYTRADE_REFRESH_TOKEN: "refresh" };
 const dates = ["2099-09-18", "2099-09-25"];
+function indexFixture(problem = '') {
+  const base = symbolFixture('XSP');
+  return vi.fn<typeof fetch>(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/instruments/equities/XSP') return Response.json({ data: { symbol: 'XSP', 'is-index': problem !== 'not-index', 'instrument-sub-type': 'INDEX' } });
+    if (url.searchParams.has('equity') || url.searchParams.has('index')) throw new Error('Index level must come from the feed');
+    const body = await (await base(input, init)).json() as any;
+    if (url.pathname.includes('option-chains')) body.data.items[0].deliverables = [{ amount: '0.0', 'deliverable-type': problem === 'shares' ? 'Shares' : 'Cash', percent: '100', 'root-symbol': 'XSP' }];
+    if (url.pathname.includes('equity-options')) body.data['exercise-style'] = problem === 'american' ? 'American' : 'European';
+    if (url.searchParams.has('equity-option')) for (const quote of body.data.items) quote['updated-at'] = new Date().toISOString();
+    return Response.json(body);
+  });
+}
+it('loads XSP cash option windows around a dated index level without stock-quote substitution', async () => {
+  const readIndex = vi.fn(async () => ({ kind: 'index', price: 104, time: Date.now(), receivedAt: new Date().toISOString() }));
+  const fetcher = indexFixture(), store = createOptionChainStore(fetcher, readIndex);
+  const snapshot = await store.load(env, undefined, 'index-chain-owner', 'XSP');
+  expect(snapshot).toMatchObject({ underlyingKind: 'cash-index', spot: 104, strikeCenter: 104, contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' } });
+  expect(snapshot.indexSourceTime).toBe(snapshot.spotAsOf);
+  expect(snapshot.contracts).toHaveLength(100);
+  expect(snapshot.contracts.every(c => c.contractId.startsWith('XSP   '))).toBe(true);
+  expect(await store.get(snapshot.id, env, 'index-chain-owner')).toEqual(snapshot);
+  expect(validateMarketStrategy(createMarketStrategy('bull-call', snapshot), snapshot)).toEqual([]);
+  expect(readIndex).toHaveBeenCalledOnce();
+  for (const problem of ['not-index', 'shares', 'american']) await expect(createOptionChainStore(indexFixture(problem), readIndex).load(env, undefined, 'owner', 'XSP')).rejects.toThrow();
+  for (const value of [{ kind: 'quote', price: 104, time: Date.now(), receivedAt: new Date().toISOString() }, { kind: 'index', price: 0, time: Date.now(), receivedAt: new Date().toISOString() }, { kind: 'index', price: 104, time: Date.now() + 60_000, receivedAt: new Date().toISOString() }, { kind: 'index', price: 104, time: Date.now() - 300_001, receivedAt: new Date().toISOString() }]) {
+    await expect(createOptionChainStore(indexFixture(), async () => value).load(env, undefined, 'owner', 'XSP')).rejects.toThrow();
+  }
+  await expect(createOptionChainStore(indexFixture()).load(env, undefined, 'owner', 'XSP')).rejects.toThrow();
+});
+
 it('restores cash-index terms without converting equity-shaped captures into index levels', async () => {
   const store = createOptionChainStore(fixture());
   const equity = await store.load(env, undefined, 'index-owner');

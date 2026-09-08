@@ -16,7 +16,7 @@ type LatestGreeks = Omit<CapturedGreeks, "time"> & { time: number | null };
 type Instrument = { id: string; option: boolean; index: boolean };
 const CAPTURE_UNAVAILABLE = "Dated stream capture unavailable; refresh quotes.";
 function validSelection(selection: Selection): boolean {
-  return !!selection && (selection.underlyingKind === undefined || selection.underlyingKind === "cash-index") && typeof selection.underlying === "string" && /^[A-Z]{1,6}$/.test(selection.underlying) && Array.isArray(selection.contractIds) && (selection.underlyingKind !== "cash-index" || selection.contractIds.length > 0) && selection.contractIds.length <= MAX_OPTION_LEGS && new Set(selection.contractIds).size === selection.contractIds.length && selection.contractIds.every(id => typeof id === "string" && id.length === 21 && id.slice(0, 6) === selection.underlying.padEnd(6) && /^\d{6}[CP]\d{8}$/.test(id.slice(6)));
+  return !!selection && (selection.underlyingKind === undefined || selection.underlyingKind === "cash-index") && typeof selection.underlying === "string" && /^[A-Z]{1,6}$/.test(selection.underlying) && Array.isArray(selection.contractIds) && selection.contractIds.length <= MAX_OPTION_LEGS && new Set(selection.contractIds).size === selection.contractIds.length && selection.contractIds.every(id => typeof id === "string" && id.length === 21 && id.slice(0, 6) === selection.underlying.padEnd(6) && /^\d{6}[CP]\d{8}$/.test(id.slice(6)));
 }
 class FeedProtocolError extends Error {}
 const fields: Record<string, string[]> = { Quote: ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime"], Greeks: ["eventType", "eventSymbol", "volatility", "time"], Trade: ["eventType", "eventSymbol", "time", "price"] };
@@ -40,7 +40,7 @@ function mapInstruments(selection: Selection, instruments: any[]) {
 export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fetch) {
   const request = createBrokerRequest(fetcher);
   const clients = new Map<WebSocket, Map<string, Instrument>>();
-  const leases = new Map<WebSocket, { expiresAt: number; timer?: ReturnType<typeof setTimeout> }>();
+  const leases = new Map<WebSocket, { expiresAt: number; timer?: ReturnType<typeof setTimeout>; cleanup?: () => void }>();
   const latest = new Map<string, { quote?: LatestQuote; greeks?: LatestGreeks; index?: LatestIndex }>();
   const sourceTimes = new Map<string, { bid?: number; ask?: number; iv?: number; index?: number }>();
   let upstream: WebSocket | undefined;
@@ -79,7 +79,7 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
     try { socket?.close(1000, "Feed stopped"); } catch {}
   }
   function remove(socket: WebSocket) {
-    clearTimeout(leases.get(socket)?.timer); leases.delete(socket);
+    clearTimeout(leases.get(socket)?.timer); leases.get(socket)?.cleanup?.(); leases.delete(socket);
     if (!clients.delete(socket)) return;
     if (!clients.size) stop(); else subscribe();
   }
@@ -180,7 +180,7 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
               if (!fields[type] || !Array.isArray(names) || names.length !== fields[type].length || new Set(names).size !== names.length || fields[type].some(name => !names.includes(name))) throw new Error("Invalid fields");
               config[type] = names;
             }
-            if (config.Quote) {
+            if (config.Quote || config.Trade && [...clients.values()].every(selection => [...selection.values()].every(item => item.index))) {
               if (phase !== "ready") healthySince = Date.now();
               phase = "ready"; clearTimeout(startup);
               for (const [client, selection] of clients) if (selection.size) status(client, "connected");
@@ -237,6 +237,39 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
     } finally { if (connecting === pending) connecting = undefined; }
   }
   return {
+    async indexLevel(symbol: string, expiresAt: number): Promise<CapturedIndex> {
+      const selection: Selection = { underlying: symbol, underlyingKind: "cash-index", contractIds: [] };
+      if (!validSelection(selection) || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error("Invalid index selection or session deadline");
+      const deadline = Math.min(expiresAt, Date.now() + 10_000), pair = new WebSocketPair();
+      pair[0].accept(); pair[1].accept();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let message!: (event: MessageEvent) => void, closed!: () => void;
+      try {
+        return await new Promise<CapturedIndex>((resolve, reject) => {
+          closed = () => reject(new Error("Index level unavailable"));
+          message = event => {
+            try {
+              const value = JSON.parse(String(event.data));
+              if (Date.now() >= deadline || value.type === "status" && value.state === "unavailable") { closed(); return; }
+              if (value.type !== "index" || value.contractId !== symbol) return;
+              if (streamFreshness([value.time], [Date.parse(value.receivedAt)], Date.now()) !== "ready") return;
+              resolve({ kind: "index", price: value.price, time: value.time, receivedAt: value.receivedAt });
+            } catch { closed(); }
+          };
+          pair[0].addEventListener("message", message);
+          pair[0].addEventListener("close", closed); pair[0].addEventListener("error", closed);
+          timer = setTimeout(closed, Math.max(1, deadline - Date.now()));
+          void this.attach(pair[1], selection, deadline).catch(closed);
+        });
+      } finally {
+        clearTimeout(timer);
+        pair[0].removeEventListener("message", message);
+        pair[0].removeEventListener("close", closed); pair[0].removeEventListener("error", closed);
+        remove(pair[1]);
+        try { pair[0].close(1000, "Index read finished"); } catch {}
+        try { pair[1].close(1000, "Index read finished"); } catch {}
+      }
+    },
     async history(selection: Selection, range: { start: number; end: number }, expiresAt: number, mode: 'price' | 'iv' = 'price') {
       if (!validSelection(selection) || selection.underlyingKind === "cash-index" || mode === 'iv' && !selection.contractIds.length || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error("Invalid history selection or session deadline");
       selection = { underlying: selection.underlying, contractIds: [...selection.contractIds] };
@@ -315,10 +348,14 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
         if (!validSelection(selection) || clients.size >= 32 || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error("Invalid selection or session deadline");
         selection = { ...selection, contractIds: [...selection.contractIds] };
         clients.set(socket, new Map());
-        leases.set(socket, { expiresAt });
+        const closed = () => remove(socket), message = () => unavailable(socket);
+        socket.addEventListener("close", closed); socket.addEventListener("error", closed);
+        socket.addEventListener("message", message);
+        leases.set(socket, { expiresAt, cleanup: () => {
+          socket.removeEventListener("close", closed); socket.removeEventListener("error", closed);
+          socket.removeEventListener("message", message);
+        } });
         scheduleExpiry(socket);
-        socket.addEventListener("close", () => remove(socket)); socket.addEventListener("error", () => remove(socket));
-        socket.addEventListener("message", () => unavailable(socket));
         status(socket, retry ? "reconnecting" : "connecting");
         const access = await token();
         if (!active(socket)) return;
@@ -339,19 +376,25 @@ export function createQuoteRelay(env: BrokerBindings, fetcher: typeof fetch = fe
 export class QuoteFeed extends DurableObject<BrokerBindings> {
   private relay = createQuoteRelay(this.env);
   async fetch(request: Request): Promise<Response> {
+    const indexLevel = request.method === "POST" && new URL(request.url).pathname === "/index-level";
     const capture = request.method === "POST" && new URL(request.url).pathname === "/capture";
     const iv = new URL(request.url).pathname === '/history-iv';
     const history = request.method === "POST" && (new URL(request.url).pathname === "/history" || iv);
-    if (!capture && !history && (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket")) return new Response("WebSocket required", { status: 426 });
+    if (!capture && !history && !indexLevel && (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket")) return new Response("WebSocket required", { status: 426 });
     const header = request.headers.get("X-ARGUS-Feed-Selection");
     if (!header || header.length > 512) return new Response("Invalid selection", { status: 400 });
     let selection: Selection;
     try { selection = JSON.parse(header); if (!validSelection(selection)) throw new Error("Invalid selection"); } catch { return new Response("Invalid selection", { status: 400 }); }
+    if (indexLevel && (selection.underlyingKind !== "cash-index" || selection.contractIds.length || Object.keys(selection).sort().join() !== "contractIds,underlying,underlyingKind")) return new Response("Invalid index selection", { status: 400 });
     if (capture) {
       try { return Response.json(this.relay.capture(selection)); } catch { return Response.json({ error: CAPTURE_UNAVAILABLE }, { status: 409 }); }
     }
     const deadline = request.headers.get("X-ARGUS-Feed-Expires-At"), expiresAt = Number(deadline);
     if (!deadline || !Number.isSafeInteger(expiresAt) || String(expiresAt) !== deadline || expiresAt <= Date.now()) return new Response("Invalid session deadline", { status: 401 });
+    if (indexLevel) {
+      try { return Response.json(await this.relay.indexLevel(selection.underlying, expiresAt), { headers: { "Cache-Control": "no-store" } }); }
+      catch { return Response.json({ error: "Index level unavailable" }, { status: 503 }); }
+    }
     if (history) {
       const header = request.headers.get('X-ARGUS-History-Range');
       let range: { start: number; end: number };

@@ -16,6 +16,41 @@ import { createSavedStore } from "../src/saved-strategies";
 
 const local = { ARGUS_LOCAL_DEV: "true" };
 const traceDB = (env as { DB: D1Database }).DB;
+it('loads an index chain through bounded internal feed acquisition and reuses the stored identity', async () => {
+  await traceDB.batch(snapshotMigration.split(';').filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
+  const expiry = '2099-09-18', call = 'XSP   990918C00100000', put = 'XSP   990918P00100000';
+  const provider = vi.fn<typeof fetch>(async input => {
+    const url = new URL(String(input));
+    if (url.pathname === '/oauth/token') return Response.json({ access_token: 'test' });
+    if (url.pathname === '/instruments/equities/XSP') return Response.json({ data: { symbol: 'XSP', 'is-index': true, 'instrument-sub-type': 'INDEX' } });
+    if (url.pathname === '/option-chains/XSP/nested') return Response.json({ data: { items: [{ 'underlying-symbol': 'XSP', 'root-symbol': 'XSP', 'option-chain-type': 'Standard', 'shares-per-contract': 100, deliverables: [{ 'deliverable-type': 'Cash', 'root-symbol': 'XSP', amount: '0.0', percent: '100' }], expirations: [{ 'expiration-date': expiry, 'settlement-type': 'PM', strikes: [{ 'strike-price': '100', call, put }] }] }] } });
+    if (url.pathname.startsWith('/instruments/equity-options/')) {
+      const symbol = decodeURIComponent(url.pathname.split('/').at(-1)!);
+      return Response.json({ data: { symbol, 'underlying-symbol': 'XSP', 'root-symbol': 'XSP', 'shares-per-contract': 100, 'exercise-style': 'European', 'settlement-type': 'PM', 'option-chain-type': 'Standard', 'option-type': symbol[12], 'strike-price': '100', 'expiration-date': expiry, 'stops-trading-at': `${expiry}T20:00:00Z`, 'expires-at': `${expiry}T20:00:00Z` } });
+    }
+    if (url.searchParams.has('equity-option')) return Response.json({ data: { items: [call, put].map(symbol => ({ symbol, bid: '1', ask: '2', volatility: '.2', 'updated-at': new Date().toISOString() })) } });
+    throw new Error('Unexpected provider request');
+  });
+  const reader = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    expect(request.url).toBe('https://feed.internal/index-level');
+    expect(JSON.parse(request.headers.get('X-ARGUS-Feed-Selection')!)).toEqual({ underlying: 'XSP', underlyingKind: 'cash-index', contractIds: [] });
+    expect(Number(request.headers.get('X-ARGUS-Feed-Expires-At')) - Date.now()).toBeLessThanOrEqual(30000);
+    return Response.json({ kind: 'index', price: 101, time: Date.now(), receivedAt: new Date().toISOString() });
+  });
+  const settings = { ...local, DB: traceDB, TASTYTRADE_CLIENT_SECRET: 'test', TASTYTRADE_REFRESH_TOKEN: 'test', FEED: { getByName: () => ({ fetch: reader }) } as unknown as DurableObjectNamespace };
+  const app = createApp(provider), result = await app.request('http://localhost/api/chain?symbol=XSP', {}, settings);
+  expect(result.status).toBe(200);
+  const { snapshot } = await result.json() as any;
+  expect(snapshot).toMatchObject({ underlyingKind: 'cash-index', spot: 101 });
+  expect(reader).toHaveBeenCalledOnce();
+  const state = createMarketStrategy('long-call', snapshot);
+  const calculated = await app.request('http://localhost/api/calculate', { method: 'POST', headers: { Origin: 'http://localhost', 'X-ARGUS-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(state) }, settings);
+  expect(calculated.status).toBe(200);
+  expect((await calculated.json() as any).metrics).toEqual(calculateStrategy(state));
+  expect((await app.request('http://localhost/api/chain?symbol=XSP', {}, { ...settings, FEED: undefined })).status).toBe(503);
+});
+
 it("searches quoted candidates directly without inference and rejects stale or foreign inputs", async () => {
   await traceDB.batch(snapshotMigration.split(";").filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
   const now = Date.now(), at = new Date(now).toISOString(), expiry = new Date(now + 30 * 86400000).toISOString();
