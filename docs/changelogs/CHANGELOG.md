@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Fixed cash-index builder transitions overwriting European valuation with the
+  previous equity model. XSP templates retain index identity; stock templates are
+  unavailable, share/American controls are removed, and stale American preview is
+  cleared. Stock-template symbol changes preserve holdings and explain the required
+  option-only selection. The optimizer omits stock-backed index searches without
+  weakening its mixed-expiry risk guards. Browser regression covers loading,
+  template selection, save/reopen and Undo. Verified 37 desktop and 37 mobile
+  browser checks, 145 focused tests, TypeScript/build and independent review;
+  regression also fails with the original model overwrite restored. No fixtures are
+  presented as live proof. A direct feed diagnostic received eight XSP levels,
+  all timestamped ahead of local receipt; live app admission remains unverified
+  pending clock synchronization and retesting. No deployment or system changes.
+
 - Added initial XSP chain loading using a bounded index-level read through the
   existing shared feed. Verified cash/European catalog metadata and dated index
   provenance determine nearby strikes; no REST timestamp substitution. Internal

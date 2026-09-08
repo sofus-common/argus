@@ -817,6 +817,59 @@ async function run() {
         assert(searches === 8 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
       } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
+    await test('XSP builder keeps European cash-index identity through loading, templates, save, reopen and Undo', async () => {
+      await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
+      const stamp = new Date(fixedNow - 120000).toISOString(), expiry = '2027-10-09T20:00:00.000Z';
+      const snapshot: MarketSnapshot = { id: 'index-builder', source: 'Tastytrade', underlying: 'XSP', underlyingKind: 'cash-index', spot: 100, spotAsOf: stamp, indexSourceTime: stamp, retrievedAt: stamp, availableExpiries: ['2027-10-09'], contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, contracts: [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `XSP   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp }))) };
+      let saved: Omit<SavedStrategy, 'lifecycle'> | undefined, chains = 0;
+      window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Index builder', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies' && init?.method === 'POST') { const body = JSON.parse(String(init.body)); saved = { id: 'index-saved', title: body.title, revision: 1, createdAt: stamp, updatedAt: stamp, state: body.state, snapshot }; return Response.json({ record: saved }, { status: 201 }); }
+        if (url === '/api/strategies') return Response.json({ strategies: saved ? [saved] : [] });
+        if (url === '/api/strategies/index-saved') return Response.json({ record: saved });
+        if (String(url).startsWith('/api/chain?')) { assert(new URL(String(url), location.origin).searchParams.get('symbol') === 'XSP', 'Unexpected index fixture symbol'); chains++; return Response.json({ snapshot }); }
+        throw new Error(`Unexpected index builder request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean, stage: string) => { for (let i = 0; i < 400 && !check(); i++) await settleTimers(); assert(check(), `Index builder ${stage}: ${fixture.querySelector('.workspace-error')?.textContent ?? ''}`) };
+      const model = () => fixture.querySelector<HTMLInputElement>('[aria-label="Valuation model"]')!;
+      const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
+      const undo = async () => act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+      const indexControls = () => {
+        assert(model()?.value === 'european-bsm-v1' && !model().querySelector('option[value="american-crr-1024-v1"]'), 'Index offered American valuation');
+        assert(![...fixture.querySelectorAll('button')].some(button => button.textContent === 'Add shares' || button.textContent === 'Preview American'), 'Index offered shares or American preview');
+        assert(!fixture.querySelector('[aria-label="Optimizer covered call"], [aria-label="Optimizer protective put"], [aria-label="Optimizer collar"]'), 'Index optimizer offered stock-backed families');
+        for (const name of ['Covered call', 'Protective put', 'Collar']) { const button = [...fixture.querySelectorAll<HTMLButtonElement>('.template-list button')].find(item => item.querySelector('span')?.textContent === name); assert(!button || button.disabled, `Index offered ${name}`); }
+      };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !fixture.querySelector('.saved-workspace summary')?.textContent?.includes('Checking session'), 'bootstrap');
+        await click('Methodology'); const equityInputs = inputs();
+        await click('Heatmap'); await click('Preview American');
+        assert(fixture.querySelector('.heatmap-wrap')?.textContent?.includes('American comparison'), 'Equity preview did not activate');
+        await change('Underlying symbol', 'XSP'); await click('Load symbol');
+        await waitFor(() => !!fixture.querySelector('.market-pricing-panel'), 'default model load');
+        indexControls(); assert(fixture.querySelector('[aria-label="Recorded contract terms"]')?.textContent?.includes('cash settlement'), 'Index cash terms missing');
+        await waitFor(() => !!fixture.querySelector('canvas.heatmap[aria-busy="false"][aria-label^="Modeled price by time"]'), 'European heatmap after equity preview');
+        assert(!fixture.querySelector('.heatmap-wrap')?.textContent?.includes('American comparison'), 'Index retained stale American preview');
+        await click('Curve');
+        await undo(); assert(inputs() === equityInputs && model().querySelector('option[value="american-crr-1024-v1"]'), 'Index Undo failed to restore equity');
+        await change('Valuation model', 'american-crr-1024-v1');
+        await change('Underlying symbol', 'XSP'); await click('Load symbol');
+        await waitFor(() => !!fixture.querySelector('.market-pricing-panel'), 'American equity load'); indexControls();
+        const longCall = [...fixture.querySelectorAll<HTMLButtonElement>('.template-list button')].find(item => item.querySelector('span')?.textContent === 'Long call');
+        assert(longCall && !longCall.disabled, 'Index long call missing'); await act(async () => longCall.click());
+        assert(fixture.querySelectorAll('.leg-row').length === 1, 'Index template did not rebuild'); indexControls();
+        await click('Heatmap'); indexControls(); await click('Curve');
+        await click('Save as new'); await waitFor(() => !!saved, 'save');
+        assert(saved!.state.underlyingKind === 'cash-index' && saved!.state.valuationModel === 'european-bsm-v1' && !saved!.state.stock, 'Saved index identity or model lost');
+        await undo(); await undo(); assert(model().value === 'american-crr-1024-v1' && inputs() === equityInputs, 'Index Undo failed to restore American equity');
+        await change('Saved positions', 'index-saved'); await click('Load');
+        await waitFor(() => !!fixture.querySelector('.market-pricing-panel'), 'reopen'); indexControls();
+        assert(fixture.querySelectorAll('.leg-row').length === 1 && chains === 2, 'Reopen lost template or unexpectedly refetched');
+        await undo(); assert(model().value === 'american-crr-1024-v1' && inputs() === equityInputs, 'Reopen Undo failed to restore equity');
+      } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
+    });
     await test('One-to-four expiry windows support eight-leg construction, saved selection, held refresh and Undo', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
       const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09', '2027-10-16', '2027-10-23', '2027-10-30'];
