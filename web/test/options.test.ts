@@ -21,6 +21,7 @@ import {
   sampleContractId,
   translateStrikes,
   marketLeg,
+  searchCandidates,
   validateMarketStrategy,
   type MarketSnapshot,
   validateStrategy,
@@ -35,6 +36,48 @@ import {
 } from "../src/options";
 
 const IDS = TEMPLATES.map((template) => template.id);
+describe('explicit stock-backed candidate domain', () => {
+  const snapshot: MarketSnapshot = { id: 'stock-search', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09'], contracts: ([['call', 100], ['call', 110], ['put', 90], ['put', 100]] as const).map(([type, strike]) => ({ contractId: `SPY   261009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100, bid: 1, ask: 3, iv: .2, quoteAsOf: '2026-09-01T12:00:00.000Z' })) };
+  const input = { targetSpot: 120, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 100000, feeAllowance: 5, basis: 'mid' as const, objective: 'target-pnl' as const };
+  it('enumerates and ranks stock families against explicit payoff and cost oracles', () => {
+    const held = createMarketStrategy('long-call', snapshot), before = structuredClone(held);
+    for (const basis of ['mid', 'natural'] as const) {
+      const sets: OptionLeg[][] = [];
+      const calls = snapshot.contracts.filter(quote => quote.type === 'call'), puts = snapshot.contracts.filter(quote => quote.type === 'put');
+      const leg = (quote: typeof calls[number], side: 'long' | 'short') => marketLeg(quote, side, 1, quote.contractId, basis);
+      calls.forEach(call => sets.push([leg(call, 'short')]));
+      puts.forEach(put => sets.push([leg(put, 'long')]));
+      puts.forEach(put => calls.filter(call => put.strike <= call.strike).forEach(call => sets.push([leg(put, 'long'), leg(call, 'short')])));
+      for (const objective of ['target-pnl', 'return-on-risk', 'expiry-probability'] as const) {
+        const domain = { families: ['covered-call', 'protective-put', 'collar'] as Array<'covered-call' | 'protective-put' | 'collar'>, maxEntryOutlay: 20000 };
+        const result = searchCandidates(held, snapshot, { ...input, basis, objective }, domain);
+        const oracle = sets.map(legs => {
+          const state = { ...held, id: 'candidate', name: 'Quoted candidate', legs, stock: { shares: 100, entryPrice: 100 }, scenarioSpot: input.targetSpot, scenarioDate: input.targetDate, feeAllowance: input.feeAllowance, pricing: { ...held.pricing!, basis } };
+          const payoff = (spot: number) => 100 * (spot - 100) + legs.reduce((sum, option) => sum + (Math.max(0, option.type === 'call' ? spot - option.strike : option.strike - spot) - option.entryPrice) * 100 * (option.side === 'long' ? 1 : -1), 0) - 5;
+          const loss = Math.max(0, -Math.min(...[0, ...legs.map(option => option.strike)].map(payoff)));
+          const probability = expirationProbability({ ...state, scenarioSpot: snapshot.spot, scenarioDate: snapshot.retrievedAt }, undefined, snapshot.contracts[0]);
+          const score = objective === 'target-pnl' ? payoff(120) : objective === 'return-on-risk' ? payoff(120) / loss : probability.probability!;
+          return { id: `stock:100@100|${legs.map(option => `${option.side}:${option.contractId}`).join('|')}`, score, loss, pnl: payoff(120) };
+        }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 5);
+        expect(result).toMatchObject({ planned: 8, evaluated: 8, eligible: 8, excludedCost: 0, domain });
+        expect(result.candidates.map(candidate => ({ id: candidate.id, score: candidate.score, loss: candidate.metrics.maxLoss, pnl: candidate.metrics.scenarioPnl }))).toEqual(oracle);
+        expect(result.candidates.every(candidate => candidate.state.stock?.shares === 100 && candidate.state.stock.entryPrice === 100)).toBe(true);
+      }
+    }
+    expect(held).toEqual(before);
+  });
+  it('enforces entry outlay including fees and leaves the legacy options result unchanged', () => {
+    const held = createMarketStrategy('long-call', snapshot), legacy = searchCandidates(held, snapshot, input);
+    expect(legacy).not.toHaveProperty('domain'); expect(legacy).not.toHaveProperty('excludedCost');
+    const explicit = searchCandidates(held, snapshot, input, { families: ['options'], maxEntryOutlay: 100000 });
+    expect(explicit.candidates).toEqual(legacy.candidates); expect(explicit.planned).toBe(legacy.planned);
+    expect(searchCandidates(held, snapshot, input)).toEqual(legacy);
+    const at = searchCandidates(held, snapshot, input, { families: ['covered-call'], maxEntryOutlay: 9805 });
+    expect(at).toMatchObject({ planned: 2, eligible: 2, excludedCost: 0 });
+    expect(searchCandidates(held, snapshot, input, { families: ['covered-call'], maxEntryOutlay: 9804.99 })).toMatchObject({ evaluated: 2, eligible: 0, excludedCost: 2, candidates: [] });
+    for (const domain of [{ families: [], maxEntryOutlay: 1 }, { families: ['collar', 'collar'], maxEntryOutlay: 1 }, { families: ['invented'], maxEntryOutlay: 1 }, { families: ['collar'], maxEntryOutlay: -1 }, { families: ['collar'], maxEntryOutlay: Infinity }, { families: ['collar'], maxEntryOutlay: 1, extra: true }]) expect(() => searchCandidates(held, snapshot, input, domain as never)).toThrow();
+  });
+});
 describe('broader market constructions', () => {
   it('prices eight legs across four expiries against independent single-leg sums', () => {
     const at = '2026-09-08T10:00:00.000Z';

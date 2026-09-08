@@ -1236,7 +1236,10 @@ export class CandidateSearchLimitError extends Error {
   constructor() { super("Candidate search exceeds 300,000 structures; narrow the quoted strike/expiry window"); }
 }
 
-export function searchCandidates(context: StrategyState, snapshot: MarketSnapshot, input: { targetSpot: number; targetDate: string; maxLoss: number; feeAllowance: number; basis: PricingBasis; objective: "target-pnl" | "return-on-risk" | "expiry-probability" }) {
+export type CandidateSearchDomain = { families: Array<'options' | 'covered-call' | 'protective-put' | 'collar'>; maxEntryOutlay: number };
+export function searchCandidates(context: StrategyState, snapshot: MarketSnapshot, input: { targetSpot: number; targetDate: string; maxLoss: number; feeAllowance: number; basis: PricingBasis; objective: "target-pnl" | "return-on-risk" | "expiry-probability" }, domain?: CandidateSearchDomain) {
+  if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== 'families,maxEntryOutlay' || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !['options', 'covered-call', 'protective-put', 'collar'].includes(family)) || !finite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0)) throw new Error('Invalid candidate search domain');
+  const options = domain === undefined || domain.families.includes('options');
   if (!input || Object.keys(input).sort().join() !== "basis,feeAllowance,maxLoss,objective,targetDate,targetSpot" || !finite(input.targetSpot) || input.targetSpot <= 0 || input.targetSpot > 1_000_000 || !finite(input.maxLoss) || input.maxLoss <= 0 || !finite(input.feeAllowance) || input.feeAllowance < 0 || !["mid", "natural"].includes(input.basis) || !["target-pnl", "return-on-risk", "expiry-probability"].includes(input.objective) || typeof input.targetDate !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(input.targetDate) || !Number.isFinite(Date.parse(input.targetDate)) || new Date(input.targetDate).toISOString() !== (input.targetDate.includes(".") ? input.targetDate : input.targetDate.replace("Z", ".000Z")) || Date.parse(input.targetDate) < Date.parse(snapshot.retrievedAt)) throw new Error("Invalid candidate search request");
   if (snapshot.historical || snapshot.contracts.length > MAX_CHAIN_CONTRACTS || new Set(snapshot.contracts.map(c => c.contractId)).size !== snapshot.contracts.length || validateMarketStrategy(context, snapshot).length) throw new Error("Candidate snapshot unavailable or invalid");
   const contracts = [...snapshot.contracts].filter(c => Date.parse(c.expiry) >= Date.parse(input.targetDate)).sort((a, b) => a.contractId.localeCompare(b.contractId));
@@ -1259,14 +1262,19 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
     puts: contracts.filter(c => c.expiry === expiry && c.type === "put").sort((a, b) => a.strike - b.strike),
   }));
   const equalWings = (a: MarketContract, b: MarketContract, c: MarketContract) => Math.round(a.strike * 1000) + Math.round(c.strike * 1000) === 2 * Math.round(b.strike * 1000);
-  let planned = contracts.length;
-  for (const { calls, puts } of groups) {
+  let planned = options ? contracts.length : 0;
+  if (options) for (const { calls, puts } of groups) {
     for (const put of puts) planned += calls.filter(call => put.strike <= call.strike).length;
     for (const group of [calls, puts]) {
       for (const long of group) planned += group.filter(short => short.strike !== long.strike).length;
       for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) for (let k = j + 1; k < group.length; k++) if (equalWings(group[i], group[j], group[k])) planned += 2;
     }
     for (let q = 1; q < puts.length; q++) for (let c = 0; c < calls.length; c++) if (puts[q].strike <= calls[c].strike) planned += 2 * q * (calls.length - c - 1);
+  }
+  for (const { calls, puts } of groups) {
+    if (domain?.families.includes('covered-call')) planned += calls.length;
+    if (domain?.families.includes('protective-put')) planned += puts.length;
+    if (domain?.families.includes('collar')) for (const put of puts) planned += calls.filter(call => put.strike <= call.strike).length;
   }
   // ponytail: bounded synchronous enumeration; partition search if larger windows become necessary.
   if (planned > 300_000) throw new CandidateSearchLimitError();
@@ -1278,26 +1286,29 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
   const probabilityFor = (state: StrategyState) => probabilityFromValidatedState({ ...state, scenarioSpot: snapshot.spot, scenarioDate: snapshot.retrievedAt }, undefined, references.get(state.legs[0].expiry)!);
   const ranked: Array<{ id: string; state: StrategyState; score: number; pnl: number }> = [];
   const compare = (a: typeof ranked[number], b: typeof ranked[number]) => b.score - a.score || a.id.localeCompare(b.id);
-  let evaluated = 0, eligible = 0, excludedRisk = 0, excludedBudget = 0;
-  const evaluate = (legs: OptionLeg[]) => {
+  let evaluated = 0, eligible = 0, excludedRisk = 0, excludedBudget = 0, excludedCost = 0;
+  const evaluate = (legs: OptionLeg[], stock = false) => {
     evaluated++;
-    const state = base(legs), loss = exactExpiration(state).maxLoss;
+    const state = base(legs);
+    if (stock) state.stock = { shares: 100, entryPrice: snapshot.spot };
+    const loss = exactExpiration(state).maxLoss;
     if (loss === null || loss <= 0) { excludedRisk++; return; }
     if (loss > input.maxLoss) { excludedBudget++; return; }
-    const pnl = rounded(legs.reduce((sum, leg) => sum + prices.get(leg.contractId)! * (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier, 0) - entryCost(state) - input.feeAllowance);
+    if (domain && Math.max(0, entryCost(state) + input.feeAllowance) > domain.maxEntryOutlay) { excludedCost++; return; }
+    const pnl = rounded(legs.reduce((sum, leg) => sum + prices.get(leg.contractId)! * (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier, stock ? 100 * input.targetSpot : 0) - entryCost(state) - input.feeAllowance);
     const score = input.objective === "expiry-probability" ? probabilityFor(state).probability : input.objective === "target-pnl" ? pnl : pnl / loss;
     if (!finite(pnl) || !finite(score)) throw new Error("Candidate numerical range exceeded");
     eligible++;
-    ranked.push({ id: legs.map(leg => `${leg.side}:${leg.contractId}${leg.contracts === 1 ? "" : `*${leg.contracts}`}`).join("|"), state, score, pnl });
+    ranked.push({ id: (stock ? `stock:100@${snapshot.spot}|` : '') + legs.map(leg => `${leg.side}:${leg.contractId}${leg.contracts === 1 ? "" : `*${leg.contracts}`}`).join("|"), state, score, pnl });
     ranked.sort(compare);
     if (ranked.length > 5) ranked.pop();
   };
-  for (const long of contracts) {
+  if (options) for (const long of contracts) {
     const leg = longLegs.get(long.contractId)!;
     evaluate([leg]);
     for (const short of contracts) if (short.type === long.type && short.expiry === long.expiry && short.strike !== long.strike) evaluate([leg, marketLeg(short, "short", 1, short.contractId, input.basis)]);
   }
-  for (const { calls, puts } of groups) {
+  if (options) for (const { calls, puts } of groups) {
     for (const put of puts) for (const call of calls) if (put.strike <= call.strike) evaluate([
       longLegs.get(put.contractId)!, longLegs.get(call.contractId)!,
     ]);
@@ -1318,12 +1329,20 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
       ]);
     }
   }
+  for (const { calls, puts } of groups) {
+    if (domain?.families.includes('covered-call')) for (const call of calls) evaluate([marketLeg(call, 'short', 1, call.contractId, input.basis)], true);
+    if (domain?.families.includes('protective-put')) for (const put of puts) evaluate([longLegs.get(put.contractId)!], true);
+    if (domain?.families.includes('collar')) for (const put of puts) for (const call of calls) if (put.strike <= call.strike) evaluate([longLegs.get(put.contractId)!, marketLeg(call, 'short', 1, call.contractId, input.basis)], true);
+  }
   return {
     snapshotId: snapshot.id, baseVersion: context.version, model: context.valuationModel ?? "european-bsm-v1", request: { ...input },
     coverage: "All quoted long calls/puts, same-expiry long straddles/strangles (put strike at or below call), verticals, equal-wing call/put butterflies (1:2:1) in both directions, and standard/inverse iron butterflies/condors including unequal wings in this window. Other legs use one contract each. No stock, arbitrary ratios, mixed-expiry or other families.",
     assumptions: "New positions at dated quote entries, not held-position adjustments or executable fills. Expiry-specific IV shifts reset to zero; global IV shift is retained. Conditional target model P/L, not expected return or trading edge. Loss budget applies to intact expiration payoff, not margin or assignment cashflows.",
     probabilityBasis: "Snapshot spot/time to each expiry, using one shared nearest-spot quoted contract IV per expiry (contract ID breaks ties), plus global IV shift. Risk-neutral lognormal positive intact-expiry P/L after allowance, not forecast win rate, expected return, touch or assignment probability. Different expiries have different horizons; high probability can accompany small gains and large losses.",
     planned, evaluated, eligible, excludedRisk, excludedBudget, excludedBeforeTarget: snapshot.contracts.length - contracts.length,
+    ...(domain ? { domain: { families: [...domain.families], maxEntryOutlay: domain.maxEntryOutlay }, excludedCost,
+      coverage: `Explicit families: ${domain.families.join(', ')}. Options selects the existing same-expiry option-only catalog. Covered calls use 100 long shares plus one short call; protective puts use 100 long shares plus one long put; collars use 100 long shares plus one long put and one short call with put strike at or below call strike. Each structure uses one expiry from this quoted window. No mixed-expiry, arbitrary ratios or other stock quantities.`,
+      assumptions: `New positions, not adjustments to held shares or executable fills. Stock entries use dated underlying snapshot spot ${snapshot.spot}; ${input.basis} applies to option entry estimates only. Entry outlay is max(0, signed stock and option entry cost plus allowance), capped at ${domain.maxEntryOutlay}; not margin or buying power. Expiry-specific IV shifts reset; global IV shift remains. Risk is intact expiration loss, not assignment cashflows; target model P/L is not expected return or trading edge.` } : {}),
     candidates: ranked.slice(0, 5).map(({ id, state, score }) => ({ id, state, score, metrics: calculateStrategy(state), probability: probabilityFor(state) })),
   };
 }

@@ -30,6 +30,17 @@ it("searches quoted candidates directly without inference and rejects stale or f
   const result = await request({ state, search });
   expect(result.status).toBe(200); expect(await result.json()).toEqual({ search: searchCandidates(state, snapshot, search) });
   expect(result.headers.get("Cache-Control")).toBe("no-store"); expect(state).toEqual(original);
+  const domain = { families: ["covered-call"], maxEntryOutlay: 9805 };
+  const stockResult = await request({ state, search: { ...search, maxLoss: 10000 }, domain });
+  expect(stockResult.status).toBe(200);
+  const stockBody = await stockResult.json() as any;
+  expect(stockBody.search.domain).toEqual(domain);
+  expect(stockBody.search.candidates).toHaveLength(3);
+  for (const candidate of stockBody.search.candidates) {
+    expect(candidate.state.stock).toEqual({ shares: 100, entryPrice: 100 });
+    expect(candidate.metrics).toEqual(calculateStrategy(candidate.state));
+  }
+  for (const invalid of [null, {}, { ...domain, maxEntryOutlay: -1 }, { ...domain, families: [] }, { ...domain, families: ["calendar"] }, { ...domain, families: ["options", "options"] }, { ...domain, extra: true }]) expect((await request({ state, search, domain: invalid })).status).toBe(400);
   for (const body of [{ state, search, extra: true }, { state, search: { ...search, maxLoss: -1 } }, { state, search: { ...search, maxCost: 10 } }]) expect((await request(body)).status).toBe(400);
   expect((await request({ state: { ...state, legs: [] }, search })).status).toBe(422);
   expect((await request({ state: { ...state, legs: state.legs.map(leg => ({ ...leg, iv: leg.iv + .1 })) }, search })).status).toBe(422);

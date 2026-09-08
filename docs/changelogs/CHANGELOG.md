@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Expanded direct discovery with selectable covered-call, protective-put and
+  collar families, each using 100 shares at the dated underlying mark. Added an
+  explicit maximum net entry outlay, including shares, premiums and allowance,
+  filtered before ranking; this is not margin or buying power. Returned stock
+  quantities, prices, families and budgets are reconciled before inspection.
+  Legacy three-argument AI search responses remained byte-identical in six
+  independent comparisons. Verified 184 focused tests, TypeScript and build;
+  real-data checks searched 750 stock-backed structures from 100 SPY quotes.
+  Thirty rendered workflow checks passed at desktop and 390px mobile widths,
+  including stock Apply/save/reopen/Undo, altered-share rejection and cancelled
+  outlay changes. Saved persistence in this browser check is mocked, not D1.
+  Mixed-expiry discovery remains pending; review identified a pre-existing
+  multi-expiry tail-carry error that must be corrected before that expansion.
+
 - Added direct deterministic strategy discovery: target price/date, loss budget,
   fee allowance, quote basis and ranking objective now work without AI. The
   authenticated endpoint validates owned current quotes and bounds the existing

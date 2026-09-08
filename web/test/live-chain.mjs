@@ -56,8 +56,21 @@ if (optimizer) {
     assert.deepEqual(validateMarketStrategy(candidate.state, snapshot), []);
     assert.ok(candidate.metrics.maxLoss <= search.maxLoss);
   }
+  const domain = { families: ['covered-call', 'protective-put', 'collar'], maxEntryOutlay: state.spot * 105 };
+  const stockSearch = { ...search, maxLoss: state.spot * 105 };
+  const stockResponse = await post('/api/candidates', { state, search: stockSearch, domain });
+  const stockBody = await stockResponse.json();
+  assert.equal(stockResponse.status, 200, JSON.stringify(stockBody.error));
+  assert.deepEqual(stockBody.search, searchCandidates(state, snapshot, stockSearch, domain));
+  assert.ok(stockBody.search.candidates.length > 0);
+  for (const candidate of stockBody.search.candidates) {
+    assert.deepEqual(candidate.state.stock, { shares: 100, entryPrice: snapshot.spot });
+    assert.deepEqual(candidate.metrics, calculateStrategy(candidate.state));
+    assert.deepEqual(validateMarketStrategy(candidate.state, snapshot), []);
+    assert.ok(Math.max(0, -candidate.metrics.entryAccounting.netEntryCashFlowAfterAllowance) <= domain.maxEntryOutlay);
+  }
   assert.deepEqual(state, original);
-  console.log(JSON.stringify({ passed: true, contracts: snapshot.contracts.length, retrievedAt: snapshot.retrievedAt, spotAsOf: snapshot.spotAsOf, oldestQuote: snapshot.contracts.map(c => c.quoteAsOf).sort()[0], evaluated: body.search.evaluated, eligible: body.search.eligible, returned: body.search.candidates.length, inferenceRequests: 0, sourceUnchanged: true, coverage: body.search.coverage }));
+  console.log(JSON.stringify({ passed: true, contracts: snapshot.contracts.length, retrievedAt: snapshot.retrievedAt, spotAsOf: snapshot.spotAsOf, oldestQuote: snapshot.contracts.map(c => c.quoteAsOf).sort()[0], evaluated: body.search.evaluated, eligible: body.search.eligible, returned: body.search.candidates.length, stockEvaluated: stockBody.search.evaluated, stockReturned: stockBody.search.candidates.length, inferenceRequests: 0, sourceUnchanged: true, coverage: body.search.coverage }));
   process.exit(0);
 }
 const target = { scenarioDate: state.scenarioDate, scenarioSpot: state.spot, ivShift: 0, legIvShifts: state.legs.map((leg, i) => ({ legId: leg.id, ivShift: (i + 1) / 100 })) };

@@ -488,21 +488,23 @@ async function run() {
       held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.excludedLegIds = [held.legs[0].id];
       const seed = { id: 'direct-seed', title: 'Direct optimizer fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
       let activeSnapshot = snapshot, saved: typeof seed | undefined, searches = 0, aiCalls = 0;
-      let mode: 'normal' | 'deferred' | 'altered' = 'normal', release: (() => void) | undefined;
+      let mode: 'normal' | 'deferred' | 'altered' | 'stock-altered' = 'normal', release: (() => void) | undefined;
       let ranked: ReturnType<typeof searchCandidates> | undefined;
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
       window.fetch = (async (url, init) => {
         if (url === '/api/bootstrap') return Response.json({ session: { label: 'Direct optimizer', local: true, recoveryKey: 'disabled-in-test' } });
         if (url === '/api/strategies' && init?.method === 'POST') { const body = JSON.parse(String(init.body)); saved = { ...seed, id: 'direct-saved', state: body.state, snapshot: activeSnapshot }; return Response.json({ record: saved }, { status: 201 }); }
-        if (url === '/api/strategies') return Response.json({ strategies: [seed] });
+        if (url === '/api/strategies') return Response.json({ strategies: saved ? [seed, saved] : [seed] });
         if (url === '/api/strategies/direct-seed') return Response.json({ record: seed });
+        if (url === '/api/strategies/direct-saved') return Response.json({ record: saved });
         if (String(url).startsWith('/api/chain?')) { activeSnapshot = { ...snapshot, id: 'direct-refreshed', availableExpiries: ['2027-10-09', '2027-10-16'], contracts: snapshot.contracts.flatMap(contract => [{ ...contract, bid: 4, ask: 5 }, { ...contract, contractId: contract.contractId.replace('271009', '271016'), expiry: '2027-10-16T20:00:00.000Z', bid: 4, ask: 5 }]) }; return Response.json({ snapshot: activeSnapshot }); }
         if (url === '/api/sparring') { aiCalls++; throw new Error('Direct optimizer must not call AI'); }
         if (url === '/api/candidates') {
-          searches++; const body = JSON.parse(String(init?.body)); ranked = searchCandidates(body.state, activeSnapshot, body.search);
+          searches++; const body = JSON.parse(String(init?.body)); ranked = searchCandidates(body.state, activeSnapshot, body.search, body.domain);
           assert(ranked.candidates.length > 0, 'Deterministic fixture yielded no ranked candidates');
           const response = structuredClone(ranked);
           if (mode === 'altered') response.candidates[0].state.legs[0].entryPrice = .01;
+          if (mode === 'stock-altered') response.candidates[0].state.stock!.shares = 99;
           if (mode === 'deferred') return await new Promise<Response>(resolve => { release = () => resolve(Response.json({ search: response })); });
           return Response.json({ search: response });
         }
@@ -552,7 +554,28 @@ async function run() {
         await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'later-date inspection');
         assert(fixture.querySelector('[aria-label="Optimizer comparison unavailable"]')?.textContent?.includes('beyond the first held option expiry') && !fixture.querySelector('[aria-label="Optimizer target comparison"]'), 'Unsupported held horizon produced a fabricated target comparison');
         await click('Keep current'); assert(inputs() === unchanged, 'Horizon-unavailable inspection changed holdings');
-        assert(searches === 5 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
+        await configure(); await change('Optimizer maximum entry outlay', '20000');
+        const toggle = async (label: string) => act(async () => fixture.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!.click());
+        await toggle('Optimizer options only'); await toggle('Optimizer protective put');
+        await click('Find strategies'); await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'stock ranking');
+        await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'stock inspection');
+        await click('Apply proposal'); saved = undefined; await click('Save as new'); await waitFor(() => !!saved, 'stock save');
+        assert(saved!.state.stock?.shares === 100 && saved!.state.stock.entryPrice === snapshot.spot, 'Stock candidate transfer lost captured shares');
+        assert(JSON.stringify(saved!.state.legs[0]) === JSON.stringify(held.legs[0]), 'Stock transfer changed excluded held cost');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(inputs() === unchanged && !fixture.querySelector('[aria-label="Shares"]'), 'Stock candidate Undo did not restore original position');
+        await change('Saved positions', 'direct-saved'); await click('Load');
+        await waitFor(() => (fixture.querySelector('[aria-label="Shares"]') as HTMLInputElement)?.value === '100', 'stock reopen');
+        assert((fixture.querySelector('[aria-label="Share entry cost"]') as HTMLInputElement)?.value === String(snapshot.spot), 'Reopened stock entry cost changed');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(inputs() === unchanged && !fixture.querySelector('[aria-label="Shares"]'), 'Reopened stock Undo changed original position');
+        await configure(); await change('Optimizer maximum entry outlay', '20000'); await toggle('Optimizer options only'); await toggle('Optimizer protective put');
+        mode = 'stock-altered'; await click('Find strategies'); await waitFor(() => !!fixture.querySelector('[aria-label="Strategy optimizer"] [role="alert"]'), 'stock tamper');
+        assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && inputs() === unchanged, 'Forged stock candidate reached builder');
+        mode = 'deferred'; await click('Find strategies'); await waitFor(() => !!release, 'domain deferred');
+        await change('Optimizer maximum entry outlay', '19000'); await act(async () => release!()); release = undefined;
+        await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'Changed outlay admitted stale domain result');
+        assert(searches === 8 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
       } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('One-to-four expiry windows support eight-leg construction, saved selection, held refresh and Undo', async () => {

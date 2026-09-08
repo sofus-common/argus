@@ -538,10 +538,10 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
   });
 
   app.post("/api/candidates", async c => {
-    let body: { state: StrategyState; search: Parameters<typeof searchCandidates>[2] };
+    let body: { state: StrategyState; search: Parameters<typeof searchCandidates>[2]; domain?: Parameters<typeof searchCandidates>[3] };
     try {
       body = await readJson(c.req.raw) as typeof body;
-      if (!body || Object.keys(body).sort().join() !== "search,state") throw new Error();
+      if (!body || !["search,state", "domain,search,state"].includes(Object.keys(body).sort().join())) throw new Error();
     } catch (error) { return c.json({ error: { code: error instanceof Error && error.message === "too_large" ? "request_too_large" : "invalid_request" } }, error instanceof Error && error.message === "too_large" ? 413 : 400); }
     if (validateStrategy(body.state).length || body.state.pricing?.mode !== "market") return c.json({ error: { code: "invalid_market_state" } }, 422);
     const owner = c.get("session").owner;
@@ -551,7 +551,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     if (!snapshot) return c.json({ error: { code: "snapshot_expired", message: "Load current option quotes before searching." } }, 409);
     if (snapshot.historical || ![snapshot.retrievedAt, snapshot.spotAsOf, ...snapshot.contracts.map(quote => quote.quoteAsOf)].every(value => { const at = Date.parse(value); return Number.isFinite(at) && at <= Date.now() && Date.now() - at <= 300000; })) return c.json({ error: { code: "stale_quotes", message: "Candidate search requires all source quotes within five minutes. Refresh prices." } }, 409);
     if (validateMarketStrategy(body.state, snapshot).length) return c.json({ error: { code: "invalid_market_state" } }, 422);
-    try { return c.json({ search: searchCandidates(body.state, snapshot, body.search) }); }
+    try { return c.json({ search: searchCandidates(body.state, snapshot, body.search, body.domain) }); }
     catch (error) {
       if (error instanceof CandidateSearchLimitError) return c.json({ error: { code: "candidate_search_limit", message: "Candidate search exceeds 300,000 structures; narrow the quoted strike/expiry window. Your position is unchanged." } }, 422);
       return c.json({ error: { code: "invalid_request" } }, 400);
