@@ -1133,6 +1133,7 @@ export async function spar(
         const errors = validateMarketConstruction(canonicalNext, snapshot);
         if (errors.length) throw new Error(errors.join("; "));
       }
+      next = projectAnalysisPosition(canonicalNext)!;
     } catch (error) {
       observeAnalysis(observer, { stage: "proposal-check", reason: "operations-rejected" });
       throw new InvalidProposalError(error instanceof Error ? error.message : "Invalid proposal");

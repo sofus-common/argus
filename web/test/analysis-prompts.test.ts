@@ -10,6 +10,17 @@ import ivCandidate from "../prompts/analysis-v3.json";
 import conciseCandidate from "../prompts/analysis-v4.json";
 import factualCandidate from "../prompts/analysis-v5.json";
 import selectionCandidate from "../prompts/analysis-v9.json";
+import transferCandidate from "../prompts/analysis-v10.json";
+
+it('versions frozen quote-estimate provenance without changing unrelated prompts', () => {
+  const candidate = readAnalysisPrompts(transferCandidate), previous = readAnalysisPrompts(selectionCandidate);
+  for (const key of Object.keys(previous.prompts) as Array<keyof typeof previous.prompts>) {
+    if (key === 'SYSTEM_PROMPT' || key === 'VERIFICATION_PROMPT') {
+      expect(candidate.prompts[key]).toContain(previous.prompts[key]);
+      expect(candidate.prompts[key]).toContain('broker-confirmed fills');
+    } else expect(candidate.prompts[key]).toBe(previous.prompts[key]);
+  }
+});
 
 it('versions selection scope without changing unrelated discussion prompts', () => {
   const candidate = readAnalysisPrompts(selectionCandidate), previous = readAnalysisPrompts(factualCandidate);

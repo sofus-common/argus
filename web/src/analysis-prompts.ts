@@ -1,4 +1,4 @@
-import configured from "../prompts/analysis-v9.json" with { type: "json" };
+import configured from "../prompts/analysis-v10.json" with { type: "json" };
 
 const keys = ["SYSTEM_PROMPT","VERIFICATION_PROMPT","BOUND_VERIFICATION_PROMPT","LOT_DISCUSSION_PROMPT","LOT_VERIFICATION_PROMPT","HISTORY_DISCUSSION_PROMPT","HISTORY_VERIFICATION_PROMPT","INTRADAY_DISCUSSION_PROMPT","INTRADAY_VERIFICATION_PROMPT"] as const;
 const ivKeys = ["IV_DISCUSSION_PROMPT", "IV_VERIFICATION_PROMPT"] as const;

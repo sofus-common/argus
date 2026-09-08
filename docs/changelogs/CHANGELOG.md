@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed same-snapshot/basis candidate and template transfer into fixed-entry
+  positions with exclusions. Retained costs stay unchanged; replacement quote
+  estimates become fixed inputs. Raw candidate prices validate before promotion,
+  including rejection of forged fixed-entry metadata. Browser checks cover
+  Inspect, Apply, save, refresh, Undo and tampering at desktop and mobile widths.
+  Verified604 offline tests,25 browser checks per viewport, TypeScript/build,
+  independent review and one OpenRouter template replacement with a dated real
+  Tastytrade snapshot. Snapshot/basis conflicts and contract collisions still fail
+  safely; this is not a claim of complete optimizer coverage or live reliability.
+
 - Enabled AI review and quantity/scenario proposals for nonempty included
   selections. Facts, tools, comparison pricing and verification use included
   holdings; canonical validation preserves excluded legs, costs and expiry shifts.

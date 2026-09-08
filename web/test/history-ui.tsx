@@ -296,6 +296,77 @@ async function run() {
         assert(!fixture.querySelector('.proposal-card') && held() === original && fixture.textContent?.includes('REVIEW FAILED'), 'Untrusted excluded-cost mutation was accepted');
       } finally { await unmount(); window.fetch = priorFetch; window.Worker = priorWorker }
     });
+    await test('Quoted candidate transfer preserves excluded fixed-entry holdings and Undo', async () => {
+      await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket, priorWorker = window.Worker;
+      const stamp = new Date(fixedNow - 120000).toISOString(), expiry = '2027-10-09T20:00:00.000Z';
+      const snapshot: MarketSnapshot = { id: 'candidate-held-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2027-10-09'], contracts: [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp }))) };
+      const heldState = createMarketStrategy('bull-call', snapshot);
+      heldState.pricing!.entryMode = 'fixed'; heldState.legs[0].entryPrice = 1.23; heldState.excludedLegIds = [heldState.legs[0].id];
+      const seed = { id: 'candidate-held-seed', title: 'Held candidate fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: heldState, snapshot };
+      let saved: typeof seed | undefined, maliciousCandidate: 'entry' | 'fixed' | undefined;
+      let activeSnapshot = snapshot;
+      const candidate = createMarketStrategy('long-put', snapshot);
+      candidate.legs[0].id = 'candidate-put';
+      const sentStates: ReturnType<typeof createStrategy>[] = [];
+      window.Worker = class extends priorWorker { postMessage(message: any, options?: any) { if (message?.state?.legs) sentStates.push(structuredClone(message.state)); super.postMessage(message, options) } };
+      window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Candidate test', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body)); saved = { ...seed, id: 'candidate-saved', title: body.title, state: body.state, snapshot: activeSnapshot };
+          return Response.json({ record: saved }, { status: 201 });
+        }
+        if (url === '/api/strategies') return Response.json({ strategies: saved ? [seed, saved] : [seed] });
+        if (url === '/api/strategies/candidate-held-seed') return Response.json({ record: seed });
+        if (String(url).startsWith('/api/chain?')) {
+          const retained = new URL(String(url), location.origin).searchParams.get('retain')?.split(',');
+          assert(retained?.includes(heldState.legs[0].contractId) && retained.includes(candidate.legs[0].contractId), 'Candidate refresh lost retained or included contracts');
+          activeSnapshot = { ...snapshot, id: 'candidate-refreshed', contracts: snapshot.contracts.map(contract => ({ ...contract, bid: 4, ask: 5 })) };
+          return Response.json({ snapshot: activeSnapshot });
+        }
+        if (url === '/api/sparring') {
+          const body = JSON.parse(String(init?.body)), next = { ...body.state, version: body.state.version + 1 };
+          const offered = structuredClone(candidate);
+          if (maliciousCandidate) offered.legs[0].entryPrice = 0.01;
+          if (maliciousCandidate === 'fixed') offered.pricing!.entryMode = 'fixed';
+          return Response.json({ request_id: body.request_id, base_state_version: body.base_state_version, next_state: next,
+            reply: { text: 'Inspect this quoted alternative.', operations: [], assumptions: [], objections: [], suggested_prompts: [], evidence_ids: [], risk_classification: 'bounded' },
+            calculated: { riskSummary: 'Included holdings only', dataMode: 'market-snapshot', candidateSearch: { baseVersion: body.state.version, snapshotId: snapshot.id, model: 'european-bsm-v1', coverage: 'Synthetic one-candidate fixture', probabilityBasis: 'Not a forecast', evaluated: 1, eligible: 1, request: { objective: 'target-pnl', targetSpot: candidate.scenarioSpot, targetDate: candidate.scenarioDate, basis: 'mid', feeAllowance: 0 }, candidates: [{ id: 'put-alternative', state: offered, metrics: calculateStrategy(offered), score: 1, probability: { probability: null, volatility: null, volatilityContractId: null, spot: candidate.spot, from: candidate.valuationTimestamp, expiry } }] } }, market_context: { sources: [], retrievedAt: stamp } });
+        }
+        throw new Error('Unexpected candidate fixture request');
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), `Candidate transfer did not settle: ${fixture.querySelector('[role="alert"]')?.textContent ?? ''}`) };
+      const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
+      const inspect = async () => { const button = [...fixture.querySelectorAll('button')].filter(button => button.textContent === 'Inspect candidate' && !button.disabled).at(-1); assert(button, 'No current candidate to inspect'); await act(async () => button.click()) };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !!fixture.querySelector('option[value="candidate-held-seed"]'));
+        await change('Saved positions', seed.id); await click('Load');
+        await waitFor(() => !!fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'));
+        const original = inputs();
+        await click('Break the thesis'); await waitFor(() => !!fixture.querySelector('[aria-label="Ranked quoted candidates"]'));
+        await inspect(); await waitFor(() => !!fixture.querySelector('.proposal-card'));
+        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'));
+        assert(sentStates.some(position => position.legs.length === 1 && position.legs[0].contractId === candidate.legs[0].contractId), 'Candidate comparison was not projected');
+        await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved);
+        assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.excludedLegIds?.join() === heldState.excludedLegIds!.join(), 'Candidate lost fixed-entry mode or exclusion selection');
+        assert(JSON.stringify(saved!.state.legs[0]) === JSON.stringify(heldState.legs[0]) && saved!.state.legs[1].contractId === candidate.legs[0].contractId, 'Candidate changed excluded cost or failed to replace included leg');
+        const applied = inputs(); saved = undefined;
+        await click('Refresh prices'); await waitFor(() => fixture.querySelector('.contract-quote')?.textContent?.includes('Bid $4.00') === true);
+        await waitFor(() => ![...fixture.querySelectorAll('button')].some(button => button.textContent === 'Loading quotes…'));
+        await click('Save as new'); await waitFor(() => !!saved);
+        assert(inputs() === applied && saved!.state.pricing?.entryMode === 'fixed' && saved!.state.legs[1].entryPrice === candidate.legs[0].entryPrice, 'Quote refresh changed newly frozen or retained entry costs');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(inputs() === original && fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'), 'Candidate Undo did not restore held construction');
+        for (const attack of ['entry', 'fixed'] as const) {
+          maliciousCandidate = attack; await click('Break the thesis');
+          await waitFor(() => !fixture.querySelector('.thinking'));
+          await inspect(); await waitFor(() => !fixture.querySelector('.thinking'));
+          assert(!fixture.querySelector('.proposal-card') && inputs() === original && fixture.querySelector('[role="alert"]'), `Untrusted ${attack} candidate pricing was promoted to held costs`);
+        }
+      } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket; window.Worker = priorWorker }
+    });
     await test('Workspace captures preserve holdings and scenarios, group automatic Undo and reject late edits', async () => {
       await unmount(); const priorFetch = window.fetch, originalSocket = window.WebSocket, originalWorker = window.Worker;
       let socket: { onmessage?: (event: { data: string }) => void } | undefined, captures = 0;

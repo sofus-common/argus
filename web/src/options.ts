@@ -552,6 +552,7 @@ export function mergeAnalysisProposal(state: StrategyState, proposal: StrategySt
   if (proposal.id !== state.id || proposal.version !== state.version + 1) throw new Error("Proposal identity or version mismatch");
   const excluded = state.legs.filter(leg => state.excludedLegIds?.includes(leg.id));
   if (!excluded.length) return structuredClone(proposal);
+  if (state.pricing?.entryMode === "fixed" && proposal.pricing && proposal.pricing.entryMode === undefined) proposal = { ...proposal, pricing: { ...proposal.pricing, entryMode: "fixed" } };
   if (proposal.underlying !== state.underlying || proposal.valuationTimestamp !== state.valuationTimestamp || proposal.spot !== state.spot || JSON.stringify(proposal.pricing) !== JSON.stringify(state.pricing)) throw new Error("Proposal cannot change retained inventory pricing context");
   if (proposal.legs.some(leg => excluded.some(retained => retained.id === leg.id))) throw new Error("Proposal cannot reuse excluded leg IDs");
   const next = structuredClone(proposal);

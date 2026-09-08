@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { calculateStrategy, evaluateScenario, scenarioFacts, scenarioTable, scenarioSpotAttribution, createMarketStrategy, createStrategy, marketLeg, validateMarketStrategy, type MarketSnapshot } from "../src/options";
+import { calculateStrategy, evaluateScenario, scenarioFacts, scenarioTable, scenarioSpotAttribution, createMarketStrategy, createStrategy, marketLeg, validateMarketStrategy, validateMarketConstruction, mergeAnalysisProposal, projectAnalysisPosition, type MarketSnapshot } from "../src/options";
 import { AnalysisVerificationError, InvalidProposalError, RESPONSE_SCHEMA, parseSparringRequest, strategyFacts, spar, type SparringReply, type SparringRequest } from "../src/sparring";
 import type { MarketContext } from "../src/market-context";
 import { americanScenario } from "../src/american-surface";
@@ -132,6 +132,28 @@ it("keeps excluded holdings canonical while generation and verification price on
     expect(payload.analysis_scope).toMatchObject({ includedOptionLegs: 1, excludedOptionLegs: 1, stockIncluded: false });
   }
   expect(payloads[1].proposed_state.legs).toHaveLength(1);
+});
+it("transfers quoted alternatives into fixed-entry selections without repricing excluded holdings", async () => {
+  const input = request();
+  const excluded = marketLeg(snapshot.contracts.find(c => c.type === "put")!, "short", 3, "excluded", "natural");
+  input.state.legs.push(excluded); input.state.excludedLegIds = [excluded.id];
+  input.state.pricing!.entryMode = "fixed"; excluded.entryPrice = 8;
+  const candidate = { ...createMarketStrategy("bull-call", snapshot, "natural"), id: input.state.id, version: input.state.version + 1 };
+  const original = structuredClone(candidate);
+  const merged = mergeAnalysisProposal(input.state, candidate);
+  expect(candidate).toEqual(original);
+  expect(merged.pricing).toEqual(input.state.pricing);
+  expect(merged.legs.find(leg => leg.id === excluded.id)).toEqual(excluded);
+  expect(projectAnalysisPosition(merged)!.legs).toEqual(candidate.legs);
+  expect(validateMarketConstruction(merged, snapshot)).toEqual([]);
+  for (const pricing of [{ ...candidate.pricing!, basis: "mid" as const }, { ...candidate.pricing!, snapshotId: "other" }]) expect(() => mergeAnalysisProposal(input.state, { ...candidate, pricing })).toThrow();
+  const fetcher = provider(reply([{ kind: "replace_with_template", template_id: "bull-call" }]));
+  const result = await spar(input, "test", fetcher, context, snapshot);
+  expect(result.next_state).toEqual(merged);
+  expect(result.metrics).toEqual(calculateStrategy(projectAnalysisPosition(merged)!));
+  const verification = JSON.parse(JSON.parse(String(fetcher.mock.calls[1][1]!.body)).messages[1].content);
+  expect(verification.proposed_state).toEqual(projectAnalysisPosition(merged));
+  expect(verification.proposed).toEqual(strategyFacts(projectAnalysisPosition(merged)!, snapshot));
 });
 it("rejects empty included analysis before provider use but permits shares with all options excluded", async () => {
   const input = request(); input.state.excludedLegIds = input.state.legs.map(leg => leg.id);

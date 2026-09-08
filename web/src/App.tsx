@@ -1392,9 +1392,10 @@ export function App() {
     setPending(true); setProposal(null)
     try {
       const includedNext = { ...structuredClone(candidate.state), id: current.id, version: current.version + 1 }
+      if (includedNext.pricing?.entryMode !== undefined || validateMarketStrategy(includedNext, snapshot).length) throw new Error('Candidate entry estimates do not match its quoted snapshot.')
       const next = mergeAnalysisProposal(current, includedNext), includedBefore = projectAnalysisPosition(current)!
       if (validateMarketConstruction(next, snapshot).length) throw new Error('Candidate no longer matches its quoted snapshot.')
-      const [before, selected] = await Promise.all([requestWorkspaceValuation(includedBefore, controller.signal), requestWorkspaceValuation(includedNext, controller.signal)])
+      const [before, selected] = await Promise.all([requestWorkspaceValuation(includedBefore, controller.signal), requestWorkspaceValuation(projectAnalysisPosition(next)!, controller.signal)])
       if (reviewRequest.current !== controller || strategyRef.current !== current) return
       if (JSON.stringify(selected.metrics) !== JSON.stringify(candidate.metrics)) throw new Error('Candidate metrics could not be reconciled. Position unchanged.')
       setView('curve')

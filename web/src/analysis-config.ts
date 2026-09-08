@@ -1,6 +1,6 @@
 import { defaultAnalysisPrompts, readAnalysisPrompts, type AnalysisPrompts } from "./analysis-prompts";
 
-export const ANALYSIS_ENGINE_VERSION = "analysis-contract-v3";
+export const ANALYSIS_ENGINE_VERSION = "analysis-contract-v4";
 
 export async function promptDigest(bundle: AnalysisPrompts): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(readAnalysisPrompts(bundle)));
