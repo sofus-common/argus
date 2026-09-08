@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added a saved-position tracking overview with loaded-record title/symbol/status
+  filters and direct inspection into existing lot, roll and performance workflows.
+  Owner-scoped paged reads derive remaining holdings and realized P/L from the
+  existing ledger, including excluded inventory and corrections. Closed net P/L
+  deducts the allowance once; open positions remain explicitly unvalued. Sample
+  and quoted-entry analyses are not tracked, malformed rows stay unavailable,
+  and invalid tracking responses cannot replace previously validated figures.
+  Reuses the current visual system with a keyboard-scrollable mobile table;
+  no provider fanout, new dependency, migration or AI call. Verification: 706
+  tests, TypeScript/build, 42 desktop and 42 mobile workflow checks and independent
+  review passed. Actual local sample save/list classification verified; disposable
+  record removed. This does not establish live marks or hosted readiness.
+
 - Added automatic saved-revision comparison while editing a reopened or newly
   saved position, with read-only original inputs and an on-demand original curve.
   Accepted saves advance the baseline; Undo, conflicts, altered responses and

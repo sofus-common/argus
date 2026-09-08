@@ -352,6 +352,17 @@ input, select, textarea { accent-color: var(--cobalt); }
 .saved-controls label { display: grid; gap: 4px; flex: 1 1 180px; min-width: 0; color: var(--faint); font-size: 11px; }
 .saved-controls input, .saved-controls select, .saved-controls button { min-width: 0; min-height: 34px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--ink-2); padding: 6px 9px; font-size: 12px; }
 .saved-controls .saved-picker { flex-basis: 65%; }
+.saved-overview { margin: 16px 0; padding-top: 16px; border-top: 1px solid var(--line); }
+.saved-overview h3 { margin: 0; font-size: 15px; }
+.saved-overview p, .saved-overview small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.saved-overview-scroll { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+.saved-overview table { width: 100%; min-width: 650px; border-collapse: collapse; text-align: left; font-size: 12px; font-variant-numeric: tabular-nums; }
+.saved-overview th, .saved-overview td { padding: 12px; vertical-align: top; border-bottom: 1px solid var(--line); }
+.saved-overview thead { background: var(--ink-2); color: var(--muted); font-size: 10px; }
+.saved-overview tbody th { max-width: 220px; overflow-wrap: anywhere; font-weight: 500; }
+.saved-overview small { display: block; margin-top: 4px; font-weight: 400; }
+.saved-overview button { min-height: 44px; padding: 8px 12px; background: var(--ink-2); border: 1px solid var(--line-strong); border-radius: 5px; }
+.saved-overview button:focus-visible, .saved-overview-scroll:focus-visible { outline: 2px solid var(--cobalt); outline-offset: 2px; }
 .saved-import { margin: 12px 0; padding-top: 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .saved-import p, .saved-import label { font-size: 12px; color: var(--muted); line-height: 1.5; }
 .saved-import input, .saved-import button { display: block; max-width: 100%; min-height: 44px; margin-top: 8px; padding: 8px; color: var(--paper); background: var(--ink-2); border: 1px solid var(--line-strong); border-radius: 5px; }

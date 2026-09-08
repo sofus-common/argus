@@ -23,6 +23,7 @@ it('keeps positions beyond the first fifty reachable through owner-scoped pages'
   expect(second.strategies).toHaveLength(1);
   expect(second.nextCursor).toBeNull();
   expect(new Set([...first.strategies, ...second.strategies].map(record => record.id)).size).toBe(created.length);
+  for (const record of [...first.strategies, ...second.strategies]) expect(record).toHaveProperty('tracking', { underlying: 'SPY', status: 'not-tracked', remainingLots: null, optionContracts: null, signedShares: null, grossRealizedPnl: null, allowance: null, netClosedPnl: null, asOf: null });
   expect((await store.listPage('another-owner', first.nextCursor!)).strategies).toEqual([]);
 });
 
@@ -42,6 +43,31 @@ it('pages timestamp ties deterministically and requires refresh for records move
   expect(third.nextCursor).toBeNull();
   const refreshed = await store.listPage(owner);
   expect(refreshed.strategies.map(record => record.id)).toEqual(expect.arrayContaining([ordered[0], ordered[60], inserted.id]));
+});
+
+it('isolates invalid tracking rows and reconciles corrected signed-stock holdings without marking analyses', async () => {
+  const store = createSavedStore(db), owner = crypto.randomUUID(), at = '2026-09-05T12:00:00.000Z';
+  const snapshot: MarketSnapshot = { id: 'tracking', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-04T18:00:00.000Z', spotAsOf: '2026-09-04T18:00:00.000Z', availableExpiries: ['2026-10-09'], contracts: [{ contractId: 'SPY   261009C00100000', type: 'call', strike: 100, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100, bid: 3, ask: 5, iv: .2, quoteAsOf: '2026-09-04T18:00:00.000Z' }] };
+  const state = createMarketStrategy('long-call', snapshot);
+  const quoted = await store.create(owner, 'Quoted analysis', state, snapshot);
+  state.pricing!.entryMode = 'fixed'; state.legs = []; state.stock = { shares: -10, entryPrice: 100 }; state.feeAllowance = 2;
+  const held = await store.create(owner, 'Short shares', state, snapshot);
+  const close = { id: 'partial', assetId: 'stock', quantity: 4, price: 90, at };
+  await store.close(owner, held.id, 1, close);
+  await store.correctPrice(owner, held.id, 2, { id: 'correct', closeId: close.id, price: 95, reason: 'Recorded fill correction', recordedAt: at });
+  let page = await store.listPage(owner);
+  expect(page.strategies.find(row => row.id === held.id)).toHaveProperty('tracking', { underlying: 'SPY', status: 'open', remainingLots: 1, optionContracts: 0, signedShares: -6, grossRealizedPnl: 20, allowance: 2, netClosedPnl: null, asOf: at });
+  expect(page.strategies.find(row => row.id === quoted.id)).toHaveProperty('tracking', { underlying: 'SPY', status: 'not-tracked', remainingLots: null, optionContracts: null, signedShares: null, grossRealizedPnl: null, allowance: null, netClosedPnl: null, asOf: null });
+  await store.voidClose(owner, held.id, 3, { id: 'void', closeId: close.id, reason: 'Fill was cancelled', recordedAt: at });
+  expect((await store.listPage(owner)).strategies.find(row => row.id === held.id)).toHaveProperty('tracking.signedShares', -10);
+  const invalid = await store.create(owner, 'Corrupt record', createStrategy('long-call'));
+  await db.prepare('UPDATE saved_strategies SET state_json = ? WHERE owner = ? AND id = ?').bind('{"underlying":"UNVALIDATED"}', owner, invalid.id).run();
+  page = await store.listPage(owner);
+  expect(page.strategies).toHaveLength(3);
+  expect(page.strategies.find(row => row.id === invalid.id)).toHaveProperty('tracking', { underlying: null, status: 'unavailable', remainingLots: null, optionContracts: null, signedShares: null, grossRealizedPnl: null, allowance: null, netClosedPnl: null, asOf: null });
+  expect(page.strategies.find(row => row.id === held.id)).toHaveProperty('tracking.grossRealizedPnl', 0);
+  expect((await store.listPage('foreign-owner')).strategies).toEqual([]);
+  expect((await store.list(owner))[0]).not.toHaveProperty('tracking');
 });
 
 it('rejects noncanonical or malformed cursors before querying storage', async () => {
@@ -75,6 +101,8 @@ it("round trips eight-leg four-expiry holdings and reconciles closes and rolls w
   const roll: LotTransaction = { id: "roll", at, recordedAt: at, closes: [{ id: "roll-close", lotId: "initial:option:1", quantity: 1, price: 3 }], opens: [{ id: "replacement", side: "long", quantity: 1, entryPrice: 2, asset: { kind: "option", contractId: replacement.contractId, type: replacement.type, strike: replacement.strike, expiry: replacement.expiry, multiplier: 100 } }] };
   const rolled = await store.transact(owner, saved.id, 2, roll);
   expect(rolled.state).toEqual(state);
+  const overview = async () => (await store.listPage(owner)).strategies.find(row => row.id === saved.id);
+  expect(await overview()).toHaveProperty('tracking', { underlying: 'SPY', status: 'open', remainingLots: 8, optionContracts: 7, signedShares: 100, grossRealizedPnl: 200, allowance: 7, netClosedPnl: null, asOf: at });
   const marks = { ...snapshot, id: "wide-mark", retrievedAt: markedAt, spotAsOf: markedAt, contracts: snapshot.contracts.map(quote => ({ ...quote, quoteAsOf: markedAt })) };
   const valuation = valuePositionLots(rolled.lifecycle as PositionLots, marks, "mid");
   expect(valuation).toMatchObject({ grossRealizedPnl: 200, unrealizedPnl: 1600, allowance: 7, combinedPnl: 1793, analysisUnavailable: null });
@@ -95,6 +123,7 @@ it("round trips eight-leg four-expiry holdings and reconciles closes and rolls w
   await expect(store.transact(owner, imported.id, 1, finish)).rejects.toMatchObject({ status: 404 });
   const closed = await store.transact(recipient, imported.id, 1, finish);
   expect(projectPositionLots(closed.lifecycle as PositionLots)).toMatchObject({ status: "closed", lots: [], grossRealizedPnl: 1800, netClosedPnl: 1793 });
+  expect((await store.listPage(recipient)).strategies[0]).toHaveProperty('tracking', { underlying: 'SPY', status: 'closed', remainingLots: 0, optionContracts: 0, signedShares: 0, grossRealizedPnl: 1800, allowance: 7, netClosedPnl: 1793, asOf: markedAt });
   expect(await store.transact(recipient, imported.id, 1, finish)).toEqual(closed);
   expect(await store.get(owner, saved.id)).toEqual(rolled);
 });

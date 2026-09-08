@@ -212,6 +212,41 @@ async function run() {
         assert(fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 51, 'Stale next page survived refresh');
       } finally { release?.(); refreshRelease?.(); loadRelease?.(); await unmount(); window.fetch = priorFetch }
     });
+    await test('Tracking overview filters loaded positions without replacing builder edits', async () => {
+      await unmount(); const priorFetch = window.fetch;
+      const stamp = new Date(fixedNow).toISOString();
+      const tracking = { underlying: 'SPY', status: 'open', remainingLots: 2, optionContracts: 3, signedShares: -100, grossRealizedPnl: 125, allowance: 5, netClosedPnl: null, asOf: stamp };
+      let calls = 0, malformed = false;
+      window.fetch = (async url => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Overview fixture', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies') return Response.json({ strategies: [
+          { id: 'tracked', title: 'Recorded spread', revision: ++calls, updatedAt: stamp, tracking: calls === 1 ? tracking : { ...tracking, status: 'closed', remainingLots: 0, optionContracts: 0, signedShares: 0, netClosedPnl: malformed ? 999 : 120 } },
+          { id: 'analysis', title: 'QQQ idea', revision: 1, updatedAt: stamp, tracking: { ...tracking, underlying: 'QQQ', status: 'not-tracked', remainingLots: null, optionContracts: null, signedShares: null, grossRealizedPnl: null, allowance: null, netClosedPnl: null, asOf: null } },
+          { id: 'legacy', title: 'Unavailable record', revision: 1, updatedAt: stamp },
+        ] });
+        if (url === '/api/strategies/tracked/lots') return Response.json({ error: { message: 'Fixture inspection unavailable' } }, { status: 422 });
+        throw new Error(`Unexpected overview request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 400 && !check(); i++) await settleTimers(); assert(check(), `Overview did not reach expected state: ${fixture.querySelector('.workspace-error')?.textContent ?? ''}; calls=${calls}; malformed=${malformed}`) };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => fixture.querySelectorAll('[aria-label="Saved position tracking"] tbody tr').length === 3);
+        const overview = () => fixture.querySelector('[aria-label="Saved position tracking"]')!;
+        assert(overview().textContent?.includes('Not valued') && overview().textContent?.includes('Not tracked') && !overview().textContent?.includes('NaN'), 'Unavailable accounting displayed as a mark');
+        await change('Filter loaded positions', 'spy'); assert(overview().querySelectorAll('tbody tr').length === 1, 'Underlying filter failed');
+        const before = fixture.querySelector<HTMLInputElement>('[aria-label="Contracts"]')!.value;
+        const inspect = fixture.querySelector<HTMLButtonElement>('[aria-label="Inspect Recorded spread"]')!;
+        assert(inspect && !inspect.disabled, 'Tracking inspection is unavailable');
+        await act(async () => inspect.click()); await waitFor(() => fixture.textContent?.includes('Fixture inspection unavailable') === true);
+        assert(fixture.querySelector<HTMLInputElement>('[aria-label="Contracts"]')!.value === before, 'Inspection replaced builder holdings');
+        await change('Filter loaded positions', 'missing'); assert(overview().textContent?.includes('No matching loaded positions'), 'Empty filter hid its scope');
+        await change('Filter loaded positions', ''); await change('Tracking status', 'closed'); assert(overview().querySelectorAll('tbody tr').length === 0, 'Status filter failed');
+        await click('Refresh saved positions'); await waitFor(() => overview().querySelectorAll('tbody tr').length === 1);
+        assert(overview().textContent?.includes('Closed') && overview().textContent?.includes('$120'), 'Refreshed closed accounting did not replace old revision');
+        malformed = true; await click('Refresh saved positions'); await waitFor(() => fixture.querySelector('.workspace-notice.workspace-error')?.textContent?.includes('Saved tracking response is invalid') === true);
+        assert(overview().textContent?.includes('$120') && !overview().textContent?.includes('$999') && overview().textContent?.includes('r2'), 'Malformed tracking replaced validated prior accounting');
+      } finally { await unmount(); window.fetch = priorFetch }
+    });
     await test('Saved revision automatically compares original holdings with unsaved edits', async () => {
       await unmount(); const priorFetch = window.fetch, priorConfirm = window.confirm;
       const state = createStrategy('long-call'), stamp = new Date(fixedNow).toISOString();

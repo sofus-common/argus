@@ -9,6 +9,19 @@ export interface SavedStrategySummary {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  tracking?: SavedTracking;
+}
+
+export interface SavedTracking {
+  underlying: string | null;
+  status: 'open' | 'closed' | 'not-tracked' | 'unavailable';
+  remainingLots: number | null;
+  optionContracts: number | null;
+  signedShares: number | null;
+  grossRealizedPnl: number | null;
+  allowance: number | null;
+  netClosedPnl: number | null;
+  asOf: string | null;
 }
 
 export interface SavedStrategy<P extends PositionRecord | PositionLots = PositionRecord | PositionLots> extends SavedStrategySummary {
@@ -63,6 +76,21 @@ export function savedPosition(record: SavedStrategy) {
   return record.lifecycle ?? createPosition(record.state);
 }
 
+function trackingSummary(row: Row): SavedStrategySummary {
+  const { state_json: _state, snapshot_json: _snapshot, lifecycle_json: _lifecycle, ...summary } = row;
+  const tracking: SavedTracking = { underlying: null, status: 'unavailable', remainingLots: null, optionContracts: null, signedShares: null, grossRealizedPnl: null, allowance: null, netClosedPnl: null, asOf: null };
+  try {
+    const record = decode(row);
+    readWorkspaceDraft(JSON.stringify({ schemaVersion: 1, state: record.state, snapshot: record.snapshot, title: record.title, thesis: '', composer: '', savedAt: record.updatedAt }));
+    if (!record.state.pricing || record.state.pricing.entryMode !== 'fixed') return { ...summary, tracking: { ...tracking, underlying: record.state.underlying, status: 'not-tracked' } };
+    const saved = savedPosition(record), projection = projectPositionLots(saved.schemaVersion === 2 ? saved : upgradePositionLots(saved));
+    const optionContracts = projection.lots.reduce((sum, lot) => sum + (lot.asset.kind === 'option' ? lot.quantity : 0), 0);
+    const signedShares = projection.lots.reduce((sum, lot) => sum + (lot.asset.kind === 'stock' ? lot.quantity * (lot.side === 'long' ? 1 : -1) : 0), 0);
+    if (!Number.isSafeInteger(optionContracts) || !Number.isSafeInteger(signedShares)) throw new Error('Tracking quantity exceeds numerical range');
+    return { ...summary, tracking: { underlying: record.state.underlying, status: projection.status, remainingLots: projection.lots.length, optionContracts, signedShares, grossRealizedPnl: projection.grossRealizedPnl, allowance: projection.allowance, netClosedPnl: projection.netClosedPnl, asOf: projection.asOf } };
+  } catch { return { ...summary, tracking }; }
+}
+
 export function createSavedStore(db: D1Database) {
   async function get(owner: string, id: string) {
     const row = await db.prepare(`SELECT ${columns} FROM saved_strategies WHERE owner = ? AND id = ?`).bind(owner, id).first<Row>();
@@ -96,9 +124,9 @@ export function createSavedStore(db: D1Database) {
   return {
     async listPage(owner: string, cursor?: string) {
       const after = cursor === undefined ? null : readCursor(cursor);
-      const statement = db.prepare(`SELECT ${summaryColumns} FROM saved_strategies WHERE owner = ?${after ? ' AND (updated_at < ? OR (updated_at = ? AND id > ?))' : ''} ORDER BY updated_at DESC, id ASC LIMIT 51`);
-      const result = await (after ? statement.bind(owner, after.updatedAt, after.updatedAt, after.id) : statement.bind(owner)).all<SavedStrategySummary>();
-      const strategies = result.results.slice(0, 50);
+      const statement = db.prepare(`SELECT ${columns} FROM saved_strategies WHERE owner = ?${after ? ' AND (updated_at < ? OR (updated_at = ? AND id > ?))' : ''} ORDER BY updated_at DESC, id ASC LIMIT 51`);
+      const result = await (after ? statement.bind(owner, after.updatedAt, after.updatedAt, after.id) : statement.bind(owner)).all<Row>();
+      const strategies = result.results.slice(0, 50).map(trackingSummary);
       return { strategies, nextCursor: result.results.length > 50 ? encodeCursor(strategies[49]) : null };
     },
     async list(owner: string) {

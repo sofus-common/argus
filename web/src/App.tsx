@@ -6,6 +6,7 @@ import { PriceHistory } from './PriceHistory'
 import { streamFreshness } from './stream-freshness'
 import { DraftRecovery } from './DraftRecovery'
 import { SavedImport } from './SavedImport'
+import type { SavedTracking } from './saved-strategies'
 import { canMoveStrikeDrag, strikeDrag, type StrikeDrag } from './strike-drag'
 import type { WorkspaceDraft } from './workspace-draft'
 import {
@@ -899,9 +900,36 @@ function LegRow({ leg, snapshot, fixedEntry, included, onInclude, onChange, onRe
 
 type ChatMessage = { role: 'guide' | 'user' | 'argus'; text: string; note?: string; analysis?: Pick<SparringSuccess, 'reply' | 'calculated' | 'market_context'> & { positionVersion: number; positionName: string; positionUnderlying: string; position: StrategyState; positionSnapshot?: MarketSnapshot } }
 type PendingProposal = Omit<SparringSuccess, 'calculated' | 'market_context'> & Partial<Pick<SparringSuccess, 'calculated' | 'market_context'>> & { before: SparringSuccess['metrics']; comparisonBaseline?: StrategyState; comparisonUnavailable?: string; lossBound?: ReturnType<typeof firstExpirySpreadLossBound>; candidateSelection?: CandidateSelection }
-type SavedSummary = { id: string; title: string; revision: number; updatedAt: string }
+type SavedSummary = { id: string; title: string; revision: number; updatedAt: string; tracking?: SavedTracking }
 type SavedRecord = SavedSummary & { state: StrategyState; snapshot: MarketSnapshot | null }
 const workspaceContent = (state: StrategyState, title: string) => JSON.stringify([title.trim() || state.name, { ...state, version: 0 }], (_key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value)
+
+function SavedOverview({ saved, disabled, onInspect }: { saved: SavedSummary[]; disabled: boolean; onInspect: (id: string) => void }) {
+  const [query, setQuery] = useState(''), [status, setStatus] = useState('all')
+  const labels = { open: 'Open', closed: 'Closed', 'not-tracked': 'Not tracked', unavailable: 'Unavailable' }
+  const rows = saved.filter(item => `${item.title} ${item.tracking?.underlying ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()) && (status === 'all' || (item.tracking?.status ?? 'unavailable') === status))
+  return <section className="saved-overview" aria-label="Saved position tracking">
+    <h3>Position tracking</h3><p>Recorded holdings, not your broker account. Open positions are not valued here. Inspect a position for dated valuation, rolls and performance history.</p>
+    <div className="saved-controls"><label>Filter loaded positions<input aria-label="Filter loaded positions" value={query} onChange={event => setQuery(event.target.value)} placeholder="Title or symbol" /></label><label>Status<select aria-label="Tracking status" value={status} onChange={event => setStatus(event.target.value)}><option value="all">All statuses</option>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
+    <p role="status">{rows.length} of {saved.length} loaded positions shown. Use Load more saved positions above for older records.</p>
+    <div className="saved-overview-scroll" tabIndex={0} role="region" aria-label="Position tracking table"><table><thead><tr><th scope="col">Position</th><th scope="col">Status / remaining</th><th scope="col">Realized · gross USD</th><th scope="col">Total · net USD</th><th scope="col">Review</th></tr></thead><tbody>{rows.map(item => { const t = item.tracking; return <tr key={item.id}>
+      <th scope="row">{item.title}<small>{t?.underlying ?? 'Unknown instrument'} · r{item.revision}<br />Saved {new Date(item.updatedAt).toISOString()}</small></th>
+      <td>{labels[t?.status ?? 'unavailable']}{t?.remainingLots != null && <small>{t.remainingLots} lots · {t.optionContracts} contracts<br />{t.signedShares} signed shares</small>}</td>
+      <td>{t?.grossRealizedPnl == null ? '—' : money(t.grossRealizedPnl)}{t?.allowance != null && <small>Allowance {money(t.allowance)}{t.asOf && <><br />Ledger {t.asOf}</>}</small>}</td>
+      <td>{t?.netClosedPnl != null ? money(t.netClosedPnl) : t?.status === 'open' ? 'Not valued' : '—'}<small>{t?.status === 'closed' ? 'Recorded closes − allowance' : t?.status === 'not-tracked' ? 'Requires listed fixed entries' : 'No quote mark inferred'}</small></td>
+      <td><button aria-label={`Inspect ${item.title}`} disabled={disabled || !t || t.status === 'unavailable' || t.status === 'not-tracked'} onClick={() => onInspect(item.id)}>Inspect</button></td>
+    </tr> })}</tbody></table></div>{!rows.length && <p>{saved.length ? 'No matching loaded positions.' : 'No saved positions yet. Save a position to begin.'}</p>}
+    <p>Gross realized P/L excludes the flat allowance; closed net P/L deducts it once. Analysis exclusions do not remove held inventory. Ledger and save times are not quote timestamps.</p>
+  </section>
+}
+
+function validSavedTracking(t: SavedTracking) {
+  if (!t || !['open', 'closed', 'not-tracked', 'unavailable'].includes(t.status) || !(t.underlying === null || typeof t.underlying === 'string' && /^[A-Z][A-Z0-9.]{0,9}$/.test(t.underlying))) return false
+  const numbers = [t.remainingLots, t.optionContracts, t.signedShares, t.grossRealizedPnl, t.allowance, t.netClosedPnl]
+  if (t.status === 'not-tracked' || t.status === 'unavailable') return numbers.every(value => value === null) && t.asOf === null
+  if (!t.underlying || ![t.remainingLots, t.optionContracts].every(value => Number.isSafeInteger(value) && value! >= 0) || !Number.isSafeInteger(t.signedShares) || !Number.isFinite(t.grossRealizedPnl) || !Number.isFinite(t.allowance) || t.allowance! < 0 || typeof t.asOf !== 'string' || !Number.isFinite(Date.parse(t.asOf))) return false
+  return t.status === 'open' ? t.remainingLots! > 0 && t.netClosedPnl === null : t.remainingLots === 0 && t.optionContracts === 0 && t.signedShares === 0 && Number.isFinite(t.netClosedPnl) && Math.abs(t.netClosedPnl! - (t.grossRealizedPnl! - t.allowance!)) < 1e-7
+}
 
 const initialTemplate = (): TemplateId => {
   const requested = new URLSearchParams(window.location.search).get('template')
@@ -1027,6 +1055,7 @@ export function App() {
       if (sequence !== savedListRequest.current) return
       if (!response.ok) throw new Error(body.error?.message ?? 'Saved strategies unavailable.')
       if (!Array.isArray(body.strategies) || body.strategies.length > 50 || body.strategies.some(item => !item || typeof item.id !== 'string' || !item.id || item.id.length > 200 || typeof item.title !== 'string' || item.title.length > 120 || !Number.isSafeInteger(item.revision) || item.revision < 1 || typeof item.updatedAt !== 'string' || !Number.isFinite(Date.parse(item.updatedAt))) || new Set(body.strategies.map(item => item.id)).size !== body.strategies.length || (body.nextCursor != null && (typeof body.nextCursor !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(body.nextCursor) || body.nextCursor === cursor))) throw new Error('Saved library response is invalid. Existing selections are unchanged.')
+      if (body.strategies.some(item => item.tracking !== undefined && !validSavedTracking(item.tracking))) throw new Error('Saved tracking response is invalid. Existing records are unchanged.')
       setSaved(items => {
         const combined = new Map((cursor ? items : []).map(item => [item.id, item]))
         for (const item of body.strategies) if (!combined.has(item.id) || combined.get(item.id)!.revision <= item.revision) combined.set(item.id, item)
@@ -1573,6 +1602,7 @@ export function App() {
               <button disabled={workspaceBusy || !selectedSaved} onClick={() => setLifecycleSaved(selectedSaved)}>Manage closes</button>
               <button disabled={workspaceBusy || !selectedSaved} onClick={() => { stopAutomatic(); setLotSaved(selectedSaved) }}>Manage lots &amp; rolls</button>
             </div>
+            <SavedOverview saved={saved} disabled={workspaceBusy || savedListPending} onInspect={id => { stopAutomatic(); setLotSaved(id) }} />
             <SavedImport disabled={workspaceBusy || !session} onImported={refreshSaved} />
             <small>Explicit position saves only; conversation is not saved. Unsaved position edits trigger a browser warning on reload or leaving where supported. Loading replaces the open position; Undo restores it. Quotes retain their original timestamps.</small>
           </details>
