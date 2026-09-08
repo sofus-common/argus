@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a controlled late-clarification regression crossing plain/fenced JSON
+  with verification inside/outside the existing shared 20-second deadline.
+  Both formats succeed within the deadline and fail closed beyond it; 102 focused
+  tests and TypeScript pass. This supports, but does not retrospectively prove,
+  the cause of the original missing-outlay live failure. No runtime, prompt,
+  activation, timeout or provider change was made.
+
 - Added opt-in named-family conversation support and an inactive v17 prompt
   candidate. The same captured family enum governs offered tools and deterministic
   admission; old prompt bundles keep their eight-family schema and the separate

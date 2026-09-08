@@ -1496,6 +1496,32 @@ describe("verified market sparring", () => {
       expect(fetcher).toHaveBeenCalledTimes(2);
     } finally { vi.useRealTimers(); }
   });
+  it.each([false, true])("isolates late clarification deadlines from JSON fencing (fenced=%s)", async fenced => {
+    vi.useFakeTimers();
+    try {
+      for (const verificationDelay of [1_000, 2_000]) {
+        const input = request(), before = structuredClone(input), answer = reply();
+        answer.text = "What maximum net entry outlay should I use?";
+        const json = JSON.stringify(answer);
+        const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+          const verifying = JSON.parse(String(init?.body)).response_format?.json_schema.name === "analysis_verification";
+          await new Promise(resolve => setTimeout(resolve, verifying ? verificationDelay : 18_783));
+          return Response.json({ choices: [{ message: { content: verifying ? '{"valid":true}' : fenced ? "```json\n" + json + "\n```" : json } }] });
+        });
+        const result = spar(input, "key", fetcher, context, snapshot);
+        const checked = verificationDelay === 1_000
+          ? expect(result).resolves.toMatchObject({ reply: answer, next_state: { ...input.state, version: input.state.version + 1 } })
+          : expect(result).rejects.toMatchObject({ reason: "timeout" });
+        await vi.advanceTimersByTimeAsync(20_001);
+        await checked;
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(fetcher.mock.calls[1][1]?.signal?.aborted).toBe(verificationDelay === 2_000);
+        expect(answer.operations).toEqual([]);
+        expect(input).toEqual(before);
+        await vi.runAllTimersAsync();
+      }
+    } finally { vi.useRealTimers(); }
+  });
   it("classifies verification transport failures without retaining provider error details", async () => {
     const normal = provider(reply());
     const fetcher = vi.fn<typeof fetch>(async (url, init) => {
