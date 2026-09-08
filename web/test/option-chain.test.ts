@@ -113,10 +113,11 @@ it("rejects stream capture with wrong ownership, selection or source timing", as
   corrupt.contracts[0].sourceTimes!.iv = "2099-01-01T00:00:00Z";
   await expect(store.restore(corrupt, env, "alice")).rejects.toThrow();
 });
-function fixture(problem = "") {
+function fixture(problem = "", dates = ["2099-09-18", "2099-09-25"]) {
   const symbols = dates.flatMap(date => Array.from({ length: 31 }, (_, i) => ["C", "P"].map(type => ({ symbol: id(date, type, 85 + i), date, type, strike: 85 + i }))).flat());
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
+    if ((url.searchParams.get('equity-option')?.split(',').length ?? 0) > 100) return new Response('Too many symbols', { status: 400 });
     let value: unknown;
     if (url.pathname === "/oauth/token") {
       expect(JSON.parse(String(init?.body)).scope).toBe("read");
@@ -279,7 +280,7 @@ it("rejects invalid browsing inputs before providers and unlisted retained legs 
   const fetcher = fixture();
   const store = createOptionChainStore(fetcher);
   for (const center of [0, -1, NaN, Infinity, 1_000_001]) await expect(store.load(env, dates, "alice", "SPY", { center })).rejects.toThrow();
-  for (const retain of [["QQQ   990918C00085000"], [id(dates[0], "C", 85), id(dates[0], "C", 85)], Array.from({ length: 5 }, (_, i) => id(dates[0], "C", 85 + i)), ["SPY  990918C00085000"], [`${id(dates[0], "C", 85)}\n`]]) await expect(store.load(env, dates, "alice", "SPY", { retain })).rejects.toThrow();
+  for (const retain of [["QQQ   990918C00085000"], [id(dates[0], "C", 85), id(dates[0], "C", 85)], Array.from({ length: 9 }, (_, i) => id(dates[0], "C", 85 + i)), ["SPY  990918C00085000"], [`${id(dates[0], "C", 85)}\n`]]) await expect(store.load(env, dates, "alice", "SPY", { retain })).rejects.toThrow();
   expect(fetcher).not.toHaveBeenCalled();
   for (const retain of [[id(dates[0], "C", 200)], [id("2099-10-01", "C", 85)]]) await expect(store.load(env, dates, "alice", "SPY", { retain })).rejects.toThrow();
 });
@@ -295,6 +296,34 @@ it("fails closed when a retained contract quote is missing", async () => {
     return Response.json(body);
   }) as typeof fetch;
   await expect(createOptionChainStore(fetcher).load(env, dates, "alice", "SPY", { center: 115, retain: [retained] })).rejects.toThrow();
+});
+
+it("loads and restores four expiries while retaining eight distant contracts", async () => {
+  const selectedDates = [...dates, '2099-10-02', '2099-10-09'];
+  const retain = selectedDates.flatMap(date => [id(date, 'C', 85), id(date, 'P', 115)]);
+  const store = createOptionChainStore(fixture('', [...selectedDates, '2099-10-16']));
+  const snapshot = await store.load(env, selectedDates, 'wider-owner', 'SPY', { center: 100, retain });
+  expect(snapshot.contracts).toHaveLength(200);
+  expect(new Set(snapshot.contracts.map(contract => contract.expiry)).size).toBe(4);
+  expect(retain.every(contractId => snapshot.contracts.some(contract => contract.contractId === contractId))).toBe(true);
+  expect(await store.get(snapshot.id, env, 'wider-owner')).toEqual(snapshot);
+  expect((await store.restore(snapshot, env, 'wider-owner')).contracts).toEqual(snapshot.contracts);
+  expect(await store.get(snapshot.id, env, 'other-owner')).toBeUndefined();
+  await expect(store.load(env, [...selectedDates, '2099-10-16'])).rejects.toThrow();
+  const capture = streamed(retain[0]);
+  capture.contracts = retain.map(contractId => ({ ...structuredClone(capture.contracts[0]), contractId }));
+  const captured = await store.capture(snapshot, retain, capture, env, 'wider-owner');
+  expect(captured.contracts).toHaveLength(8);
+  expect(captured.contracts.map(contract => contract.contractId)).toEqual(retain);
+  await expect(store.capture(snapshot, [...retain, snapshot.contracts.find(c => !retain.includes(c.contractId))!.contractId], capture, env, 'wider-owner')).rejects.toThrow();
+  const normal = fixture('', selectedDates), batch = vi.fn();
+  const incomplete: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.searchParams.get('equity-option')?.includes('991009')) return Response.json({ data: { items: [] } });
+    return normal(input, init);
+  };
+  await expect(createOptionChainStore(incomplete).load({ ...env, DB: { prepare: db.prepare.bind(db), batch } as unknown as D1Database }, selectedDates)).rejects.toMatchObject({ stage: 'quotes', reason: 'Missing quote' });
+  expect(batch.mock.calls.length).toBe(0);
 });
 
 it("loads a bounded listed window, preserves OCC spaces and exact expiry, isolates and expires snapshots", async () => {

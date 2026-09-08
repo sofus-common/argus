@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added the backend foundation for eight option legs across four expiries:
+  shared admission limits, 200-contract snapshots, retained-cost/selection
+  validation, owner-isolated restore and eight-contract capture. Option quotes
+  load in batches of at most 100 to respect the provider limit; an incomplete
+  batch rejects the entire snapshot before storage. A real four-expiry SPY
+  request returned 200 quotes. Nine-symbol weekly candle history retains every
+  bucket with a measured 2 MiB aggregate limit, and Theta pacing is unchanged.
+  This is not full construction support yet: UI, AI contract qualification,
+  larger discussion payloads and complete workflow proof remain in progress.
+  Backend checkpoint verified with 613 offline tests, TypeScript/build and
+  independent review; no deployment or complete product-parity claim.
+
 - Completed optional second-expiry selection in the chain builder. Single-date
   requests omit blank values; missing first dates and duplicates cannot submit.
   Incompatible calendar rebuilds preserve holdings, and Undo restores the prior

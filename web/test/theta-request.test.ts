@@ -8,6 +8,7 @@ afterEach(() => vi.useRealTimers());
 
 it("serializes bounded batches and retains provider-start spacing across batches", async () => {
   vi.useFakeTimers(); vi.setSystemTime(0);
+  const selected = [...Array.from({ length: 8 }, (_, i) => `/v3/option/history/eod?symbol=SPY&strike=${770 + i}&format=json`), paths[2]];
   const starts: number[] = [];
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     starts.push(Date.now());
@@ -15,21 +16,21 @@ it("serializes bounded batches and retains provider-start spacing across batches
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     return json({ url: String(input) });
   });
-  const request = createThetaRequest(fetcher), first = request(env, paths);
+  const request = createThetaRequest(fetcher), first = request(env, selected);
   await vi.advanceTimersByTimeAsync(0);
   expect(starts).toEqual([0]);
   await vi.advanceTimersByTimeAsync(3499);
   expect(starts).toEqual([0]);
   await vi.advanceTimersByTimeAsync(1);
   expect(starts).toEqual([0, 3500]);
-  await vi.advanceTimersByTimeAsync(3500);
-  expect(await first).toEqual(paths.map(path => ({ url: `${env.THETADATA_TERMINAL_URL}${path}` })));
+  await vi.advanceTimersByTimeAsync(7 * 3500);
+  expect(await first).toEqual(selected.map(path => ({ url: `${env.THETADATA_TERMINAL_URL}${path}` })));
   const second = request({ THETADATA_TERMINAL_URL: "http://localhost:25503/" }, [paths[0]]);
   await vi.advanceTimersByTimeAsync(3499);
-  expect(starts).toEqual([0, 3500, 7000]);
+  expect(starts).toEqual(Array.from({ length: 9 }, (_, i) => i * 3500));
   await vi.advanceTimersByTimeAsync(1);
   expect(await second).toEqual([{ url: `http://localhost:25503${paths[0]}` }]);
-  expect(starts).toEqual([0, 3500, 7000, 10500]);
+  expect(starts).toEqual(Array.from({ length: 10 }, (_, i) => i * 3500));
 });
 
 it("rejects concurrent batches and releases failed batches without erasing their pacing interval", async () => {
@@ -58,7 +59,7 @@ it("rejects unsafe origins, paths and batch sizes before any provider request", 
   for (const path of ["https://example.com/v3/option/history/eod", "//example.com/v3/option/history/eod", "/v3/option/history/eod#fragment", "/v3/option/snapshot/quote", "/v3/option/history/eod/../quote", "/v3/option/history/%65od", "v3/stock/history/eod", "/v3/stock/history/eod\n"]) {
     await expect(request(env, [paths[0], path])).rejects.toThrow();
   }
-  for (const batch of [[], Array(6).fill(paths[0])]) await expect(request(env, batch)).rejects.toThrow();
+  for (const batch of [[], Array(10).fill(paths[0])]) await expect(request(env, batch)).rejects.toThrow();
   expect(fetcher).not.toHaveBeenCalled();
 });
 

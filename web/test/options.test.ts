@@ -35,6 +35,39 @@ import {
 } from "../src/options";
 
 const IDS = TEMPLATES.map((template) => template.id);
+describe('broader market constructions', () => {
+  it('prices eight legs across four expiries against independent single-leg sums', () => {
+    const at = '2026-09-08T10:00:00.000Z';
+    const dates = ['2026-09-09', '2026-09-11', '2026-09-18', '2026-09-25'];
+    const snapshot: MarketSnapshot = {
+      id: 'eight-leg-window', source: 'Tastytrade', underlying: 'SPY', spot: 100,
+      retrievedAt: at, spotAsOf: at, availableExpiries: dates,
+      contracts: dates.flatMap(date => [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({
+        contractId: `SPY   ${date.slice(2).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`,
+        type, strike, expiry: `${date}T20:00:00.000Z`, multiplier: 100 as const, bid: 1, ask: 2, iv: .25, quoteAsOf: at,
+      })))),
+    };
+    const state = createMarketStrategy('bull-call', snapshot);
+    state.legs = dates.flatMap((date, index) => ['call', 'put'].map((type, side) => {
+      const contract = snapshot.contracts.find(c => c.type === type && c.strike === 100 && c.expiry.startsWith(date))!;
+      return marketLeg(contract, side === 0 ? 'long' : 'short', index + 1, `leg-${index}-${side}`, 'mid');
+    }));
+    state.expiryIvShifts = dates.map((date, i) => ({ expiry: `${date}T20:00:00.000Z`, ivShift: i * .01 }));
+    state.scenarioSpot = 103;
+    state.feeAllowance = 3;
+    expect(validateMarketStrategy(state, snapshot)).toEqual([]);
+    const expected = state.legs.reduce((sum, leg) => sum + calculateStrategy({
+      ...state, legs: [leg], feeAllowance: 0, expiryIvShifts: state.expiryIvShifts!.filter(shift => shift.expiry === leg.expiry),
+    }).scenarioPnl, 0) - 3;
+    expect(calculateStrategy(state).scenarioPnl).toBeCloseTo(expected, 7);
+    const excluded = { ...state, excludedLegIds: [state.legs[0].id] };
+    expect(validateConstruction(excluded)).toEqual([]);
+    expect(projectAnalysisPosition(excluded)!.legs).toHaveLength(7);
+    expect(excluded.legs).toHaveLength(8);
+    const extra = marketLeg(snapshot.contracts.find(c => c.strike === 95)!, 'long', 1, 'overflow', 'mid');
+    expect(validateMarketStrategy({ ...state, legs: [...state.legs, extra] }, snapshot).length).toBeGreaterThan(0);
+  });
+});
 describe('construction analysis selection', () => {
   it('merges included proposals without changing retained inventory, ordering or expiry shifts', () => {
     const state = createStrategy('call-calendar');
@@ -55,6 +88,7 @@ describe('construction analysis selection', () => {
   });
   it('rejects excluded identity reuse, overflow and stale or incompatible proposals', () => {
     const state = createStrategy('iron-condor');
+    state.legs.push(...[80, 81, 82, 83].map(strike => ({ ...state.legs[0], id: `held-${strike}`, strike, contractId: sampleContractId(state.legs[0].type, strike, state.legs[0].expiry) })));
     state.excludedLegIds = [state.legs[0].id];
     const proposal = projectAnalysisPosition(state)!;
     proposal.version++;
@@ -1174,19 +1208,19 @@ describe("validation", () => {
     state.pricing = { mode: "market", snapshotId: "test", basis: "mid" };
     expect(validateStrategy(state)).toContain("invalid market underlying");
   });
-  it("rejects fifth legs, adjusted contracts, excess expiries, and invalid shifted IV", () => {
-    const fifth = createStrategy("iron-condor");
-    fifth.legs.push({ ...fifth.legs[0], id: "fifth", contractId: "fifth" });
-    expect(validateStrategy(fifth)).toContain("strategy must contain one to four legs");
+  it("rejects ninth legs, adjusted contracts, excess expiries, and invalid shifted IV", () => {
+    const ninth = createStrategy("iron-condor");
+    ninth.legs.push(...Array.from({ length: 5 }, (_, i) => ({ ...ninth.legs[0], id: `extra-${i}`, contractId: `extra-${i}` })));
+    expect(validateStrategy(ninth)).toContain("strategy must contain at most eight option legs");
 
     const adjusted = createStrategy("long-call");
     adjusted.legs[0].multiplier = 50;
     expect(validateStrategy(adjusted)).toContain("call: only standard 100-share contracts are supported");
 
     const expiries = createStrategy("long-strangle");
-    expiries.legs.push({ ...expiries.legs[0], id: "third", contractId: "third", expiry: "2026-09-25T20:00:00.000Z" });
+    expiries.legs.push(...['2026-09-25', '2026-10-02', '2026-10-09'].map(date => ({ ...expiries.legs[0], id: date, contractId: date, expiry: `${date}T20:00:00.000Z` })));
     expiries.legs[1].expiry = "2026-09-11T20:00:00.000Z";
-    expect(validateStrategy(expiries)).toContain("at most two expiries are supported");
+    expect(validateStrategy(expiries)).toContain("at most four expiries are supported");
 
     const volatility = createStrategy("long-call");
     volatility.ivShift = -volatility.legs[0].iv;

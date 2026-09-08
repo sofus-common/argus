@@ -132,5 +132,5 @@ it("builds the actual heatmap grid with stock, held entry and allowance counted 
 it("rejects invalid source state before calculating", () => {
   const state = createStrategy("long-put");
   state.legs = [];
-  expect(() => americanSurface(state)).toThrow("one to four legs");
+  expect(() => americanSurface(state)).toThrow("one to eight legs");
 });

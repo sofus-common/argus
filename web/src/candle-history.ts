@@ -1,10 +1,12 @@
+import { MAX_OPTION_LEGS } from './options';
+
 export type CandleBar = { time: number; count: number; open: number; high: number; low: number; close: number; volume: number | null };
 export type CandleRow<M extends 'price' | 'iv'> = M extends 'iv' ? { time: number; iv: number | null } : CandleBar;
 
 export function createCandleSnapshot<M extends 'price' | 'iv' = 'price'>(symbols: string[], range: { start: number; end: number }, mode: M = 'price' as M) {
   const start = range?.start, end = range?.end;
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start % 300_000 || end % 300_000 || end <= start || end - start > 7 * 86_400_000 || end > Date.now()
-    || !Array.isArray(symbols) || !symbols.length || symbols.length > 5 || new Set(symbols).size !== symbols.length || symbols.some(symbol => typeof symbol !== 'string' || !symbol || symbol.length > 200 || /[\s\x00-\x1f]/.test(symbol))) throw new Error('Invalid candle selection or range');
+    || !Array.isArray(symbols) || !symbols.length || symbols.length > MAX_OPTION_LEGS + 1 || new Set(symbols).size !== symbols.length || symbols.some(symbol => typeof symbol !== 'string' || !symbol || symbol.length > 200 || /[\s\x00-\x1f]/.test(symbol))) throw new Error('Invalid candle selection or range');
   if (mode !== 'price' && mode !== 'iv') throw new Error('Invalid candle mode');
   const states = new Map(symbols.map(symbol => [symbol, { begun: false, ended: false, snipped: false, pending: false, rows: new Map<number, CandleRow<'price' | 'iv'>>() }]));
   let events = 0, failed = false;

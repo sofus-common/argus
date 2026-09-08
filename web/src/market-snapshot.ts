@@ -1,4 +1,5 @@
 import type { MarketSnapshot } from "./options";
+import { MAX_CHAIN_CONTRACTS } from "./options";
 
 export function timestamp(value: unknown): string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(`${value.slice(0, 10)}T00:00:00Z`).toISOString().slice(0, 10) !== value.slice(0, 10)) throw new Error("Invalid timestamp");
@@ -33,7 +34,7 @@ export function validatedSnapshot(snapshot: MarketSnapshot): MarketSnapshot {
   if (snapshot?.historical !== undefined && snapshot.historical !== true) throw new Error("Invalid historical provenance");
   const underlying = snapshot?.underlying === undefined ? "SPY" : snapshot.underlying;
   if (typeof underlying !== "string" || !/^[A-Z]{1,6}$/.test(underlying)) throw new Error("Invalid saved underlying");
-  if (!snapshot || snapshot.source !== "Tastytrade" || !Number.isFinite(snapshot.spot) || snapshot.spot <= 0 || !Array.isArray(snapshot.availableExpiries) || snapshot.availableExpiries.some(date => typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) || !Array.isArray(snapshot.contracts) || (!snapshot.contracts.length && (snapshot.captureSource !== "DXLink" || snapshot.availableExpiries.length !== 0 || snapshot.contractTerms !== undefined)) || snapshot.contracts.length > 100) throw new Error("Invalid saved snapshot");
+  if (!snapshot || snapshot.source !== "Tastytrade" || !Number.isFinite(snapshot.spot) || snapshot.spot <= 0 || !Array.isArray(snapshot.availableExpiries) || snapshot.availableExpiries.some(date => typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) || !Array.isArray(snapshot.contracts) || (!snapshot.contracts.length && (snapshot.captureSource !== "DXLink" || snapshot.availableExpiries.length !== 0 || snapshot.contractTerms !== undefined)) || snapshot.contracts.length > MAX_CHAIN_CONTRACTS) throw new Error("Invalid saved snapshot");
   const strikeCenter = snapshot.strikeCenter === undefined ? snapshot.spot : snapshot.strikeCenter;
   if (!Number.isFinite(strikeCenter) || strikeCenter <= 0 || strikeCenter > 1_000_000) throw new Error("Invalid saved strike center");
   timestamp(snapshot.retrievedAt); timestamp(snapshot.spotAsOf);

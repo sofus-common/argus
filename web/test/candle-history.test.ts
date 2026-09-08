@@ -107,7 +107,7 @@ it('rejects malformed ranges and symbol inventories', () => {
     { start, end: range.end + 1 }, { start, end: start }, { start: range.end, end: start },
     { start: Date.parse('2026-08-31T00:00:00Z'), end: Date.parse('2026-09-07T00:05:00Z') }, { start: Date.now(), end: Date.now() + step },
   ]) expect(() => createCandleSnapshot([symbol], bounds)).toThrow();
-  for (const symbols of [[], [symbol, symbol], [''], ['x'.repeat(5000)], ['a', 'b', 'c', 'd', 'e', 'f']]) expect(() => createCandleSnapshot(symbols, range)).toThrow();
+  for (const symbols of [[], [symbol, symbol], [''], ['x'.repeat(5000)], Array.from({ length: 10 }, (_, i) => `symbol-${i}`)]) expect(() => createCandleSnapshot(symbols, range)).toThrow();
   expect(() => createCandleSnapshot([symbol], { start, end: start + 86_400_000 })).not.toThrow();
 });
 

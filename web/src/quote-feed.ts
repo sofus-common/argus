@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { MAX_OPTION_LEGS } from "./options";
 import { createBrokerRequest, tastyToken, type BrokerBindings } from "./broker-context";
 import { createCandleSnapshot } from "./candle-history";
 import { readCandleFeed } from "./candle-feed";
@@ -12,7 +13,7 @@ type LatestQuote = Omit<CapturedQuote, "bidTime" | "askTime"> & { bidTime: numbe
 type LatestGreeks = Omit<CapturedGreeks, "time"> & { time: number | null };
 const CAPTURE_UNAVAILABLE = "Dated stream capture unavailable; refresh quotes.";
 function validSelection(selection: Selection): boolean {
-  return !!selection && typeof selection.underlying === "string" && /^[A-Z]{1,6}$/.test(selection.underlying) && Array.isArray(selection.contractIds) && selection.contractIds.length <= 4 && new Set(selection.contractIds).size === selection.contractIds.length && selection.contractIds.every(id => typeof id === "string" && id.length === 21 && id.slice(0, 6) === selection.underlying.padEnd(6) && /^\d{6}[CP]\d{8}$/.test(id.slice(6)));
+  return !!selection && typeof selection.underlying === "string" && /^[A-Z]{1,6}$/.test(selection.underlying) && Array.isArray(selection.contractIds) && selection.contractIds.length <= MAX_OPTION_LEGS && new Set(selection.contractIds).size === selection.contractIds.length && selection.contractIds.every(id => typeof id === "string" && id.length === 21 && id.slice(0, 6) === selection.underlying.padEnd(6) && /^\d{6}[CP]\d{8}$/.test(id.slice(6)));
 }
 class FeedProtocolError extends Error {}
 const fields: Record<string, string[]> = { Quote: ["eventType", "eventSymbol", "bidPrice", "askPrice", "bidTime", "askTime"], Greeks: ["eventType", "eventSymbol", "volatility", "time"] };

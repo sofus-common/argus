@@ -41,7 +41,7 @@ export async function readCandleFeed<M extends 'price' | 'iv' = 'price'>(fetcher
           if (signal.aborted || Date.now() >= deadline) throw new Error();
           if (++frames > 200 || typeof event.data !== 'string' || event.data.length > 131_072) throw new Error();
           const size = new TextEncoder().encode(event.data).length;
-          if (size > 131_072 || (bytes += size) > 1_048_576) throw new Error();
+          if (size > 131_072 || (bytes += size) > 2_097_152) throw new Error();
           const message = JSON.parse(event.data);
           if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error();
           if (message.type === 'SETUP') {

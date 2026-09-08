@@ -179,18 +179,19 @@ it("rejects excluded-leg operations and collisions without returning a canonical
 });
 it("uses included holdings for tool scenarios and rejects proposals exceeding retained capacity", async () => {
   const input = request();
-  const retained = snapshot.contracts.filter(c => c.type === "put").map((c, i) => marketLeg(c, "short", 1, `excluded-${i}`, "natural"));
+  const quoted = { ...snapshot, contracts: [...snapshot.contracts, ...[660, 665, 670, 675].map(strike => ({ ...snapshot.contracts.find(c => c.type === 'put')!, strike, contractId: `SPY   260908P${String(strike * 1000).padStart(8, '0')}` }))] };
+  const retained = quoted.contracts.filter(c => c.type === "put").map((c, i) => marketLeg(c, "short", 1, `excluded-${i}`, "natural"));
   input.state.legs.push(...retained); input.state.excludedLegIds = retained.map(leg => leg.id);
   const included = { ...input.state, legs: input.state.legs.slice(0, 1), excludedLegIds: undefined };
   const target = { scenarioDate: "2026-09-07T12:00:00.000Z", scenarioSpot: 655, ivShift: 0.03 };
   const normal = provider(reply());
   const fetcher = vi.fn<typeof fetch>(async (url, init): Promise<Response> => fetcher.mock.calls.length === 1 ? Response.json({ choices: [{ message: { tool_calls: [scenarioCall([target])] } }] }) : normal(url, init));
-  const result = await spar(input, "test", fetcher, context, snapshot);
+  const result = await spar(input, "test", fetcher, context, quoted);
   expect(result.calculated.requestedScenarios[0].metrics).toEqual(evaluateScenario({ ...included, ...target }));
   expect(result.next_state.legs).toEqual(input.state.legs);
   const extra = marketLeg(snapshot.contracts.find(c => c.type === "call" && c.strike === 645)!, "long", 1, "extra", "natural");
   const invalid = provider(reply([{ kind: "add_leg", leg: extra }]));
-  await expect(spar(input, "test", invalid, context, snapshot)).rejects.toBeInstanceOf(InvalidProposalError);
+  await expect(spar(input, "test", invalid, context, quoted)).rejects.toBeInstanceOf(InvalidProposalError);
   expect(invalid).toHaveBeenCalledTimes(1);
 });
 it("separates verified contract terms from the selected valuation model", async () => {

@@ -617,6 +617,6 @@ it("rejects missing, unsolicited, malformed and misaligned heatmap output", asyn
 
 it("rejects invalid source states before returning workspace calculations", () => {
   const state = createStrategy("bull-call");
-  expect(() => calculateWorkspaceValuation({ ...state, legs: [] })).toThrow("one to four legs");
+  expect(() => calculateWorkspaceValuation({ ...state, legs: [] })).toThrow("one to eight legs");
   expect(() => calculateWorkspaceValuation({ ...state, scenarioSpot: NaN })).toThrow();
 });

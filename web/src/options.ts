@@ -1,5 +1,9 @@
 import { americanGreeks, americanPrice } from "./american-price.ts";
 
+export const MAX_OPTION_LEGS = 8;
+export const MAX_OPTION_EXPIRIES = 4;
+export const MAX_CHAIN_CONTRACTS = 200;
+
 export type TemplateId =
   | keyof typeof INVERSE_TEMPLATES
   | "call-diagonal"
@@ -592,8 +596,8 @@ function validatePosition(state: StrategyState, construction: boolean): string[]
   if (!Number.isFinite(valuation) || !Number.isFinite(scenario)) errors.push("valuation and scenario dates must be valid timestamps");
   if (Number.isFinite(valuation) && Number.isFinite(scenario) && scenario < valuation) errors.push("scenario date cannot precede valuation");
 
-  if (!Array.isArray(state.legs) || (!construction && !state.legs.length && !state.stock) || state.legs.length > 4) {
-    errors.push(state.legs?.length > 4 ? "strategy must contain one to four legs" : "strategy must contain one to four legs or a nonzero stock holding");
+  if (!Array.isArray(state.legs) || (!construction && !state.legs.length && !state.stock) || state.legs.length > MAX_OPTION_LEGS) {
+    errors.push(state.legs?.length > MAX_OPTION_LEGS ? "strategy must contain at most eight option legs" : "strategy must contain one to eight legs or a nonzero stock holding");
     return errors;
   }
 
@@ -604,7 +608,7 @@ function validatePosition(state: StrategyState, construction: boolean): string[]
   const ids = new Set<string>();
   if (state.expiryIvShifts !== undefined) {
     const shifts = state.expiryIvShifts;
-    if (!Array.isArray(shifts) || shifts.length > 2 || shifts.some(shift => !shift || typeof shift !== "object" || Object.keys(shift).sort().join() !== "expiry,ivShift" || typeof shift.expiry !== "string" || !Number.isFinite(Date.parse(shift.expiry)) || new Date(shift.expiry).toISOString() !== shift.expiry || !state.legs.some(leg => leg?.expiry === shift.expiry) || !finite(shift.ivShift) || Math.abs(shift.ivShift) > 10) || new Set(shifts.map(shift => shift.expiry)).size !== shifts.length) errors.push("expiry IV shifts must have unique canonical current expiries and finite shifts within ten volatility units");
+    if (!Array.isArray(shifts) || shifts.length > MAX_OPTION_EXPIRIES || shifts.some(shift => !shift || typeof shift !== "object" || Object.keys(shift).sort().join() !== "expiry,ivShift" || typeof shift.expiry !== "string" || !Number.isFinite(Date.parse(shift.expiry)) || new Date(shift.expiry).toISOString() !== shift.expiry || !state.legs.some(leg => leg?.expiry === shift.expiry) || !finite(shift.ivShift) || Math.abs(shift.ivShift) > 10) || new Set(shifts.map(shift => shift.expiry)).size !== shifts.length) errors.push("expiry IV shifts must have unique canonical current expiries and finite shifts within ten volatility units");
   }
   const contractIds = new Set<string>();
   const expiries = new Set<string>();
@@ -634,7 +638,7 @@ function validatePosition(state: StrategyState, construction: boolean): string[]
     else if (!construction || !excludedIds.has(item.id)) earliest = Math.min(earliest, expiry);
     expiries.add(item.expiry);
   }
-  if (expiries.size > 2) errors.push("at most two expiries are supported");
+  if (expiries.size > MAX_OPTION_EXPIRIES) errors.push("at most four expiries are supported");
   if (Number.isFinite(scenario) && scenario > earliest) errors.push("scenario date cannot follow the earliest expiry");
   return errors;
 }
@@ -1234,7 +1238,7 @@ export class CandidateSearchLimitError extends Error {
 
 export function searchCandidates(context: StrategyState, snapshot: MarketSnapshot, input: { targetSpot: number; targetDate: string; maxLoss: number; feeAllowance: number; basis: PricingBasis; objective: "target-pnl" | "return-on-risk" | "expiry-probability" }) {
   if (!input || Object.keys(input).sort().join() !== "basis,feeAllowance,maxLoss,objective,targetDate,targetSpot" || !finite(input.targetSpot) || input.targetSpot <= 0 || input.targetSpot > 1_000_000 || !finite(input.maxLoss) || input.maxLoss <= 0 || !finite(input.feeAllowance) || input.feeAllowance < 0 || !["mid", "natural"].includes(input.basis) || !["target-pnl", "return-on-risk", "expiry-probability"].includes(input.objective) || typeof input.targetDate !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(input.targetDate) || !Number.isFinite(Date.parse(input.targetDate)) || new Date(input.targetDate).toISOString() !== (input.targetDate.includes(".") ? input.targetDate : input.targetDate.replace("Z", ".000Z")) || Date.parse(input.targetDate) < Date.parse(snapshot.retrievedAt)) throw new Error("Invalid candidate search request");
-  if (snapshot.historical || snapshot.contracts.length > 100 || new Set(snapshot.contracts.map(c => c.contractId)).size !== snapshot.contracts.length || validateMarketStrategy(context, snapshot).length) throw new Error("Candidate snapshot unavailable or invalid");
+  if (snapshot.historical || snapshot.contracts.length > MAX_CHAIN_CONTRACTS || new Set(snapshot.contracts.map(c => c.contractId)).size !== snapshot.contracts.length || validateMarketStrategy(context, snapshot).length) throw new Error("Candidate snapshot unavailable or invalid");
   const contracts = [...snapshot.contracts].filter(c => Date.parse(c.expiry) >= Date.parse(input.targetDate)).sort((a, b) => a.contractId.localeCompare(b.contractId));
   const base = (legs: OptionLeg[]): StrategyState => ({
     id: "candidate", version: context.version, name: "Quoted candidate", underlying: snapshot.underlying,

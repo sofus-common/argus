@@ -1,4 +1,5 @@
 import type { SourceEvidence } from "./market-context";
+import { MAX_OPTION_LEGS } from "./options";
 
 export type BrokerBindings = {
   TASTYTRADE_CLIENT_ID?: string;
@@ -48,7 +49,7 @@ export function createThetaRequest(providerFetch: typeof fetch = fetch) {
   return async (env: BrokerBindings, paths: string[]): Promise<any[]> => {
     const url = new URL(env.THETADATA_TERMINAL_URL ?? "");
     if (url.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(url.hostname) || url.port !== "25503" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new Error("Only local Theta terminal is supported");
-    if (!Array.isArray(paths) || !paths.length || paths.length > 5 || paths.some(path => typeof path !== "string" || !/^\/v3\/(?:option\/(?:list\/expirations|history\/eod)|stock\/history\/eod)(?:\?[^#\s\\]*)?$/.test(path))) throw new Error("Invalid Theta request batch");
+    if (!Array.isArray(paths) || !paths.length || paths.length > MAX_OPTION_LEGS + 1 || paths.some(path => typeof path !== "string" || !/^\/v3\/(?:option\/(?:list\/expirations|history\/eod)|stock\/history\/eod)(?:\?[^#\s\\]*)?$/.test(path))) throw new Error("Invalid Theta request batch");
     if (busy) throw new Error("Theta request already in progress");
     busy = true;
     try {

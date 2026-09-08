@@ -75,8 +75,8 @@ it('rejects missing or duplicate IV fields and malformed IV payloads', async () 
   }
 });
 
-it('receives a dense seven-day five-symbol snapshot without dropping buckets', async () => {
-  const selected = [symbols[0], ...[770, 775, 780, 785].map(strike => `.SPY261009C${strike}{=5m,price=mark}`)];
+it('receives a dense seven-day nine-symbol snapshot without dropping buckets', async () => {
+  const selected = [symbols[0], ...[770, 775, 780, 785, 790, 795, 800, 805].map(strike => `.SPY261009C${strike}{=5m,price=mark}`)];
   const week = { start: Date.parse('2026-08-31T00:00:00Z'), end: Date.parse('2026-09-07T00:00:00Z') };
   const f = fixture(), controller = new AbortController();
   const pending = readCandleFeed(f.fetcher, endpoint, 'synthetic-token', selected, week, controller.signal);
@@ -153,17 +153,18 @@ it('aborts pending sockets and disposes upgrades that arrive after cancellation'
 it('bounds frame count and cumulative bytes before accepting any partial snapshot', async () => {
   for (const limit of ['frames', 'bytes']) {
     const f = fixture(), controller = new AbortController();
-    const pending = readCandleFeed(f.fetcher, endpoint, 'synthetic-token', symbols, range, controller.signal);
+    const selected = ['X'.repeat(200)];
+    const pending = readCandleFeed(f.fetcher, endpoint, 'synthetic-token', selected, range, controller.signal);
     const rejected = expect(pending).rejects.toThrow();
     try {
       await vi.waitFor(() => expect(f.subscriptions).toHaveLength(1));
       if (limit === 'frames') for (let i = 0; i < 201; i++) f.send({ type: 'KEEPALIVE', channel: 0 });
       else {
-        f.send(frame([candle(symbols[0], 4)]));
-        const payload = JSON.stringify(frame(Array.from({ length: 200 }, () => candle(symbols[0], 0))));
+        f.send(frame([candle(selected[0], 4)]));
+        const payload = JSON.stringify(frame(Array.from({ length: 200 }, () => candle(selected[0], 0))));
         const bytes = new TextEncoder().encode(payload).length;
         expect(bytes).toBeLessThan(131_072);
-        const count = Math.ceil(1_048_576 / bytes) + 1;
+        const count = Math.ceil(2_097_152 / bytes) + 1;
         expect(count).toBeLessThan(190); expect(count * 200).toBeLessThan(20_000);
         for (let i = 0; i < count; i++) f.upstreams[0].send(payload);
       }

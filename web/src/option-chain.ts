@@ -1,5 +1,6 @@
 import { createBrokerRequest, tastyToken, type BrokerBindings } from "./broker-context";
 import type { MarketContract, MarketSnapshot } from "./options";
+import { MAX_OPTION_LEGS, MAX_OPTION_EXPIRIES, MAX_CHAIN_CONTRACTS } from "./options";
 import type { StreamCapture } from "./quote-feed";
 import { capturedProvenance, timestamp, validatedSnapshot } from "./market-snapshot";
 
@@ -65,7 +66,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       if (typeof symbol !== "string" || !/^[A-Z]{1,6}$/.test(symbol)) throw new Error("Invalid underlying");
       if (!window || typeof window !== "object" || window.center !== undefined && (!Number.isFinite(window.center) || window.center <= 0 || window.center > 1_000_000)) throw new Error("Invalid strike center");
       const retain = window.retain === undefined ? [] : window.retain;
-      if (!Array.isArray(retain) || retain.length > 4 || new Set(retain).size !== retain.length || retain.some(id => typeof id !== "string" || id.length !== 21 || id.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(id.slice(6)))) throw new Error("Invalid retained contracts");
+      if (!Array.isArray(retain) || retain.length > MAX_OPTION_LEGS || new Set(retain).size !== retain.length || retain.some(id => typeof id !== "string" || id.length !== 21 || id.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(id.slice(6)))) throw new Error("Invalid retained contracts");
       const deadline = Date.now() + 30_000;
       stage = 'authentication';
       const token = await tastyToken(env, request);
@@ -107,7 +108,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       stage = 'selection';
       const availableExpiries = [...new Set<string>(windows.map(x => x["expiration-date"]))].sort();
       const selected = expiries ?? availableExpiries.slice(0, 2);
-      if (!selected.length || selected.length > 2 || new Set(selected).size !== selected.length || selected.some(x => !availableExpiries.includes(x))) throw new Error("Invalid expiries");
+      if (!selected.length || selected.length > MAX_OPTION_EXPIRIES || new Set(selected).size !== selected.length || selected.some(x => !availableExpiries.includes(x))) throw new Error("Invalid expiries");
       const selectedWindows = selected.map(date => windows.find(x => x["expiration-date"] === date));
       const strikes = selectedWindows.map(x => x.strikes.filter((s: any) => number(s["strike-price"]) > 0 && typeof s.call === "string" && typeof s.put === "string"));
       if (retain.some(id => !strikes.some(rows => rows.some((row: any) => row.call === id || row.put === id)))) throw new Error("Retained contract is not listed");
@@ -118,7 +119,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         const chosen = [...rows].sort((a, b) => Number(retain.includes(b.call) || retain.includes(b.put)) - Number(retain.includes(a.call) || retain.includes(a.put)) || Number(commonWindow.includes(number(b["strike-price"]))) - Number(commonWindow.includes(number(a["strike-price"]))) || nearest(number(a["strike-price"]), number(b["strike-price"]))).slice(0, 25);
         return chosen.flatMap(row => (["call", "put"] as const).map(type => ({ contractId: row[type] as string, type, strike: number(row["strike-price"]), date: selected[index] })));
       });
-      if (!contracts.length || contracts.length > 100 || new Set(contracts.map(x => x.contractId)).size !== contracts.length || contracts.some(x => x.contractId.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(x.contractId.slice(6)))) throw new Error("Invalid contracts");
+      if (!contracts.length || contracts.length > MAX_CHAIN_CONTRACTS || new Set(contracts.map(x => x.contractId)).size !== contracts.length || contracts.some(x => x.contractId.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(x.contractId.slice(6)))) throw new Error("Invalid contracts");
       if (retain.some(id => !contracts.some(c => c.contractId === id))) throw new Error("Retained contract missing from window");
       if (contracts.some(c => c.contractId.slice(6, 12) !== c.date.slice(2).replaceAll("-", "") || c.contractId[12] !== (c.type === "call" ? "C" : "P") || Number(c.contractId.slice(13)) / 1000 !== c.strike)) throw new Error("Mismatched contract identity");
       // ponytail: standard expiry schedules verified on one call/put per date; per-strike metadata if adjusted contracts are supported.
@@ -127,7 +128,9 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       if (sameDaySchedule && schedules.some(s => s.date === today && (s.expiry !== sameDaySchedule.expiry || s.expiresAt !== sameDaySchedule.expiresAt))) throw new Error("Conflicting expiry schedules");
       if (schedules.some(s => Date.parse(s.expiry) <= Date.now())) throw new Error("Invalid expiry");
       stage = 'quotes';
-      const rawQuotes = items(await get(`/market-data/by-type?${new URLSearchParams({ "equity-option": contracts.map(c => c.contractId).join(",") })}`, 1_048_576));
+      const batches = [];
+      for (let i = 0; i < contracts.length; i += 100) batches.push(contracts.slice(i, i + 100));
+      const rawQuotes = (await Promise.all(batches.map(async batch => items(await get(`/market-data/by-type?${new URLSearchParams({ "equity-option": batch.map(c => c.contractId).join(",") })}`, 1_048_576))))).flat();
       const normalized: MarketContract[] = contracts.map(c => {
         const expiry = schedules.find(s => s.date === c.date)!.expiry;
         const matches = rawQuotes.filter(q => q.symbol === c.contractId);
@@ -151,7 +154,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       selectedIds = structuredClone(selectedIds); capture = structuredClone(capture);
       const base = await get(baseSnapshot?.id, env, owner);
       if (!base) throw new Error("Snapshot unavailable");
-      if (!Array.isArray(selectedIds) || selectedIds.length > 4 || new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => typeof id !== "string" || !base.contracts.some(c => c.contractId === id && Date.parse(c.expiry) > Date.now()))) throw new Error("Invalid capture selection");
+      if (!Array.isArray(selectedIds) || selectedIds.length > MAX_OPTION_LEGS || new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => typeof id !== "string" || !base.contracts.some(c => c.contractId === id && Date.parse(c.expiry) > Date.now()))) throw new Error("Invalid capture selection");
       const retrievedAt = timestamp(capture?.capturedAt), at = Date.parse(retrievedAt);
       if (at > Date.now() || Date.now() - at > 60_000 || !Array.isArray(capture.contracts) || capture.contracts.length !== selectedIds.length || new Set(capture.contracts.map(c => c?.contractId)).size !== selectedIds.length || capture.contracts.some(c => !selectedIds.includes(c?.contractId))) throw new Error("Invalid capture");
       const sourceTime = (value: unknown) => {

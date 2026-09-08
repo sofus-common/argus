@@ -10,6 +10,7 @@ import { createBrokerContextLoader, createThetaRequest, searchSymbols, type Brok
 import { buildPriceHistory, loadPriceHistory } from "./price-history";
 import { buildIntradayHistory, buildIvHistory } from "./intraday-history";
 import { createOptionChainStore, OptionChainLoadError } from "./option-chain";
+import { MAX_OPTION_LEGS, MAX_OPTION_EXPIRIES } from "./options";
 import { TEMPLATES, CandidateSearchLimitError, calculateStrategy, validateStrategy, validateMarketStrategy, validateConstruction, validateMarketConstruction, type StrategyState } from "./options";
 import {
   AnalysisVerificationError,
@@ -366,9 +367,9 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     if (!/^[A-Z]{1,6}$/.test(symbol)) return c.json({ error: { code: "invalid_symbol" } }, 400);
     const centerText = c.req.query("center"), center = centerText === undefined ? undefined : Number(centerText);
     const retain = c.req.query("retain")?.split(",");
-    if (center !== undefined && (!Number.isFinite(center) || center <= 0 || center > 1_000_000) || retain && (!retain.length || retain.length > 4 || new Set(retain).size !== retain.length || retain.some(id => id.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(id.slice(6))))) return c.json({ error: { code: "invalid_chain_window" } }, 400);
+    if (center !== undefined && (!Number.isFinite(center) || center <= 0 || center > 1_000_000) || retain && (!retain.length || retain.length > MAX_OPTION_LEGS || new Set(retain).size !== retain.length || retain.some(id => id.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(id.slice(6))))) return c.json({ error: { code: "invalid_chain_window" } }, 400);
     const dates = c.req.query("expiries")?.split(",");
-    if (dates && (!dates.length || dates.length > 2 || dates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date)) || new Set(dates).size !== dates.length)) return c.json({ error: { code: "invalid_expiries" } }, 400);
+    if (dates && (!dates.length || dates.length > MAX_OPTION_EXPIRIES || dates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date)) || new Set(dates).size !== dates.length)) return c.json({ error: { code: "invalid_expiries" } }, 400);
     const limited = await c.env?.SPARRING_RATE_LIMITER?.limit({ key: c.get("session").owner });
     if (limited && !limited.success) return c.json({ error: { code: "rate_limited", message: "Try refreshing later." } }, 429);
     try {
@@ -473,7 +474,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     if (!snapshot) return c.json({ error: { code: "snapshot_expired" } }, 409);
     const selectedContracts = c.req.query("contracts");
     const contractIds = selectedContracts === "" ? [] : selectedContracts?.split(",") ?? [""];
-    if (contractIds.length > 4 || new Set(contractIds).size !== contractIds.length || contractIds.some(id => !snapshot.contracts.some(contract => contract.contractId === id && Date.parse(contract.expiry) > Date.now()))) return c.json({ error: { code: "invalid_feed_selection" } }, 400);
+    if (contractIds.length > MAX_OPTION_LEGS || new Set(contractIds).size !== contractIds.length || contractIds.some(id => !snapshot.contracts.some(contract => contract.contractId === id && Date.parse(contract.expiry) > Date.now()))) return c.json({ error: { code: "invalid_feed_selection" } }, 400);
     if (!c.env.FEED || !c.env.TASTYTRADE_CLIENT_SECRET || !c.env.TASTYTRADE_REFRESH_TOKEN) return c.json({ error: { code: "feed_unavailable" } }, 503);
     const limited = await c.env.SPARRING_RATE_LIMITER?.limit({ key: c.get("session").owner });
     if (limited && !limited.success) return c.json({ error: { code: "rate_limited" } }, 429);
@@ -483,7 +484,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
   app.post("/api/feed/capture", async c => {
     let body: any;
     try { body = await readJson(c.req.raw); } catch { return c.json({ error: { code: "invalid_capture" } }, 400); }
-    if (!body || typeof body !== "object" || Object.keys(body).some(key => !["snapshotId", "contractIds"].includes(key)) || typeof body.snapshotId !== "string" || !Array.isArray(body.contractIds) || body.contractIds.length > 4 || new Set(body.contractIds).size !== body.contractIds.length || body.contractIds.some((id: unknown) => typeof id !== "string")) return c.json({ error: { code: "invalid_capture" } }, 400);
+    if (!body || typeof body !== "object" || Object.keys(body).some(key => !["snapshotId", "contractIds"].includes(key)) || typeof body.snapshotId !== "string" || !Array.isArray(body.contractIds) || body.contractIds.length > MAX_OPTION_LEGS || new Set(body.contractIds).size !== body.contractIds.length || body.contractIds.some((id: unknown) => typeof id !== "string")) return c.json({ error: { code: "invalid_capture" } }, 400);
     const owner = c.get("session").owner;
     const base = await chains.get(body.snapshotId, c.env, owner);
     if (!base) return c.json({ error: { code: "snapshot_expired" } }, 409);

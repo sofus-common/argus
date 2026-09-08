@@ -224,12 +224,12 @@ it("marks shorts at ask and returns stock-only holdings for share-price analysis
 
 it("retains every marked lot when inventory exceeds chart limits", () => {
   const { base, snapshot } = marketFixture(), template = snapshot.contracts[0];
-  const contracts = Array.from({ length: 5 }, (_, i) => ({ ...template, contractId: `SPY   ${template.expiry.slice(2, 10).replaceAll("-", "")}C${String((110 + i) * 1000).padStart(8, "0")}`, strike: 110 + i }));
+  const contracts = Array.from({ length: 8 }, (_, i) => ({ ...template, contractId: `SPY   ${template.expiry.slice(2, 10).replaceAll("-", "")}C${String((110 + i) * 1000).padStart(8, "0")}`, strike: 110 + i }));
   const position = recordLotTransaction(upgradePositionLots(base), transaction({ opens: contracts.map(c => ({ id: c.contractId, asset: { kind: "option", contractId: c.contractId, type: c.type, strike: c.strike, expiry: c.expiry, multiplier: c.multiplier }, side: "long", quantity: 1, entryPrice: 2 })) }));
   const valued = valuePositionLots(position, { ...snapshot, contracts: [template, ...contracts] }, "mid");
-  expect(valued.lotMarks).toHaveLength(6);
-  expect(valued).toMatchObject({ unrealizedPnl: 700, combinedPnl: 693, remainingState: null });
-  expect(valued.analysisUnavailable).toContain("four");
+  expect(valued.lotMarks).toHaveLength(9);
+  expect(valued).toMatchObject({ unrealizedPnl: 1000, combinedPnl: 993, remainingState: null });
+  expect(valued.analysisUnavailable).toContain("eight");
 });
 
 it("preserves legacy expiry spelling while matching the equivalent canonical opening", () => {
