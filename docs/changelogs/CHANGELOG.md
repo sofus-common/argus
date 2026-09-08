@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Preserved hypothetical leg exclusions and empty constructions through draft
+  recovery, owner-scoped saves, reload and import/export. Market validation still
+  checks excluded contracts. Ledger marks and scenarios value every held lot;
+  actual closes prune selection IDs without rewriting the original audit.
+  Verified132 focused checks, expanded import/export coverage, TypeScript/build
+  and independent review. Builder toggles/empty-state UI integration remains open.
+
 - Added the reversible-exclusion calculation foundation: canonical inventory
   validation, empty construction admission and an explicit included-leg projection.
   Priced analysis rejects empty or unprojected excluded holdings. Costs, order and

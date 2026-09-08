@@ -4,6 +4,29 @@ import { readWorkspaceDraft, recoverWorkspaceDraft, type WorkspaceDraft } from '
 
 afterEach(() => vi.useRealTimers());
 
+it('round-trips excluded inventory and empty constructions without discarding held costs', () => {
+  for (const market of [false, true]) {
+    const value = draft(market);
+    const normalized = readWorkspaceDraft(JSON.stringify(value));
+    value.state.excludedLegIds = value.state.legs.map(leg => leg.id);
+    expect(readWorkspaceDraft(JSON.stringify(value))).toEqual({ ...normalized, state: value.state });
+    const recovered = recoverWorkspaceDraft(value);
+    expect(recovered.state.excludedLegIds).toEqual(value.state.excludedLegIds);
+    expect(recovered.state.legs).toEqual(value.state.legs);
+    value.state.legs = []; value.state.excludedLegIds = []; delete value.state.stock; delete value.state.expiryIvShifts;
+    expect(readWorkspaceDraft(JSON.stringify(value))).toEqual({ ...normalized, state: value.state });
+  }
+});
+
+it('validates excluded market contracts rather than hiding quote mismatches', () => {
+  const value = draft(true);
+  value.state.excludedLegIds = [value.state.legs[0].id];
+  value.state.legs[0].iv += .1;
+  expect(() => readWorkspaceDraft(JSON.stringify(value))).toThrow();
+  const invalid = draft(); invalid.state.excludedLegIds = ['missing'];
+  expect(() => readWorkspaceDraft(JSON.stringify(invalid))).toThrow();
+});
+
 function draft(market = false): WorkspaceDraft {
   const state = createStrategy('bull-call');
   let snapshot: MarketSnapshot | null = null;

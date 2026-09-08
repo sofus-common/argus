@@ -1,4 +1,4 @@
-import { pruneExpiryIvShifts, quoteValuation, validateStrategy, type MarketSnapshot, type OptionLeg, type StrategyState } from "./options";
+import { pruneExpiryIvShifts, quoteValuation, validateConstruction, type MarketSnapshot, type OptionLeg, type StrategyState } from "./options";
 
 export interface CloseRequest {
   id: string;
@@ -37,7 +37,7 @@ const round = (value: number) => Number(value.toFixed(8));
 const canonicalTime = (value: string) => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 
 function validateInitial(state: StrategyState) {
-  if (validateStrategy(state).length || !Number.isSafeInteger(state.version) || state.legs.some(leg => !Number.isSafeInteger(leg.contracts)) || state.pricing && state.pricing.entryMode !== "fixed") throw new Error("Lifecycle requires valid fixed entry basis");
+  if (validateConstruction(state).length || !state.legs.length && !state.stock || !Number.isSafeInteger(state.version) || state.legs.some(leg => !Number.isSafeInteger(leg.contracts)) || state.pricing && state.pricing.entryMode !== "fixed") throw new Error("Lifecycle requires valid fixed entry basis");
 }
 
 export function createPosition(initial: StrategyState): PositionRecord {
@@ -108,6 +108,7 @@ export function projectPosition(position: PositionRecord) {
   if (!Number.isFinite(grossRealizedPnl - allowance)) throw new Error("Recorded net total exceeds numerical range");
   // This is structural inventory, not a fresh mark after the recorded closes.
   const active: StrategyState | null = legs.length || stock ? pruneExpiryIvShifts({ ...structuredClone(initial), legs, stock, feeAllowance: 0, version }) : null;
+  if (active?.excludedLegIds) active.excludedLegIds = active.excludedLegIds.filter(id => legs.some(leg => leg.id === id));
   return {
     status: legs.length ? "options-active" as const : stock ? "stock-only" as const : "closed" as const,
     active, stock: stock ?? null, asOf, requiresRevaluation: position.closes.length > 0 && !!(active || stock),
@@ -180,7 +181,8 @@ export function valuePosition(position: PositionRecord, snapshot: MarketSnapshot
       return { ...leg, iv: contract.iv };
     });
     const state: StrategyState = { ...projection.active, name: "Remaining holdings", legs, spot: snapshot.spot, valuationTimestamp: snapshot.retrievedAt, scenarioDate: snapshot.retrievedAt, scenarioSpot: snapshot.spot, feeAllowance: 0, pricing: { mode: "market", snapshotId: snapshot.id, basis, entryMode: "fixed", ...(snapshot.historical ? { historical: true } : {}) } };
-    unrealizedPnl = quoteValuation(state, snapshot).pnl;
+    const { excludedLegIds: _selection, ...heldInventory } = state;
+    unrealizedPnl = quoteValuation(heldInventory, snapshot).pnl;
     remainingState = state;
   } else unrealizedPnl = projection.stock!.shares * (snapshot.spot - projection.stock!.entryPrice);
   const combinedPnl = projection.grossRealizedPnl + unrealizedPnl - projection.allowance;

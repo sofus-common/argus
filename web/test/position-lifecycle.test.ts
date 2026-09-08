@@ -10,6 +10,22 @@ const fixture = () => {
 };
 const at = "2026-09-05T12:00:00.000Z";
 
+it("keeps excluded inventory in the audit and prunes selection only after actual closure", () => {
+  const state = createStrategy("call-calendar"), excluded = state.legs[0];
+  state.excludedLegIds = [excluded.id];
+  state.scenarioDate = state.legs[1].expiry;
+  const position = createPosition(state);
+  expect(projectPosition(position).active?.legs).toEqual(state.legs);
+  expect(projectPosition(position).active?.excludedLegIds).toEqual([excluded.id]);
+  const closed = recordClose(position, { id: "excluded-close", assetId: `option:${excluded.id}`, quantity: excluded.contracts, price: 2, at });
+  expect(projectPosition(closed).active?.excludedLegIds).toEqual([]);
+  expect(closed.initial).toEqual(state);
+  expect(projectPosition(recordCloseVoid(closed, { id: "undo-close", closeId: "excluded-close", reason: "No fill", recordedAt: at })).active?.excludedLegIds).toEqual([excluded.id]);
+  expect(() => createPosition({ ...state, legs: [], excludedLegIds: [] })).toThrow(/Lifecycle/);
+  expect(() => createPosition({ ...state, excludedLegIds: ["missing"] })).toThrow(/Lifecycle/);
+  expect(() => createPosition({ ...state, excludedLegIds: [excluded.id, excluded.id] })).toThrow(/Lifecycle/);
+});
+
 it("prunes closed expiry assumptions without rewriting historical basis", () => {
   const initial = createStrategy("call-calendar");
   initial.expiryIvShifts = initial.legs.map(leg => ({ expiry: leg.expiry, ivShift: .03 }));
@@ -125,6 +141,14 @@ it("combines dated remaining marks with realized closes and one allowance", () =
   const position = recordClose(createPosition(state), { id: "one", assetId: `option:${leg.id}`, quantity: 1, price: 3, at });
   const snapshot: MarketSnapshot = { id: "mark", underlying: state.underlying, source: "Tastytrade", retrievedAt: at, spotAsOf: at, spot: 43, availableExpiries: [leg.expiry.slice(0, 10)], contracts: [{ contractId: leg.contractId, type: leg.type, strike: leg.strike, expiry: leg.expiry, multiplier: 100, bid: 4, ask: 6, iv: leg.iv, quoteAsOf: at }] };
   const original = structuredClone(position);
+  const excludedPosition = structuredClone(position);
+  excludedPosition.initial.excludedLegIds = [leg.id];
+  excludedPosition.initial.scenarioDate = "2027-01-01T00:00:00.000Z";
+  expect(valuePosition(excludedPosition, snapshot, "mid").combinedPnl).toBe(776);
+  expect(valuePosition(excludedPosition, snapshot, "mid").remainingState?.excludedLegIds).toEqual([leg.id]);
+  expect(() => valuePosition(excludedPosition, { ...snapshot, contracts: [] }, "mid")).toThrow(/Remaining option/);
+  const excludedClosed = recordClose(excludedPosition, { id: "remaining-excluded", assetId: `option:${leg.id}`, quantity: 2, price: 3, at });
+  expect(valuePosition(excludedClosed, { ...snapshot, contracts: [] }, "mid").remainingState?.excludedLegIds).toEqual([]);
   // Realized100 + remainingoptions400 + stock83 - allowance7.
   expect(valuePosition(position, snapshot, "natural")).toMatchObject({ grossRealizedPnl: 100, unrealizedPnl: 483, allowance: 7, combinedPnl: 576 });
   expect(valuePosition(position, snapshot, "mid").combinedPnl).toBe(776);

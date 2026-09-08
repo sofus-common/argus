@@ -134,6 +134,24 @@ const marketFixture = () => {
   return { base, snapshot };
 };
 
+it("marks all excluded lots and remaps only surviving initial selection without changing audit", () => {
+  const { base, snapshot } = marketFixture(), leg = base.initial.legs[0];
+  base.initial.excludedLegIds = [leg.id];
+  base.initial.scenarioDate = "2027-01-01T00:00:00.000Z";
+  const position = upgradePositionLots(base), raw = JSON.stringify(position);
+  const marked = valuePositionLots(position, snapshot, "mid");
+  expect(marked.unrealizedPnl).toBe(200);
+  expect(marked.combinedPnl).toBe(193);
+  expect(marked.remainingState?.excludedLegIds).toEqual([leg.contractId]);
+  expect(marked.remainingState?.scenarioDate).toBe(at);
+  expect(() => valuePositionLots(position, { ...snapshot, contracts: [] }, "mid")).toThrow(/Remaining option/);
+  const partial = recordLotTransaction(position, transaction({ closes: [{ id: "partial", lotId: "initial:option:0", quantity: 1, price: 3 }] }));
+  expect(valuePositionLots(partial, snapshot, "mid").remainingState?.excludedLegIds).toEqual([leg.contractId]);
+  const replaced = recordLotTransaction(position, transaction({ closes: [{ id: "close", lotId: "initial:option:0", quantity: 2, price: 3 }], opens: [{ id: "new", asset: asset(base), side: "long", quantity: 1, entryPrice: 4 }] }));
+  expect(valuePositionLots(replaced, snapshot, "mid").remainingState?.excludedLegIds).toEqual([]);
+  expect(JSON.stringify(position)).toBe(raw);
+});
+
 it("uses corrected entry basis in dated marks and initial-share realized accounting", () => {
   const { base, snapshot } = marketFixture();
   base.initial.legs[0].contracts = 3;

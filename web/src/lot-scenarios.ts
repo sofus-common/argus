@@ -1,4 +1,4 @@
-import { evaluateScenario, pruneExpiryIvShifts, validateStrategy, type StrategyState } from "./options";
+import { evaluateScenario, pruneExpiryIvShifts, validateConstruction, validateStrategy, type StrategyState } from "./options";
 import type { projectPositionLots, valuePositionLots } from "./position-lots";
 
 export type LotScenarioSide = { projection: ReturnType<typeof projectPositionLots>; valuation: ReturnType<typeof valuePositionLots> | null };
@@ -56,7 +56,9 @@ export function prepareLotScenarioComparison(input: LotScenarioInput, scenario: 
     if (JSON.stringify(expiryShifts(state)) !== JSON.stringify(expiryShifts(pruneExpiryIvShifts({ ...initial, legs: state.legs })))) throw new Error("Remaining expiry IV assumptions do not match their original basis.");
     if (JSON.stringify(settings(state)) !== expectedSettings || state.valuationTimestamp !== valuation.retrievedAt || state.feeAllowance !== 0 || state.pricing && state.pricing.entryMode !== "fixed" || state.pricing && state.pricing.snapshotId !== valuation.snapshotId) throw new Error("Remaining scenario state does not match its captured basis.");
     assertRemainingLotInventory(projection.lots, state);
-    const next = { ...state, scenarioSpot: selected.spot, scenarioDate: selected.date, ivShift: selected.ivShift };
+    if (validateConstruction(state).length) throw new Error("Remaining scenario construction is invalid.");
+    const { excludedLegIds: _selection, ...heldInventory } = state;
+    const next = { ...heldInventory, scenarioSpot: selected.spot, scenarioDate: selected.date, ivShift: selected.ivShift };
     if (validateStrategy(next).length) throw new Error("Remaining scenario state is invalid for these coordinates.");
     return next;
   });

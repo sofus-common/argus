@@ -426,7 +426,14 @@ export function createMarketStrategy(requestedId: TemplateId, snapshot: MarketSn
 }
 
 export function validateMarketStrategy(state: StrategyState, snapshot: MarketSnapshot): string[] {
-  const errors = validateStrategy(state);
+  return validateMarketPosition(state, snapshot, validateStrategy(state));
+}
+
+export function validateMarketConstruction(state: StrategyState, snapshot: MarketSnapshot): string[] {
+  return validateMarketPosition(state, snapshot, validateConstruction(state));
+}
+
+function validateMarketPosition(state: StrategyState, snapshot: MarketSnapshot, errors: string[]): string[] {
   if (state?.underlying !== snapshot.underlying) errors.push("market underlying must match the snapshot");
   if (!state || !state.pricing || state.pricing.mode !== "market") return [...errors, "market pricing metadata is required"];
   if (state.pricing.snapshotId !== snapshot.id) errors.push("market snapshot does not match; refresh required");

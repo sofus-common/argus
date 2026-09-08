@@ -28,6 +28,28 @@ beforeAll(async () => {
 });
 const bindings = (): Bindings => ({ DB: db, ACCESS_TEAM_DOMAIN: issuer, ACCESS_AUD: "private-tests", APP_ORIGIN: application, TASTYTRADE_CLIENT_SECRET: "test", TASTYTRADE_REFRESH_TOKEN: "test" });
 
+it('persists exclusions and empty construction through owned save, reload and import', async () => {
+  const app = authenticatedApp();
+  for (const empty of [false, true]) {
+    const state = createStrategy('bull-call');
+    if (empty) state.legs = [];
+    state.excludedLegIds = state.legs.map(leg => leg.id);
+    const response = await call(app, '/api/strategies', 'POST', { title: 'Construction', state });
+    expect(response.status).toBe(201);
+    const { record } = await response.json() as any;
+    expect(record.state).toEqual(state);
+    const path = `/api/strategies/${record.id}`;
+    expect((await (await call(app, path)).json() as any).record.state).toEqual(state);
+    expect((await call(app, path, 'GET', undefined, jwtTwo)).status).toBe(404);
+    const exported = await (await call(app, `${path}/export`)).json();
+    const imported = await call(app, '/api/strategies/import', 'POST', exported);
+    expect(imported.status).toBe(201);
+    expect((await imported.json() as any).record.state).toEqual(state);
+    expect((await call(app, path, 'PUT', { title: 'Invalid', revision: 1, state: { ...state, excludedLegIds: ['missing'] } })).status).toBe(422);
+    expect((await (await call(app, path)).json() as any).record.state).toEqual(state);
+  }
+});
+
 it("partitions recovery namespaces by authenticated owner without exposing identity", async () => {
   const provider = vi.fn<typeof fetch>(async () => Response.json({ keys: [jwk] }));
   const app = createApp(provider);
@@ -77,6 +99,7 @@ it("exports verbatim owned saved revisions without restoring quotes or convertin
   const state = createMarketStrategy("long-call", snapshot);
   const estimated = await store.create(owner, "Estimated untouched", state, snapshot);
   state.pricing!.entryMode = "fixed"; state.legs[0].contracts = 2;
+  state.excludedLegIds = [state.legs[0].id];
   let record = await store.create(owner, "Full history", state, snapshot);
   const check = async (expected: typeof record) => {
     const quoteRows = await db.prepare("SELECT COUNT(*) AS n FROM quote_snapshots").first();
@@ -99,6 +122,8 @@ it("exports verbatim owned saved revisions without restoring quotes or convertin
     expect(imported.snapshot.id).not.toBe(expected.snapshot!.id);
     expect(contractTermsFacts(imported.snapshot).status).toBe('unknown');
     expect(imported.state.pricing).toMatchObject({ historical: true, snapshotId: imported.snapshot.id });
+    expect(imported.state.excludedLegIds).toEqual(expected.state.excludedLegIds);
+    expect(imported.state.legs).toEqual(expected.state.legs);
     const restoredHistory = structuredClone(imported.lifecycle);
     if (restoredHistory) {
       if (restoredHistory.schemaVersion === 2) restoredHistory.legacy.initial = expected.state;

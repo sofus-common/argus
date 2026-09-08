@@ -250,7 +250,9 @@ export function valuePositionLots(position: PositionLots, snapshot: MarketSnapsh
     }
   }
   const candidate: StrategyState = pruneExpiryIvShifts({ ...initial, name: "Remaining holdings", version: projection.version, legs, stock, feeAllowance: 0, spot: snapshot.spot, scenarioSpot: snapshot.spot, valuationTimestamp: snapshot.retrievedAt, scenarioDate: snapshot.retrievedAt, pricing: { mode: "market", snapshotId: snapshot.id, basis, entryMode: "fixed", ...(snapshot.historical ? { historical: true } : {}) } });
-  const errors = validateMarketStrategy(candidate, snapshot);
+  if (initial.excludedLegIds) candidate.excludedLegIds = initial.legs.filter((leg, index) => initial.excludedLegIds!.includes(leg.id) && lots.some(lot => lot.id === projection.openings[index].id)).map(leg => leg.contractId);
+  const { excludedLegIds: _selection, ...heldInventory } = candidate;
+  const errors = validateMarketStrategy(heldInventory, snapshot);
   const combinedPnl = projection.grossRealizedPnl + unrealizedPnl - projection.allowance;
   if (!Number.isFinite(combinedPnl)) throw new Error("Combined lot valuation exceeds numerical range");
   return { lotMarks, remainingState: errors.length ? null : candidate, analysisUnavailable: errors.length ? errors.join("; ") : null, snapshotId: snapshot.id, basis, retrievedAt: snapshot.retrievedAt, oldestQuoteAt: new Date(Math.min(...times)).toISOString(), newestQuoteAt: new Date(Math.max(...times)).toISOString(), historical: snapshot.historical === true, grossRealizedPnl: projection.grossRealizedPnl, unrealizedPnl: round(unrealizedPnl), allowance: projection.allowance, combinedPnl: round(combinedPnl), disclosure: "Dated estimate, not a fill or live return. Explicit-lot realized P/L plus remaining quoted P/L minus the position allowance once. Stock uses spot, not executable bid/ask. Weighted entry is for chart projection only; recorded lots are unchanged. No dividends, financing, borrow, exercise, assignment or settlement cashflows." };

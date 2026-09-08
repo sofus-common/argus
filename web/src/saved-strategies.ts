@@ -1,4 +1,4 @@
-import { validateMarketStrategy, type MarketSnapshot, type StrategyState } from "./options";
+import { validateMarketConstruction, type MarketSnapshot, type StrategyState } from "./options";
 import { readWorkspaceDraft } from "./workspace-draft";
 import { createPosition, projectPosition, recordClose, recordCloseVoid, recordPriceCorrection, type CloseRequest, type CloseVoid, type PriceCorrection, type PositionRecord } from "./position-lifecycle";
 import { projectPositionLots, upgradePositionLots, recordLotTransaction, recordLotPriceCorrection, recordLotOpeningPriceCorrection, recordLotCloseVoid, type OpeningPriceCorrection, type PositionLots, type LotTransaction } from "./position-lots";
@@ -49,7 +49,7 @@ function revisionValue(revision: number) {
 export function savedPosition(record: SavedStrategy) {
   if (record.state.pricing) {
     const snapshot = record.snapshot?.underlying === undefined && record.state.underlying === "SPY" && record.snapshot ? { ...record.snapshot, underlying: "SPY" } : record.snapshot;
-    if (!snapshot || validateMarketStrategy(record.state, snapshot).length) throw new Error("Invalid saved market basis");
+    if (!snapshot || validateMarketConstruction(record.state, snapshot).length) throw new Error("Invalid saved market basis");
   }
   return record.lifecycle ?? createPosition(record.state);
 }
@@ -109,7 +109,7 @@ export function createSavedStore(db: D1Database) {
         if (snapshot) {
           snapshot = { ...snapshot, id: crypto.randomUUID(), historical: true, imported: true };
           state.pricing = { ...state.pricing!, snapshotId: snapshot.id, historical: true };
-          if (validateMarketStrategy(state, snapshot).length) throw new Error();
+          if (validateMarketConstruction(state, snapshot).length) throw new Error();
         }
         if (lifecycle !== null) {
           if (lifecycle.schemaVersion === 2) { lifecycle.legacy.initial = structuredClone(state); projectPositionLots(lifecycle); }

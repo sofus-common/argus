@@ -297,6 +297,16 @@ const lotSide = (): LotScenarioSide => {
   return { projection, valuation: { remainingState: { ...state, feeAllowance: 0 }, lotMarks: [], analysisUnavailable: null, snapshotId: "same-snapshot", basis: "mid", retrievedAt: state.valuationTimestamp, oldestQuoteAt: state.valuationTimestamp, newestQuoteAt: state.valuationTimestamp, historical: false, grossRealizedPnl: 0, unrealizedPnl: 0, allowance: 5, combinedPnl: -5, disclosure: "Test dated marks" } };
 };
 
+it('keeps hypothetical exclusions out of full-inventory lot scenario accounting', () => {
+  const before = lotSide(), after = lotSide();
+  const scenario = { spot: 110, date: before.projection.initial.legs[0].expiry, ivShift: 0 };
+  const expected = calculateLotScenarioComparison({ before, after }, scenario);
+  before.valuation!.remainingState!.excludedLegIds = before.valuation!.remainingState!.legs.map(leg => leg.id);
+  expect(calculateLotScenarioComparison({ before, after }, scenario)).toEqual(expected);
+  before.valuation!.remainingState!.excludedLegIds = ['missing'];
+  expect(() => calculateLotScenarioComparison({ before, after }, scenario)).toThrow();
+});
+
 it("matches corrected weighted opening costs and signed stock before importing remaining inventory", () => {
   const side = lotSide(), initial = side.projection.initial, lot = side.projection.lots[0];
   const at = "2026-09-05T12:00:00.000Z";

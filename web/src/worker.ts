@@ -10,7 +10,7 @@ import { createBrokerContextLoader, createThetaRequest, searchSymbols, type Brok
 import { buildPriceHistory, loadPriceHistory } from "./price-history";
 import { buildIntradayHistory, buildIvHistory } from "./intraday-history";
 import { createOptionChainStore } from "./option-chain";
-import { TEMPLATES, CandidateSearchLimitError, calculateStrategy, validateStrategy, validateMarketStrategy, type StrategyState } from "./options";
+import { TEMPLATES, CandidateSearchLimitError, calculateStrategy, validateStrategy, validateMarketStrategy, validateConstruction, validateMarketConstruction, type StrategyState } from "./options";
 import {
   AnalysisVerificationError,
   InvalidProposalError,
@@ -301,10 +301,10 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
   app.get("/api/strategies/:id", async c => {
     const record = await createSavedStore(c.env.DB!).get(c.get("session").owner, c.req.param("id"));
     if (record.lifecycle) return c.json({ error: { code: "lifecycle_view_required", message: "This position has recorded closes and cannot be loaded as its original strategy." } }, 409);
-    if (validateStrategy(record.state).length || (record.state.pricing && !record.snapshot)) throw new Error("Invalid saved state");
+    if (validateConstruction(record.state).length || (record.state.pricing && !record.snapshot)) throw new Error("Invalid saved state");
     if (record.snapshot) {
       if (record.snapshot.underlying === undefined && record.state.underlying === "SPY") record.snapshot.underlying = "SPY";
-      if (validateMarketStrategy(record.state, record.snapshot).length) throw new Error("Invalid saved pricing");
+      if (validateMarketConstruction(record.state, record.snapshot).length) throw new Error("Invalid saved pricing");
       record.snapshot = await chains.restore(record.snapshot, c.env, c.get("session").owner);
       record.state.pricing = { ...record.state.pricing!, snapshotId: record.snapshot.id, historical: true };
     }
@@ -322,14 +322,15 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     }
     if (c.req.method === "PUT" && !id || c.req.method === "POST" && id) return c.json({ error: { code: "invalid_request" } }, 400);
     const input = body.state;
-    if (validateStrategy(input).length || typeof input.id !== "string" || typeof input.name !== "string") return c.json({ error: { code: "invalid_strategy" } }, 422);
+    if (validateConstruction(input).length || typeof input.id !== "string" || typeof input.name !== "string") return c.json({ error: { code: "invalid_strategy" } }, 422);
     const snapshot = input.pricing ? await chains.get(input.pricing.snapshotId, c.env, owner) : undefined;
     if (input.pricing && !snapshot) return c.json({ error: { code: "snapshot_expired", message: "Refresh prices or reload the saved strategy before saving." } }, 409);
-    if (snapshot && validateMarketStrategy(input, snapshot).length) return c.json({ error: { code: "invalid_market_state" } }, 422);
+    if (snapshot && validateMarketConstruction(input, snapshot).length) return c.json({ error: { code: "invalid_market_state" } }, 422);
     const { version, name, underlying, spot, valuationTimestamp, rate, dividendYield, scenarioDate, scenarioSpot, ivShift } = input;
     const state: StrategyState = {
       id: input.id, version, name, underlying, spot, valuationTimestamp, rate, dividendYield, scenarioDate, scenarioSpot, ivShift,
       legs: input.legs.map(({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier }) => ({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier })),
+      ...(input.excludedLegIds !== undefined ? { excludedLegIds: [...input.excludedLegIds] } : {}),
       ...(input.stock ? { stock: { shares: input.stock.shares, entryPrice: input.stock.entryPrice } } : {}),
       ...(input.feeAllowance !== undefined ? { feeAllowance: input.feeAllowance } : {}),
       ...(input.valuationModel !== undefined ? { valuationModel: input.valuationModel } : {}),
