@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added dated position-lot replay using the latest audited corrections and voids.
+  Full-ledger validation preserves stable lot IDs, held quantities and corrected
+  costs before applying the historical cutoff. Realized P/L reconciles through
+  closes and rolls, including stock, short positions and excluded analysis legs.
+  Verified 43 focused tests, TypeScript and independent review. This is restated
+  holdings history, not historical marked performance or as-known-then records;
+  historical pricing, performance UI and percentage returns remain incomplete.
+
 - Qualified the expanded position through D1 save, close, atomic roll, private
   export/import and final closure. The synthetic ledger reconciles $200 realized
   plus $1,600 unrealized less $7 allowance to $1,793 final net realized P/L.

@@ -162,6 +162,37 @@ export function projectPositionLots(position: PositionLots) {
   return { initial: structuredClone(initial), lots, openings, version, asOf, recordedAt, grossRealizedPnl: round(grossRealizedPnl), allowance: base.allowance, netClosedPnl: lots.length ? null : round(grossRealizedPnl - base.allowance), status: lots.length ? "open" as const : "closed" as const };
 }
 
+export function projectPositionLotsAt(position: PositionLots, cutoff: string) {
+  const full = projectPositionLots(position), at = Date.parse(cutoff);
+  if (!time(cutoff) || at < Date.parse(full.initial.valuationTimestamp) || at > Date.now()) throw new Error("Invalid historical cutoff");
+  const lots: RemainingLot[] = full.openings.filter(opening => Date.parse(opening.at) <= at).map(({ originalEntryPrice: _original, ...opening }) => opening);
+  const voided = new Set(position.legacy.closeVoids?.map(event => event.closeId));
+  const prices = new Map(position.legacy.priceCorrections?.map(event => [event.closeId, event.price]));
+  for (const amendment of position.amendments ?? []) {
+    if (amendment.kind === "close-void") voided.add(amendment.closeId);
+    else if (amendment.kind === "price-correction") prices.set(amendment.closeId, amendment.price);
+  }
+  let grossRealizedPnl = 0;
+  const closeLot = (close: LotClose) => {
+    if (voided.has(close.id)) return;
+    const lot = lots.find(item => item.id === close.lotId);
+    if (!lot || close.quantity > lot.quantity) throw new Error("Invalid historical allocation");
+    grossRealizedPnl += ((prices.get(close.id) ?? close.price) - lot.entryPrice) * close.quantity * multiplier(lot.asset) * (lot.side === "long" ? 1 : -1);
+    if (!Number.isFinite(grossRealizedPnl)) throw new Error("Historical totals exceed numerical range");
+    lot.quantity -= close.quantity;
+  };
+  for (const close of position.legacy.closes) {
+    if (Date.parse(close.at) > at) continue;
+    const index = close.assetId === "stock" ? full.initial.legs.length : full.initial.legs.findIndex(leg => `option:${leg.id}` === close.assetId);
+    closeLot({ ...close, lotId: full.openings[index].id });
+  }
+  for (const transaction of position.transactions) if (Date.parse(transaction.at) <= at) transaction.closes.forEach(closeLot);
+  const remaining = lots.filter(lot => lot.quantity > 0);
+  if (!Number.isFinite(grossRealizedPnl - full.allowance)) throw new Error("Historical totals exceed numerical range");
+  return { cutoff, lots: remaining, grossRealizedPnl: round(grossRealizedPnl), allowance: full.allowance, netClosedPnl: remaining.length ? null : round(grossRealizedPnl - full.allowance), status: remaining.length ? "open" as const : "closed" as const,
+    basis: "Latest-revision restated holdings and realized P/L, not as-known-then history. Effective execution times use the latest audited price corrections and voids. No historical marks, expiry settlement, or percentage returns are inferred." };
+}
+
 export function recordLotTransaction(position: PositionLots, request: LotTransaction): PositionLots {
   const projection = projectPositionLots(position);
   const existing = position.transactions.find(transaction => transaction.id === request?.id);

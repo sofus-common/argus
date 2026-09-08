@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createStrategy, quoteValuation, type MarketSnapshot } from "../src/options";
 import { createPosition, recordClose } from "../src/position-lifecycle";
-import { upgradePositionLots, projectPositionLots, recordLotTransaction, valuePositionLots, recordLotPriceCorrection, recordLotCloseVoid, recordLotOpeningPriceCorrection, type LotTransaction, type LotAsset } from "../src/position-lots";
+import { upgradePositionLots, projectPositionLots, projectPositionLotsAt, recordLotTransaction, valuePositionLots, recordLotPriceCorrection, recordLotCloseVoid, recordLotOpeningPriceCorrection, type LotTransaction, type LotAsset } from "../src/position-lots";
 
 const at = "2026-09-05T12:00:00.000Z";
 const fixture = (side: "long" | "short" = "long") => {
@@ -14,6 +14,64 @@ const asset = (base = fixture()): LotAsset => {
   return { kind: "option", contractId, type, strike, expiry, multiplier };
 };
 const transaction = (patch: Partial<LotTransaction> = {}): LotTransaction => ({ id: "tx", at, recordedAt: at, closes: [], opens: [], ...patch });
+
+it("reconstructs dated holdings through a roll using latest corrected costs and close prices", () => {
+  const base = fixture(); base.initial.stock = { shares: -10, entryPrice: 100 }; base.initial.excludedLegIds = [base.initial.legs[0].id];
+  const legacy = recordClose(base, { id: "legacy-close", assetId: `option:${base.initial.legs[0].id}`, quantity: 1, price: 3, at });
+  const later = "2026-09-05T13:00:00.000Z", final = "2026-09-05T14:00:00.000Z";
+  let position = recordLotTransaction(upgradePositionLots(legacy), transaction({ at: later, recordedAt: later, closes: [{ id: "roll-close", lotId: "initial:option:0", quantity: 1, price: 4 }], opens: [{ id: "replacement", asset: asset(base), side: "long", quantity: 1, entryPrice: 5 }] }));
+  position = recordLotOpeningPriceCorrection(position, { id: "entry-fix", lotId: "initial:option:0", price: 2.5, reason: "Correct entry", recordedAt: final });
+  position = recordLotPriceCorrection(position, { id: "exit-fix", closeId: "legacy-close", price: 3.5, reason: "Correct exit", recordedAt: final });
+  position = recordLotTransaction(position, transaction({ id: "finish", at: final, recordedAt: final, closes: [{ id: "finish-option", lotId: "replacement", quantity: 1, price: 6 }, { id: "finish-stock", lotId: "initial:stock", quantity: 10, price: 90 }] }));
+  const before = structuredClone(position), initial = projectPositionLotsAt(position, base.initial.valuationTimestamp);
+  expect(initial).toMatchObject({ grossRealizedPnl: 0, allowance: 7, status: "open", netClosedPnl: null, lots: [{ quantity: 2, entryPrice: 2.5 }, { side: "short", quantity: 10 }] });
+  expect(initial.basis).toContain("restated");
+  expect(projectPositionLotsAt(position, at)).toMatchObject({ grossRealizedPnl: 100, lots: [{ id: "initial:option:0", quantity: 1 }, { id: "initial:stock", quantity: 10 }] });
+  const rolled = projectPositionLotsAt(position, later);
+  expect(rolled).toMatchObject({ grossRealizedPnl: 250, lots: [{ id: "initial:stock" }, { id: "replacement", quantity: 1, entryPrice: 5 }] });
+  const full = projectPositionLots(position), ended = projectPositionLotsAt(position, final);
+  expect(ended).toMatchObject({ cutoff: final, status: "closed", lots: full.lots, grossRealizedPnl: full.grossRealizedPnl, netClosedPnl: full.netClosedPnl });
+  expect(ended.netClosedPnl).toBe(443);
+  initial.lots[0].quantity = 99; initial.lots[0].asset.kind = "stock";
+  expect(position).toEqual(before);
+});
+
+it("restates voided legacy and lot closes while keeping future opening IDs stable", () => {
+  const base = fixture(), later = "2026-09-05T13:00:00.000Z";
+  const legacy = recordClose(base, { id: "initial:option:0", assetId: `option:${base.initial.legs[0].id}`, quantity: 1, price: 3, at });
+  let position = upgradePositionLots(legacy);
+  const stableId = projectPositionLots(position).openings[0].id;
+  expect(stableId).toBe("initial:option:0:1");
+  position = recordLotTransaction(position, transaction({ closes: [{ id: "lot-close", lotId: stableId, quantity: 1, price: 4 }] }));
+  position = recordLotCloseVoid(position, { id: "legacy-void", closeId: "initial:option:0", reason: "No fill", recordedAt: later });
+  position = recordLotCloseVoid(position, { id: "lot-void", closeId: "lot-close", reason: "No fill", recordedAt: later });
+  const initial = projectPositionLotsAt(position, base.initial.valuationTimestamp);
+  expect(initial.lots).toMatchObject([{ id: stableId, quantity: 2 }]);
+  expect(projectPositionLotsAt(position, at)).toMatchObject({ grossRealizedPnl: 0, lots: [{ id: stableId, quantity: 2 }] });
+  expect(projectPositionLotsAt(position, later).lots).toEqual(projectPositionLots(position).lots);
+});
+
+it("rejects invalid cutoffs and corruption after the requested historical date", () => {
+  const position = recordLotTransaction(upgradePositionLots(fixture()), transaction({ closes: [{ id: "close", lotId: "initial:option:0", quantity: 1, price: 3 }] }));
+  for (const cutoff of ["invalid", "2026-09-05T12:00:00Z", "2026-02-30T12:00:00.000Z", "2000-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z"]) expect(() => projectPositionLotsAt(position, cutoff)).toThrow();
+  const corrupt = structuredClone(position); corrupt.transactions[0].closes[0].quantity = 99;
+  expect(() => projectPositionLotsAt(corrupt, position.legacy.initial.valuationTimestamp)).toThrow();
+});
+
+it.each(["long", "short"] as const)("reconciles %s dated lots with corrected added basis and same-time events", side => {
+  const base = fixture(side); base.initial.stock = { shares: side === "long" ? 10 : -10, entryPrice: 100 };
+  let position = recordLotTransaction(upgradePositionLots(base), transaction({ opens: [{ id: "added", asset: asset(base), side, quantity: 1, entryPrice: 5 }] }));
+  position = recordLotTransaction(position, transaction({ id: "exit", closes: [{ id: "added-close", lotId: "added", quantity: 1, price: 7 }, { id: "stock-close", lotId: "initial:stock", quantity: 10, price: 110 }] }));
+  position = recordLotOpeningPriceCorrection(position, { id: "added-basis", lotId: "added", price: 6, reason: "Correct entry", recordedAt: at });
+  position = recordLotPriceCorrection(position, { id: "added-price", closeId: "added-close", price: 8, reason: "Correct exit", recordedAt: at });
+  const initial = projectPositionLotsAt(position, base.initial.valuationTimestamp);
+  expect(initial.lots.map(lot => lot.id)).toEqual(["initial:option:0", "initial:stock"]);
+  expect(initial.grossRealizedPnl).toBe(0);
+  const dated = projectPositionLotsAt(position, at), full = projectPositionLots(position);
+  expect(dated.lots).toEqual(full.lots);
+  expect(dated.grossRealizedPnl).toBe(side === "long" ? 300 : -300);
+  expect(dated.grossRealizedPnl).toBe(full.grossRealizedPnl);
+});
 
 it("corrects initial opening basis across legacy closes, rolls and remaining lots without rewriting history", () => {
   let base = fixture(); base.initial.legs[0].contracts = 3;
