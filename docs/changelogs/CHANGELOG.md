@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Corrected index lot-management and saved-performance premium units; total P/L
+  remains USD and scenario levels use index points. Opening candidates now require
+  matching instrument kind as well as symbol, and index records cannot offer stock
+  openings. Added index roll/revisit/close workflow, historical reconciliation and
+  authenticated persistence/export-import regression coverage. Tests preserve
+  revision checks, identical-retry behavior, historical import provenance and
+  expired-unsettled gaps. No accounting engine or model changes, broker actions,
+  inferred cash settlement or live-data claims.
+  Verified 60 focused tests, TypeScript/build, independent review and 39 desktop
+  plus 39 mobile browser checks; the index-unit regression failed before the fix.
+
 - Added cash-index option-price history without requesting stock EOD prices for
   the index. Complete option quotes still produce signed inventory values and
   bid/ask envelopes; missing dates remain gaps. Shared response validation rejects

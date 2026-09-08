@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { createStrategy } from '../src/options';
 import { createPosition } from '../src/position-lifecycle';
-import { recordLotTransaction, upgradePositionLots } from '../src/position-lots';
+import { projectPositionLots, recordLotTransaction, upgradePositionLots } from '../src/position-lots';
 import { buildPositionPerformance, loadPositionPerformance, performanceCutoff, readPositionPerformance } from '../src/position-performance';
 
 function fixture() {
@@ -35,6 +35,37 @@ it('reconciles dated rolls and short stock, gaps and closed days without inventi
   expect(() => readPositionPerformance(altered, f.position, f.range, f.now)).toThrow();
   f.options[0].response[0].contract.strike = 999;
   expect(() => buildPositionPerformance(f.position, f.options, f.stock, f.range, f.now)).toThrow();
+});
+
+it('reconciles cash-index rolls and closes after JSON reopening without stock requests or inferred settlement', async () => {
+  const f = fixture(), initial = f.position.legacy.initial;
+  initial.underlying = 'XSP'; initial.underlyingKind = 'cash-index'; initial.valuationModel = 'european-bsm-v1'; delete initial.stock;
+  initial.legs.forEach(leg => { leg.contractId = leg.contractId.replace('SPY', 'XSP'); });
+  f.position.transactions.forEach(transaction => {
+    transaction.closes = transaction.closes.filter(close => close.lotId !== 'initial:stock');
+    transaction.opens.forEach(open => { if (open.asset.kind === 'option') open.asset.contractId = open.asset.contractId.replace('SPY', 'XSP'); });
+  });
+  f.options.forEach(response => { response.response[0].contract.symbol = 'XSP'; });
+  const reopened = JSON.parse(JSON.stringify(f.position)), before = structuredClone(reopened), paths: string[] = [];
+  const result = await loadPositionPerformance(reopened, f.range, {}, async (_env, batch) => { paths.push(...batch); return f.options; }, f.now);
+  expect(paths).toHaveLength(2);
+  expect(paths.every(path => path.startsWith('/v3/option/history/eod?') && new URL(path, 'http://theta.internal').searchParams.get('symbol') === 'XSP')).toBe(true);
+  expect(result.rows.map(row => row.combinedPnl)).toEqual([null, 193, 393, null, 393, 393]);
+  expect(result.rows.map(row => row.changeUsd)).toEqual([null, null, 200, null, null, 0]);
+  expect(result.rows[2]).toMatchObject({ grossRealizedPnl: 100, unrealizedPnl: 300, allowance: 7 });
+  expect(result.rows[4]).toMatchObject({ status: 'closed', grossRealizedPnl: 400, unrealizedPnl: 0, combinedPnl: 393, lots: [] });
+  expect(result.high).toEqual({ date: '2026-09-02', value: 393 }); expect(result.low).toEqual({ date: '2026-09-01', value: 193 });
+  expect(projectPositionLots(reopened)).toMatchObject({ initial: { underlyingKind: 'cash-index', valuationModel: 'european-bsm-v1' }, netClosedPnl: 393 });
+  expect(readPositionPerformance(JSON.parse(JSON.stringify(result)), reopened, f.range, f.now)).toEqual(result);
+  const forged = structuredClone(result); forged.rows[4].combinedPnl! += 100;
+  expect(() => readPositionPerformance(forged, reopened, f.range, f.now)).toThrow();
+  expect(reopened).toEqual(before);
+  const expired = structuredClone(initial); expired.legs[0].contracts = 1;
+  expired.legs[0].expiry = '2026-09-02T20:00:00.000Z'; expired.legs[0].contractId = 'XSP   260902C00100000';
+  const reported = structuredClone(f.options.slice(0, 1)); reported[0].response[0].contract.expiration = '2026-09-02';
+  reported[0].response[0].data = reported[0].response[0].data.slice(0, 2);
+  const unsettled = buildPositionPerformance(upgradePositionLots(createPosition(expired)), reported, { response: [] }, { start: '2026-09-01', end: '2026-09-02' }, f.now);
+  expect(unsettled.rows[1]).toMatchObject({ status: 'open', grossRealizedPnl: 0, unrealizedPnl: null, combinedPnl: null, lots: [{ mark: null }] });
 });
 
 it('uses New York DST accounting cutoffs and validates ranges before requesting data', async () => {

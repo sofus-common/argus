@@ -287,6 +287,38 @@ it("previews and atomically records owner-scoped lot rolls with stable retry ide
   expect((await call(app, path, "POST", { ...body, transaction: { ...transaction, closes: [{ ...transaction.closes[0], price: 2 }] } })).status).toBe(400);
 });
 
+it('persists and reimports an index roll with owner isolation, retry identity and cash accounting', async () => {
+  const app = authenticatedApp(), store = createSavedStore(db), owner = JSON.stringify([issuer, subjectOne]), at = new Date().toISOString();
+  const snapshot: MarketSnapshot = { id: 'index-lifecycle', underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, indexSourceTime: at,
+    contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, availableExpiries: ['2099-09-18'],
+    contracts: [{ contractId: 'XSP   990918C00100000', type: 'call', strike: 100, expiry: '2099-09-18T20:00:00.000Z', multiplier: 100, bid: 3, ask: 5, iv: .2, quoteAsOf: at }] };
+  const state = createMarketStrategy('short-call', snapshot); state.pricing!.entryMode = 'fixed'; state.feeAllowance = 7;
+  const saved = await store.create(owner, 'Index roll', state, snapshot), leg = state.legs[0];
+  const transaction = { id: 'index-roll', at, recordedAt: at, closes: [{ id: 'cover', lotId: 'initial:option:0', quantity: 1, price: 1.5 }], opens: [{ id: 'replacement', asset: { kind: 'option', contractId: leg.contractId, type: leg.type, strike: leg.strike, expiry: leg.expiry, multiplier: 100 }, side: 'short', quantity: 1, entryPrice: 3 }] };
+  const path = `/api/strategies/${saved.id}/transactions`, body = { revision: 1, transaction };
+  expect((await call(app, `${path}/preview`, 'POST', body)).status).toBe(200);
+  expect(await store.get(owner, saved.id)).toEqual(saved);
+  expect((await call(app, path, 'POST', body, jwtTwo)).status).toBe(404);
+  const stock = { ...body, transaction: { ...transaction, opens: [{ id: 'stock', asset: { kind: 'stock', symbol: 'XSP' }, side: 'long', quantity: 100, entryPrice: 100 }] } };
+  expect((await call(app, path, 'POST', stock)).status).toBe(400);
+  expect(await store.get(owner, saved.id)).toEqual(saved);
+  const recorded = await call(app, path, 'POST', body); expect(recorded.status).toBe(200);
+  const result = await recorded.json(); expect(await (await call(app, path, 'POST', body)).json()).toEqual(result);
+  expect(result).toMatchObject({ record: { revision: 2, state: { underlyingKind: 'cash-index', valuationModel: 'european-bsm-v1' } }, projection: { grossRealizedPnl: 250, allowance: 7 } });
+  const exported = await (await call(app, `/api/strategies/${saved.id}/export`)).json();
+  const imported = await call(app, '/api/strategies/import', 'POST', exported); expect(imported.status).toBe(201);
+  const copy = (await imported.json() as any).record;
+  expect(copy.id).not.toBe(saved.id);
+  expect(copy.snapshot.id).not.toBe(snapshot.id); expect(copy.snapshot.historical).toBe(true);
+  expect(copy.state).toEqual({ ...state, pricing: { ...state.pricing, snapshotId: copy.snapshot.id, historical: true } });
+  const original = (await store.get(owner, saved.id)).lifecycle as any;
+  expect(copy.lifecycle).toEqual({ ...original, legacy: { ...original.legacy, initial: copy.state } });
+  const closed = await call(app, path, 'POST', { revision: 2, transaction: { id: 'index-final', at, recordedAt: at, closes: [{ id: 'final-cover', lotId: 'replacement', quantity: 1, price: 1 }], opens: [] } });
+  expect(closed.status).toBe(200);
+  expect(await closed.json()).toMatchObject({ record: { revision: 3 }, projection: { status: 'closed', grossRealizedPnl: 450, netClosedPnl: 443, lots: [] } });
+  expect((await store.get(owner, copy.id)).revision).toBe(copy.revision);
+});
+
 it("previews opening corrections without upgrading and confirms once through owner-scoped CAS", async () => {
   const app = authenticatedApp(), store = createSavedStore(db), owner = JSON.stringify([issuer, subjectOne]);
   const state = createStrategy("long-call"); state.legs[0].entryPrice = 2; state.legs[0].contracts = 2;

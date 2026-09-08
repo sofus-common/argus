@@ -297,10 +297,10 @@ async function run() {
         assert(tail.includes('Not lifetime or assignment risk'), 'Conditional tail lost its risk scope');
       } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
-    await test('Lot manager rolls, revisits and closes saved holdings with revision-bound performance', async () => {
+    for (const symbol of ['SPY', 'XSP']) await test(`${symbol} lot manager rolls, revisits and closes saved holdings with revision-bound performance`, async () => {
       await unmount(); const priorFetch = window.fetch;
       const stamp = '2026-09-01T12:00:00.000Z', range = { start: '2026-09-01', end: '2026-09-03' };
-      const snapshot: MarketSnapshot = { id: 'roll-performance-quotes', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2026-10-09', '2026-10-16'], contracts: [100, 105].map((strike, index) => ({ contractId: `SPY   2610${index ? '16' : '09'}C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry: `2026-10-${index ? '16' : '09'}T20:00:00.000Z`, multiplier: 100, bid: 1.9, ask: 2.1, iv: .2, quoteAsOf: stamp })) };
+      const snapshot: MarketSnapshot = { id: 'roll-performance-quotes', source: 'Tastytrade', underlying: symbol, ...(symbol === 'XSP' ? { underlyingKind: 'cash-index' as const, indexSourceTime: stamp, contractTerms: { exerciseStyle: 'European' as const, settlement: 'cash' as const, multiplier: 100 as const, settlementSession: 'PM' as const } } : {}), spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2026-10-09', '2026-10-16'], contracts: [100, 105].map((strike, index) => ({ contractId: `${symbol}   2610${index ? '16' : '09'}C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry: `2026-10-${index ? '16' : '09'}T20:00:00.000Z`, multiplier: 100, bid: 1.9, ask: 2.1, iv: .2, quoteAsOf: stamp })) };
       const held = createMarketStrategy('long-call', snapshot); held.pricing!.entryMode = 'fixed'; held.legs[0].contracts = 2; held.feeAllowance = 7;
       const source = createMarketStrategy('long-call', { ...snapshot, contracts: [snapshot.contracts[1]] });
       let saved: SavedStrategy = { id: 'roll-performance', title: 'Recorded roll fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot, lifecycle: createPosition(held) };
@@ -309,7 +309,7 @@ async function run() {
       const performanceRevisions: number[] = [];
       const ledger = () => saved.lifecycle!.schemaVersion === 2 ? saved.lifecycle! : upgradePositionLots(saved.lifecycle!);
       const loaded = () => ({ record: saved, projection: projectPositionLots(ledger()) });
-      const marks = (index: number) => ({ response: [{ contract: { symbol: 'SPY', strike: index ? 105 : 100, expiration: `2026-10-${index ? '16' : '09'}`, right: 'CALL' }, data: [1, 2, 3].map(day => { const mid = index ? day === 3 ? 6.5 : 6 : day === 1 ? 3 : day === 2 ? 4 : 4.5; return { bid: mid - .1, ask: mid + .1, created: `2026-09-0${day}T17:15:00.000`, last_trade: `2026-09-0${day}T16:00:00.000` } }) }] });
+      const marks = (index: number) => ({ response: [{ contract: { symbol, strike: index ? 105 : 100, expiration: `2026-10-${index ? '16' : '09'}`, right: 'CALL' }, data: [1, 2, 3].map(day => { const mid = index ? day === 3 ? 6.5 : 6 : day === 1 ? 3 : day === 2 ? 4 : 4.5; return { bid: mid - .1, ask: mid + .1, created: `2026-09-0${day}T17:15:00.000`, last_trade: `2026-09-0${day}T16:00:00.000` } }) }] });
       window.fetch = (async (url, init) => {
         const endpoint = '/api/strategies/roll-performance';
         if (url === `${endpoint}/lots`) return Response.json(loaded());
@@ -328,17 +328,27 @@ async function run() {
         throw new Error('Unexpected lot performance fixture request');
       }) as typeof fetch;
       const waitFor = async (check: () => boolean) => { for (let i = 0; i < 200 && !check(); i++) await settleTimers(); assert(check(), `Lot performance workflow did not settle: ${fixture.querySelector('[role="alert"]')?.textContent ?? ''}`) };
-      const mountManager = async () => { root = createRoot(fixture); await act(async () => root!.render(<LotManagement savedId={saved.id} source={source} onClose={() => { dismissed++ }} onRecorded={async () => { callbacks++ }} onAnalyze={() => { throw new Error('Recorded workflow changed builder') }} />)); await waitFor(() => !!fixture.querySelector('[aria-label="Saved position performance"]')) };
+      const mountManager = async (captured = source) => { root = createRoot(fixture); await act(async () => root!.render(<LotManagement savedId={saved.id} source={captured} onClose={() => { dismissed++ }} onRecorded={async () => { callbacks++ }} onAnalyze={() => { throw new Error('Recorded workflow changed builder') }} />)); await waitFor(() => !!fixture.querySelector('[aria-label="Saved position performance"]')) };
       const loadPerformance = async () => { await change('Performance start date', range.start); await change('Performance end date', range.end); await click('Load position performance'); await waitFor(() => !!fixture.querySelector('[aria-label="Selected performance accounting"]')) };
       const accounting = (name: string) => [...fixture.querySelectorAll('[aria-label="Selected performance accounting"] dt')].find(item => item.textContent === name)?.nextElementSibling?.textContent;
       const check = async (label: string) => { const input = fixture.querySelector<HTMLInputElement>(`[aria-label="${label}"]`); assert(input && !input.disabled, `Missing ${label}`); await act(async () => input.click()) };
       try {
-        await mountManager(); await loadPerformance();
+        if (symbol === 'XSP') {
+          const mismatched = structuredClone(source); delete mismatched.underlyingKind; mismatched.stock = { shares: 100, entryPrice: 100 };
+          await mountManager(mismatched);
+          assert(!fixture.querySelector('[aria-label="Open leg stock"]') && !fixture.querySelector(`[aria-label="Open leg ${source.legs[0].id}"]`), 'Index record offered stock or mismatched-kind openings');
+          await unmount();
+        }
+        await mountManager();
+        if (symbol === 'XSP') assert(fixture.textContent?.includes('premium points') && !fixture.textContent.includes('per share'), 'Index lot manager mislabeled premium units');
+        await loadPerformance();
+        if (symbol === 'XSP') assert(fixture.querySelector('[aria-label="Selected performance accounting"]')?.textContent?.includes('premium points'), 'Index performance lost premium units');
         assert(accounting('Gross realized P/L') === '$0.00' && accounting('Remaining unrealized P/L') === '$500.00' && accounting('Net position P/L') === '$493.00', 'Legacy position performance did not reconcile');
         await check('Close lot initial:option:0'); await change('Close quantity initial:option:0', '1'); await change('Close price initial:option:0', '3');
         await check(`Open leg ${source.legs[0].id}`); await change(`Open price ${source.legs[0].id}`, '4'); await change('Transaction UTC datetime', '2026-09-02T12:00:00');
         await click('Preview transaction'); await waitFor(() => !!fixture.querySelector('[aria-label="Transaction preview"]'));
         assert(confirmed === 0 && saved.revision === 1 && !fixture.querySelector('[aria-label="Saved position performance"]'), 'Preview wrote a transaction or retained stale performance');
+        if (symbol === 'XSP') { const previewText = fixture.querySelector('[aria-label="Transaction preview"]')?.textContent ?? ''; assert(previewText.includes('3 premium points') && previewText.includes('4 premium points') && !previewText.includes('per share'), 'Index transaction preview mislabeled execution premiums'); }
         await click('Confirm recorded transaction'); await waitFor(() => callbacks === 1 && !!fixture.querySelector('[aria-label="Saved position performance"]'));
         assert(Number(saved.revision) === 2 && saved.lifecycle?.schemaVersion === 2 && saved.lifecycle.transactions.length === 1, 'Roll was not recorded exactly once');
         assert(!fixture.querySelector('[aria-label="Selected performance accounting"]'), 'Recording retained performance from the prior revision');

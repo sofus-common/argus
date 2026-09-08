@@ -44,6 +44,7 @@ function PerformanceDiscussion({ record, position, range, selectedDate, onRefres
 }
 
 export function PositionPerformance({ record }: { record: SavedStrategy }) {
+  const premium = (value: number) => record.state.underlyingKind === 'cash-index' ? `${value} premium points` : money(value)
   const latest = priorDate(historyToday(), 1)
   const [range, setRange] = useState(() => ({ start: priorDate(latest, 6), end: latest }))
   const [result, setResult] = useState<Performance | null>(null)
@@ -99,7 +100,7 @@ export function PositionPerformance({ record }: { record: SavedStrategy }) {
         <p>Daily change requires adjacent complete calendar observations; gaps and the first date have no daily change. Closed positions need no remaining marks. Unrecorded expiry settlement is never inferred.</p>
         <details><summary>Recorded lots and raw report times</summary><p>Report creation and last-trade fields are preserved as supplied, without treating them as UTC or bid/ask timestamps. Quote age is unknown; marks are unsynchronized and may precede same-day executions.</p>
           {!row.lots.length && <p>{row.status === 'closed' ? 'No remaining holdings to mark.' : 'No holdings at this cutoff.'}</p>}
-          <ul>{row.lots.map(lot => <li key={lot.id}><strong>{lot.id} · {lot.asset.kind === 'stock' ? `${lot.asset.symbol} shares` : lot.asset.contractId}</strong><p>{lot.side} · {lot.quantity} units · entry {money(lot.entryPrice)} · unrealized {money(lot.unrealizedPnl)}</p>{lot.mark ? <p>Bid {money(lot.mark.bid)} · ask {money(lot.mark.ask)} · midpoint {money(lot.mark.mid)}<br />Report created (raw): {lot.mark.created}<br />Last trade (raw): {lot.mark.lastTrade}</p> : <p>{lot.asset.kind === 'option' && Date.parse(lot.asset.expiry) <= Date.parse(row.cutoff) ? 'Expired holding without recorded settlement; valuation unavailable.' : 'No admissible dated mark; valuation unavailable.'}</p>}</li>)}</ul>
+          <ul>{row.lots.map(lot => <li key={lot.id}><strong>{lot.id} · {lot.asset.kind === 'stock' ? `${lot.asset.symbol} shares` : lot.asset.contractId}</strong><p>{lot.side} · {lot.quantity} units · entry {premium(lot.entryPrice)} · unrealized {money(lot.unrealizedPnl)}</p>{lot.mark ? <p>Bid {premium(lot.mark.bid)} · ask {premium(lot.mark.ask)} · midpoint {premium(lot.mark.mid)}<br />Report created (raw): {lot.mark.created}<br />Last trade (raw): {lot.mark.lastTrade}</p> : <p>{lot.asset.kind === 'option' && Date.parse(lot.asset.expiry) <= Date.parse(row.cutoff) ? 'Expired holding without recorded settlement; valuation unavailable.' : 'No admissible dated mark; valuation unavailable.'}</p>}</li>)}</ul>
         </details>
       </section>}
       {row && position && <PerformanceDiscussion key={`${record.id}:${record.revision}:${range.start}:${range.end}:${row.date}`} record={record} position={position} range={range} selectedDate={row.date} onRefresh={setResult} />}
