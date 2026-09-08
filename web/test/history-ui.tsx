@@ -367,24 +367,33 @@ async function run() {
         }
       } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket; window.Worker = priorWorker }
     });
-    await test('Single-expiry rebuild supports one date and preserves calendars on incompatible rebuilds', async () => {
+    await test('One-to-four expiry windows support eight-leg construction, saved selection, held refresh and Undo', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
-      const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09', '2027-10-16'];
-      const snapshot: MarketSnapshot = { id: 'expiry-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates, contracts: dates.flatMap(date => [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   ${date.slice(2).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: `${date}T20:00:00.000Z`, multiplier: 100 as const, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp })))) };
-      const seed = { id: 'expiry-seed', title: 'Expiry fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: createMarketStrategy('bull-call', snapshot), snapshot };
-      let requestedDates: string[] = [], calls = 0;
+      const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09', '2027-10-16', '2027-10-23', '2027-10-30'];
+      const snapshot: MarketSnapshot = { id: 'expiry-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates, contracts: dates.flatMap(date => Array.from({ length: 25 }, (_, index) => 88 + index).flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   ${date.slice(2).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: `${date}T20:00:00.000Z`, multiplier: 100 as const, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp })))) };
+      const seedSnapshot = { ...snapshot, contracts: snapshot.contracts.filter(c => dates.slice(0, 2).includes(c.expiry.slice(0, 10))) };
+      const seed = { id: 'expiry-seed', title: 'Expiry fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: createMarketStrategy('bull-call', seedSnapshot), snapshot: seedSnapshot };
+      let requestedDates: string[] = [], calls = 0, activeSnapshot = seedSnapshot, saved: typeof seed | undefined;
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
-      window.fetch = (async (url) => {
+      window.fetch = (async (url, init) => {
         if (url === '/api/bootstrap') return Response.json({ session: { label: 'Expiry test', local: true, recoveryKey: 'disabled-in-test' } });
-        if (url === '/api/strategies') return Response.json({ strategies: [seed] });
+        if (url === '/api/strategies' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body)); saved = { ...seed, id: 'wide-saved', title: body.title, state: body.state, snapshot: activeSnapshot };
+          return Response.json({ record: saved }, { status: 201 });
+        }
+        if (url === '/api/strategies') return Response.json({ strategies: saved ? [seed, saved] : [seed] });
         if (url === '/api/strategies/expiry-seed') return Response.json({ record: seed });
+        if (url === '/api/strategies/wide-saved') return Response.json({ record: saved });
         if (String(url).startsWith('/api/chain?')) {
-          requestedDates = new URL(String(url), location.origin).searchParams.get('expiries')!.split(','); calls++;
-          return Response.json({ snapshot: { ...snapshot, id: `expiry-${calls}`, contracts: snapshot.contracts.filter(c => requestedDates.includes(c.expiry.slice(0, 10))) } });
+          const query = new URL(String(url), location.origin).searchParams;
+          requestedDates = query.get('expiries')?.split(',') ?? dates; calls++;
+          if (query.has('retain')) assert(query.get('retain')!.split(',').length === 8, 'Refresh omitted held or excluded contracts');
+          activeSnapshot = { ...snapshot, id: `expiry-${calls}`, contracts: snapshot.contracts.filter(c => requestedDates.includes(c.expiry.slice(0, 10))).map(c => query.has('retain') ? { ...c, bid: 4, ask: 5 } : c) };
+          return Response.json({ snapshot: activeSnapshot });
         }
         throw new Error('Unexpected expiry test request');
       }) as typeof fetch;
-      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 400 && !check(); i++) await settleTimers(); assert(check(), 'Expiry workflow did not settle') };
+      const waitFor = async (check: () => boolean, step = 'Expiry workflow') => { for (let i = 0; i < 400 && !check(); i++) await settleTimers(); assert(check(), `${step} did not settle: ${fixture.querySelector('[role="alert"]')?.textContent ?? ''}`) };
       const rebuild = () => [...fixture.querySelectorAll('button')].find(button => button.textContent === 'Rebuild template with these expiries')!;
       const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
       try {
@@ -405,13 +414,51 @@ async function run() {
         await change('Chain expiry 2', dates[0]); assert(rebuild().disabled, 'Duplicate dates were allowed');
         await change('Chain expiry 2', dates[1]); await click('Rebuild template with these expiries');
         await waitFor(() => calls === 2 && !rebuild().disabled);
-        assert(requestedDates.join() === dates.join(), 'Two-date request lost an expiry');
+        assert(requestedDates.join() === dates.slice(0, 2).join(), 'Two-date request lost an expiry');
         const calendar = [...fixture.querySelectorAll<HTMLButtonElement>('.template-list button')].find(button => button.querySelector('span')?.textContent === 'Call calendar');
         assert(calendar, 'Missing calendar template'); await act(async () => calendar.click());
         assert(calendar.getAttribute('aria-pressed') === 'true' && new Set([...fixture.querySelectorAll('.leg-list [aria-label="Expiry"]')].map(select => (select as unknown as HTMLSelectElement).value)).size === 2, 'Calendar did not activate two distinct expiries');
         const held = inputs(); await change('Chain expiry 2', ''); await click('Rebuild template with these expiries');
         await waitFor(() => calls === 3 && !!fixture.querySelector('[role="alert"]'));
         assert(inputs() === held, 'Failed calendar rebuild changed the held construction');
+        for (let index = 1; index < 4; index++) await change(`Chain expiry ${index + 1}`, dates[index]);
+        await change('Chain expiry 4', dates[2]); assert(rebuild().disabled, 'Duplicate optional dates were allowed');
+        await change('Chain expiry 4', dates[3]); await click('Rebuild template with these expiries');
+        await waitFor(() => calls === 4 && !rebuild().disabled);
+        assert(requestedDates.join() === dates.join(), 'Four-date request lost an expiry');
+        assert(fixture.querySelectorAll('.option-chain-table tbody tr').length === 200, 'Contract table truncated the four-date window');
+        assert(fixture.querySelector('[aria-label="Strike activity expiry"]')?.querySelectorAll('option').length === 4, 'Activity omitted later expiries');
+        await change('Target leg', 'add-long');
+        for (const date of dates.slice(1)) {
+          for (const strike of [90, 95]) {
+            const contract = snapshot.contracts.find(c => c.expiry.startsWith(date) && c.strike === strike && c.type === 'put')!;
+            const add = fixture.querySelector<HTMLButtonElement>(`[aria-label="Add ${contract.contractId} as long leg"]`);
+            assert(add && !add.disabled, 'Quoted construction stopped before eight legs');
+            await act(async () => add.click());
+          }
+        }
+        assert(fixture.querySelectorAll('.leg-row').length === 8, 'Eight-leg construction was not retained');
+        assert(new Set([...fixture.querySelectorAll('.leg-list [aria-label="Expiry"]')].map(select => (select as unknown as HTMLSelectElement).value)).size === 4, 'Construction lost one of four expiries');
+        assert([...fixture.querySelectorAll<HTMLButtonElement>('.add-leg')].some(button => button.textContent?.includes('Add leg') && button.disabled), 'Editor permitted a ninth leg');
+        assert([...fixture.querySelectorAll<HTMLButtonElement>('.option-chain-table button')].filter(button => button.getAttribute('aria-label')?.startsWith('Add ')).every(button => button.disabled), 'Chain permitted a ninth leg');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(fixture.querySelectorAll('.leg-row').length === 7, 'Undo did not remove only the eighth leg');
+        const lastContract = snapshot.contracts.find(c => c.expiry.startsWith(dates[3]) && c.strike === 95 && c.type === 'put')!;
+        await act(async () => fixture.querySelector<HTMLButtonElement>(`[aria-label="Add ${lastContract.contractId} as long leg"]`)!.click());
+        await click('Keep entry costs');
+        await act(async () => fixture.querySelector<HTMLInputElement>('.leg-list input[type="checkbox"]')!.click());
+        const heldInputs = inputs();
+        await click('Freeze comparison');
+        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'), 'Wide comparison');
+        await click('Save as new'); await waitFor(() => !!saved && (fixture.querySelector('[aria-label="Saved positions"]') as unknown as HTMLSelectElement).value === saved.id, 'Wide save');
+        assert(saved!.state.legs.length === 8 && saved!.state.excludedLegIds?.length === 1 && saved!.state.pricing?.entryMode === 'fixed', 'Saving lost wide holdings, selection or fixed costs');
+        await click('Include all legs'); await click('Load');
+        await waitFor(() => !!fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'), 'Wide reopen');
+        assert(inputs() === heldInputs, 'Reopening changed the eight-leg construction');
+        await click('Refresh prices'); await waitFor(() => fixture.querySelector('.contract-quote')?.textContent?.includes('Bid $4.00') === true, 'Wide refresh');
+        assert(inputs() === heldInputs && fixture.querySelectorAll('.leg-row').length === 8 && fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'), 'Refresh lost wide inventory, exclusion or held costs');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(inputs() === heldInputs && fixture.querySelector('.contract-quote')?.textContent?.includes('Bid $2.00'), 'Refresh Undo failed to restore quotes and held construction');
       } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('Workspace captures preserve holdings and scenarios, group automatic Undo and reject late edits', async () => {

@@ -3,6 +3,7 @@ import { americanScenario, americanSurface } from "../src/american-surface";
 import { americanGreeks, americanPrice } from "../src/american-price";
 import { createStrategy, type ChartRange } from "../src/options";
 import { requestAmericanSurface } from "../src/american-surface-client";
+import { calculateWorkspaceValuation } from "../src/workspace-valuation";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -71,15 +72,34 @@ it("applies separate expiry shifts to American diagnostic prices and surfaces", 
   expect(americanSurface(state)).toEqual(americanSurface(materialized));
 }, 30000);
 
-it("computes seven finite American checkpoints for a four-leg position", () => {
+it("computes seven checkpoints and a full American surface for eight legs across four expiries", () => {
   const state = createStrategy("iron-condor");
+  state.valuationModel = 'american-crr-1024-v1';
+  state.pricing = { mode: 'market', snapshotId: 'synthetic-eight-leg-surface', basis: 'mid', entryMode: 'fixed' };
+  state.legs = Array.from({ length: 8 }, (_, i) => {
+    const leg = state.legs[i % 4], strike = 90 + i * 3, day = ['09', '16', '23', '30'][Math.floor(i / 2)];
+    return { ...leg, id: `leg-${i}`, strike, expiry: `2026-10-${day}T20:00:00.000Z`, contractId: `SPY   2610${day}${leg.type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}` };
+  });
+  const before = structuredClone(state);
   const started = performance.now();
   const points = [0.9, 0.95, 0.999, 1, 1.001, 1.05, 1.1].map(factor => americanScenario({ ...state, scenarioSpot: state.scenarioSpot * factor }));
   const elapsedMs = performance.now() - started;
   expect(points).toHaveLength(7);
   expect(points.every(point => Object.values(point).every(Number.isFinite))).toBe(true);
-  console.info(`American 1024-step four-leg seven-checkpoint calculation: ${elapsedMs.toFixed(1)} ms (observation, not a timing gate)`);
-}, 30000);
+  const surface = americanSurface(state);
+  expect(surface.points).toHaveLength(792);
+  expect(surface.points.every(point => Number.isFinite(point.pnl))).toBe(true);
+  expect(surface.points.at(-1)!.date).toBe(state.legs[0].expiry);
+  for (const point of [surface.points[0], surface.points[391], surface.points[791]]) {
+    expect(point.pnl).toBeCloseTo(americanScenario({ ...state, scenarioDate: point.date, scenarioSpot: point.spot }).pnl, 7);
+  }
+  expect(state).toEqual(before);
+  const workspace = calculateWorkspaceValuation(state, { kind: 'curve', min: 90, max: 114, metric: 'pnl' });
+  expect(workspace.legs).toHaveLength(8);
+  expect(workspace.curve!.points.every(point => Number.isFinite(point.value))).toBe(true);
+  expect(workspace.metrics.scenarioPnl).toBeCloseTo(points[3].pnl, 7);
+  console.info(`American 1024-step eight-leg checkpoints: ${elapsedMs.toFixed(1)} ms; including full surface: ${(performance.now() - started).toFixed(1)} ms (observations, not timing gates)`);
+}, 60000);
 
 it("aggregates American scenario option Greeks with signed contracts, stock and one flat allowance", () => {
   const state = createStrategy("call-calendar");

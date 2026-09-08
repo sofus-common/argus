@@ -110,6 +110,43 @@ const provider = (answer: SparringReply, ...verdict: unknown[]) => vi.fn<typeof 
   return Response.json({ choices: [{ message: { content: JSON.stringify(body.response_format?.json_schema.name === "analysis_verification" ? verdict.length ? verdict[0] : defaultVerdict(body) : answer) } }] });
 });
 const scenarioCall = (scenarios: unknown = [{ scenarioDate: "2026-09-07T12:00:00.000Z", scenarioSpot: 655, ivShift: 0.03 }]) => ({ id: "tool-1", type: "function", function: { name: "evaluate_scenarios", arguments: JSON.stringify({ scenarios }) } });
+it("prices eight explicit leg shifts across four expiries and compares removing all eight into stock", async () => {
+  const quotes = structuredClone(snapshot);
+  quotes.availableExpiries = ["2026-09-08", "2026-09-15", "2026-09-22", "2026-09-29"];
+  quotes.contracts = quotes.availableExpiries.flatMap(date => snapshot.contracts.slice(0, 2).map(quote => ({ ...quote, expiry: `${date}T20:15:00.000Z`, contractId: quote.contractId.replace("260908", date.slice(2).replaceAll("-", "")) })));
+  const input = request();
+  input.state.legs = quotes.contracts.map((quote, i) => marketLeg(quote, "long", 1, `wide-${i}`, "natural"));
+  input.state.stock = { shares: 100, entryPrice: 98 };
+  input.state.expiryIvShifts = [...new Set(input.state.legs.map(leg => leg.expiry))].map(expiry => ({ expiry, ivShift: .01 }));
+  const before = structuredClone(input);
+  const scenario = { scenarioDate: input.state.scenarioDate, scenarioSpot: 101, ivShift: .02, legIvShifts: input.state.legs.map((leg, i) => ({ legId: leg.id, ivShift: i / 100 })) };
+  for (const call of [scenarioCall([scenario]), { id: "wide-compare", type: "function", function: { name: "compare_position", arguments: JSON.stringify({ removeLegIds: input.state.legs.map(leg => leg.id) }) } }]) {
+    const normal = provider({ ...reply(), risk_classification: "not-exact" });
+    const fetcher = vi.fn<typeof fetch>(async (url, init): Promise<Response> => fetcher.mock.calls.length === 1 ? Response.json({ choices: [{ message: { tool_calls: [call] } }] }) : normal(url, init));
+    const result = await spar(input, "key", fetcher, context, quotes);
+    const tools = JSON.parse(String(fetcher.mock.calls[0][1]?.body)).tools;
+    const schema = tools.find((tool: any) => tool.function.name === call.function.name).function.parameters.properties;
+    if (call.function.name === "evaluate_scenarios") {
+      expect(schema.scenarios.maxItems).toBe(4);
+      expect(schema.scenarios.items.properties.legIvShifts.maxItems).toBe(8);
+      const point = result.calculated.requestedScenarios[0];
+      expect(point.legVolatilities).toHaveLength(8);
+      expect(point.metrics).toEqual(evaluateScenario({ ...input.state, ...scenario, ivShift: 0, expiryIvShifts: [], legs: input.state.legs.map((leg, i) => ({ ...leg, iv: leg.iv + .02 + .01 + i / 100 })) }));
+    } else {
+      expect(schema.removeLegIds.maxItems).toBe(8);
+      expect(result.calculated.positionComparison!.state.legs).toEqual([]);
+      expect(result.calculated.positionComparison!.state.stock).toEqual(input.state.stock);
+      expect(result.calculated.positionComparison!.removedLegIds).toHaveLength(8);
+    }
+    expect(input).toEqual(before);
+    expect(result.next_state.legs).toEqual(input.state.legs);
+  }
+  for (const call of [scenarioCall([{ ...scenario, legIvShifts: [...scenario.legIvShifts, { legId: "ninth", ivShift: 0 }] }]), { id: "bad-compare", type: "function", function: { name: "compare_position", arguments: JSON.stringify({ removeLegIds: [...input.state.legs.map(leg => leg.id), "ninth"] }) } }]) {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { tool_calls: [call] } }] }));
+    await expect(spar(input, "key", fetcher, context, quotes)).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledOnce();
+  }
+});
 it("keeps excluded holdings canonical while generation and verification price only included holdings", async () => {
   const input = request();
   const excluded = marketLeg(snapshot.contracts.find(c => c.type === "put")!, "short", 3, "excluded", "natural");

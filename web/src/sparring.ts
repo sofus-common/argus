@@ -3,6 +3,7 @@ import operationalReference from "../knowledge/options-operations-v1.json" with 
 import type { AnalysisObserver } from "./analysis-trace";
 import {
   TEMPLATES,
+  MAX_OPTION_LEGS,
   calculateStrategy,
   calculateConditionalAssignment,
   contractTermsFacts,
@@ -177,7 +178,7 @@ const LOT_SCENARIO_TOOLS = [{ type: "function", function: {
   parameters: { type: "object", additionalProperties: false, required: ["scenarios"], properties: { scenarios: { type: "array", minItems: 1, maxItems: 4, items: { type: "object", additionalProperties: false, required: ["spot", "date", "ivShift"], properties: { spot: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 }, date: { type: "string", format: "date-time" }, ivShift: { type: "number", minimum: -10, maximum: 10 } } } } } },
 } }];
 
-// ponytail: retain all 2016 four-leg weekly buckets within 2 MiB; use scoped retrieval if longer history exceeds this bound.
+// ponytail: retain all 2016 eight-leg weekly buckets within 2 MiB; use scoped retrieval if longer history exceeds this bound.
 const INTRADAY_DISCUSSION_BYTES = 2 * 1024 * 1024;
 
 export async function discussLotComparison(facts: LotDiscussionFacts, conversation: ConversationMessage[], apiKey: string, providerFetch: ProviderFetch = fetch, prompts: AnalysisPrompts = defaultAnalysisPrompts, observer?: AnalysisObserver): Promise<{ reply: LotDiscussionReply; requestedScenarios: ReturnType<typeof calculateLotScenarioComparison>[] }> {
@@ -377,13 +378,13 @@ const SCENARIO_TOOLS = [{ type: "function", function: {
   parameters: { type: "object", additionalProperties: false, required: ["scenarios"], properties: {
     scenarios: { type: "array", minItems: 1, maxItems: 4, items: { type: "object", additionalProperties: false, required: ["scenarioDate", "scenarioSpot", "ivShift"], properties: {
       scenarioDate: { type: "string", format: "date-time" }, scenarioSpot: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 }, ivShift: { type: "number", minimum: -10, maximum: 10 },
-      legIvShifts: { type: "array", maxItems: 4, items: { type: "object", additionalProperties: false, required: ["legId", "ivShift"], properties: { legId: { type: "string" }, ivShift: { type: "number", minimum: -10, maximum: 10 } } } },
+      legIvShifts: { type: "array", maxItems: MAX_OPTION_LEGS, items: { type: "object", additionalProperties: false, required: ["legId", "ivShift"], properties: { legId: { type: "string" }, ivShift: { type: "number", minimum: -10, maximum: 10 } } } },
     } } },
   } },
 } }];
 const POSITION_COMPARISON_TOOL = { type: "function", function: {
   name: "compare_position", description: "Read-only comparison of additional shares, excluded legs or an alternative quoted contract. Pair replaceLegId with replacementContractId from the snapshot. Replacement uses new quoted entry, not roll economics. Existing long shares retain weighted basis. No orders, closing proceeds, realized P/L or workspace changes; a nonzero stock holding may remain without options. Negative existing stock is unsupported.",
-  parameters: { type: "object", additionalProperties: false, properties: { additionalShares: { type: "integer", minimum: 1 }, purchasePrice: { type: "number", minimum: 0 }, removeLegIds: { type: "array", maxItems: 4, items: { type: "string" } }, replaceLegId: { type: "string" }, replacementContractId: { type: "string" }, scenarioSpot: { type: "number", exclusiveMinimum: 0, maximum: 1000000 }, scenarioDate: { type: "string" }, ivShift: { type: "number", minimum: -10, maximum: 10, description: "Total additive global IV shift in decimal units for BOTH positions; 0.05 means +5 percentage points. Replaces, not adds to, the captured global shift; expiry shifts remain." } } },
+  parameters: { type: "object", additionalProperties: false, properties: { additionalShares: { type: "integer", minimum: 1 }, purchasePrice: { type: "number", minimum: 0 }, removeLegIds: { type: "array", maxItems: MAX_OPTION_LEGS, items: { type: "string" } }, replaceLegId: { type: "string" }, replacementContractId: { type: "string" }, scenarioSpot: { type: "number", exclusiveMinimum: 0, maximum: 1000000 }, scenarioDate: { type: "string" }, ivShift: { type: "number", minimum: -10, maximum: 10, description: "Total additive global IV shift in decimal units for BOTH positions; 0.05 means +5 percentage points. Replaces, not adds to, the captured global shift; expiry shifts remain." } } },
 } };
 
 const CANDIDATE_TOOL = { type: "function", function: {
@@ -879,7 +880,7 @@ function comparePosition(state: StrategyState, value: unknown, snapshot?: Market
   const buying = args.additionalShares !== undefined || args.purchasePrice !== undefined;
   if (buying && (!Number.isSafeInteger(args.additionalShares) || (args.additionalShares as number) <= 0 || typeof args.purchasePrice !== "number" || !Number.isFinite(args.purchasePrice) || args.purchasePrice < 0)) throw new Error("Invalid share purchase");
   const removedLegIds = args.removeLegIds === undefined ? [] : args.removeLegIds;
-  if (!Array.isArray(removedLegIds) || removedLegIds.length > 4 || new Set(removedLegIds).size !== removedLegIds.length || removedLegIds.some(id => typeof id !== "string" || !state.legs.some(leg => leg.id === id)) || (!buying && !replacing && !removedLegIds.length)) throw new Error("Invalid excluded legs");
+  if (!Array.isArray(removedLegIds) || removedLegIds.length > MAX_OPTION_LEGS || new Set(removedLegIds).size !== removedLegIds.length || removedLegIds.some(id => typeof id !== "string" || !state.legs.some(leg => leg.id === id)) || (!buying && !replacing && !removedLegIds.length)) throw new Error("Invalid excluded legs");
   let next = structuredClone(state);
   let replacement: PositionComparison["replacement"];
   if (replacing) {
@@ -911,7 +912,7 @@ function evaluateRequestedScenarios(state: StrategyState, value: unknown, snapsh
     if (!item || Object.keys(item).some(key => !["scenarioDate", "scenarioSpot", "ivShift", "legIvShifts"].includes(key)) || typeof item.scenarioDate !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(item.scenarioDate) || !Number.isFinite(Date.parse(item.scenarioDate)) || new Date(item.scenarioDate).toISOString() !== (item.scenarioDate.includes(".") ? item.scenarioDate : item.scenarioDate.replace("Z", ".000Z")) || typeof item.scenarioSpot !== "number" || !Number.isFinite(item.scenarioSpot) || item.scenarioSpot <= 0 || item.scenarioSpot > 1_000_000 || typeof item.ivShift !== "number" || !Number.isFinite(item.ivShift) || Math.abs(item.ivShift) > 10) throw new Error("Invalid scenario tool request");
     const legIvShifts: Array<{ legId: string; ivShift: number }> = [];
     if (item.legIvShifts !== undefined) {
-      if (!Array.isArray(item.legIvShifts) || item.legIvShifts.length > 4) throw new Error("Invalid scenario tool request");
+      if (!Array.isArray(item.legIvShifts) || item.legIvShifts.length > MAX_OPTION_LEGS) throw new Error("Invalid scenario tool request");
       for (const raw of item.legIvShifts) {
         const shift = record(raw);
         if (!shift || Object.keys(shift).length !== 2 || typeof shift.legId !== "string" || !state.legs.some(leg => leg.id === shift.legId) || legIvShifts.some(leg => leg.legId === shift.legId) || typeof shift.ivShift !== "number" || !Number.isFinite(shift.ivShift) || Math.abs(shift.ivShift) > 10) throw new Error("Invalid scenario tool request");

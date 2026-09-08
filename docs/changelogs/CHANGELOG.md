@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Integrated eight-leg/four-expiry controls and all 200 quotes into the builder.
+  Optional dates are omitted from requests; duplicate dates and ninth legs are
+  rejected. Scenario IV adjustments and read-only leg-removal comparisons use
+  the same eight-leg limit, while scenario requests remain limited to four.
+  Immutable prompt v11/engine v5 passed all 617 offline tests before local
+  activation and digest readback. TypeScript, build, numerical IV checks and
+  independent review passed. Eight-leg American surfaces and workspace curves
+  reconcile without changing pricing formulas. Desktop/mobile browser checks
+  cover construction, exclusion, comparison, save/reopen, held-cost refresh and
+  Undo using synthetic data. One mobile capture-test timeout passed on an
+  unchanged rerun; sustained live-data and full AI-task quality remain unproven.
+  No deployment or full product-parity claim.
+
 - Qualified eight-leg history payloads: all 2,016 weekly buckets and all 31 daily
   dates (including stock) survive both discussion passes without truncation.
   Existing discussion limits remain sufficient for these fixtures. Draft recovery

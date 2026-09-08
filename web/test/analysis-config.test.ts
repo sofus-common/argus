@@ -60,6 +60,7 @@ it("rejects tampering, incompatible engines and invalid evaluation dates without
     { engine: "analysis-contract-v1" },
     { engine: "analysis-contract-v2" },
     { engine: "analysis-contract-v3" },
+    { engine: "analysis-contract-v4" },
     { evaluated: "not-a-date" },
     { json: JSON.stringify({ ...defaultAnalysisPrompts, version: "wrong-version" }) },
     { json: JSON.stringify({ ...defaultAnalysisPrompts, prompts: {} }) },

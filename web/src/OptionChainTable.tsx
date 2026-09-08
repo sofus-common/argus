@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { MarketContract, MarketSnapshot, StrategyState } from './options'
+import { MAX_CHAIN_CONTRACTS, MAX_OPTION_LEGS, type MarketContract, type MarketSnapshot, type StrategyState } from './options'
 
 const price = (value: number) => value.toFixed(2)
 const count = (value?: number) => value === undefined ? '—' : value.toLocaleString('en-US')
@@ -9,7 +9,7 @@ function StrikeActivity({ snapshot, onDiscuss, disabled }: { snapshot: MarketSna
   const [metric, setMetric] = useState<'volume' | 'openInterest' | 'iv'>('volume')
   const [expiry, setExpiry] = useState('')
   const [inspection, setInspection] = useState<{ window: string; strike: number } | null>(null)
-  const contracts = snapshot.contracts.slice(0, 100)
+  const contracts = snapshot.contracts.slice(0, MAX_CHAIN_CONTRACTS)
   const expiries = [...new Set(contracts.map(contract => contract.expiry))].sort()
   const selectedExpiry = expiries.includes(expiry) ? expiry : expiries[0]
   const quoted = contracts.filter(contract => contract.expiry === selectedExpiry)
@@ -87,15 +87,15 @@ export function OptionChainTable({ state, snapshot, onSelect, onAdd, onCompare, 
         <label>Sort contracts<select aria-label="Sort contracts" value={sort} onChange={event => setSort(event.target.value)}><option value="strike">Strike ↑</option><option value="spread">Width % ↑</option><option value="volume">Volume ↓</option><option value="openInterest">Open interest ↓</option></select></label>
       </div>
       <div className="chain-table-scroll" tabIndex={0} role="region" aria-label="Quoted option contracts">
-        <table><caption>{Math.min(filtered.length, 100)} of {filtered.length} matching quotes · prices and widths in USD per share</caption>
+        <table><caption>{Math.min(filtered.length, MAX_CHAIN_CONTRACTS)} of {filtered.length} matching quotes · prices and widths in USD per share</caption>
           <thead><tr>{['Contract', 'Bid', 'Ask', 'Mid', 'Width $', 'Width %', 'IV %', 'Volume', 'OI', 'Quote timestamp', 'Selection'].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
-          <tbody>{filtered.slice(0, 100).map(contract => {
+          <tbody>{filtered.slice(0, MAX_CHAIN_CONTRACTS).map(contract => {
             const held = state.legs.find(leg => leg.contractId === contract.contractId)
             const selected = target?.contractId === contract.contractId
             const expired = Date.parse(contract.expiry) < Date.parse(state.scenarioDate)
-            const full = !!adding && state.legs.length >= 4
+            const full = !!adding && state.legs.length >= MAX_OPTION_LEGS
             const disabled = (!adding && !target) || !!held || expired || full || snapshot.underlying !== state.underlying
-            const reason = selected ? 'Selected' : held ? `Used by ${held.id}` : expired ? 'Before scenario' : full ? '4-leg limit' : adding ? `Add ${adding}` : 'Use contract'
+            const reason = selected ? 'Selected' : held ? `Used by ${held.id}` : expired ? 'Before scenario' : full ? `${MAX_OPTION_LEGS}-leg limit` : adding ? `Add ${adding}` : 'Use contract'
             return <tr key={contract.contractId} className={selected ? 'chain-contract-selected' : undefined}>
               <th scope="row"><strong>{contract.strike} {contract.type}</strong><small>{contract.expiry.slice(0, 10)}</small></th>
               <td>{price(contract.bid)}</td><td>{price(contract.ask)}</td><td>{price((contract.bid + contract.ask) / 2)}</td><td>{price(contract.ask - contract.bid)}</td><td>{widthPercent(contract).toFixed(1)}%</td><td>{price(contract.iv * 100)}%</td><td>{count(contract.volume)}</td><td>{count(contract.openInterest)}</td><td><time dateTime={contract.quoteAsOf}>{contract.quoteAsOf}</time></td>
