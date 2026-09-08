@@ -6,7 +6,7 @@ import { createSavedStore, savedPosition, SavedStoreError } from "./saved-strate
 import { projectPosition, recordClose, recordCloseVoid, recordPriceCorrection, valuePosition, type CloseRequest, type CloseVoid, type PriceCorrection } from "./position-lifecycle";
 import { projectPositionLots, upgradePositionLots, valuePositionLots, recordLotTransaction, recordLotPriceCorrection, recordLotOpeningPriceCorrection, recordLotCloseVoid, type OpeningPriceCorrection, type LotTransaction } from "./position-lots";
 import { createMarketContextLoader, type MarketBindings } from "./market-context";
-import { createBrokerContextLoader, createThetaRequest, searchSymbols, type BrokerBindings } from "./broker-context";
+import { createBrokerContextLoader, createThetaRequest, thetaRelayConfig, searchSymbols, type BrokerBindings } from "./broker-context";
 import { buildPriceHistory, loadPriceHistory } from "./price-history";
 import { loadPositionPerformance, preparePositionPerformance, validatePerformanceRange } from "./position-performance";
 import { buildIntradayHistory, buildIvHistory } from "./intraday-history";
@@ -33,7 +33,7 @@ const MAX_REQUEST_BYTES = 128 * 1024;
 function traceContext(c: Context<{ Bindings: Bindings; Variables: { session: Session } }>, kind: "sparring" | "lots" | "history" | "intraday", requestId: string) {
   const env = c.env;
   return { owner: c.get("session").owner, kind, requestId,
-    secrets: [env.OPENROUTER_API_KEY, env.ALPACA_API_KEY, env.ALPACA_SECRET_KEY, env.FRED_API_KEY, env.EXA_AI_KEY, env.TASTYTRADE_CLIENT_ID, env.TASTYTRADE_CLIENT_SECRET, env.TASTYTRADE_REFRESH_TOKEN].filter((value): value is string => !!value),
+    secrets: [env.OPENROUTER_API_KEY, env.ALPACA_API_KEY, env.ALPACA_SECRET_KEY, env.FRED_API_KEY, env.EXA_AI_KEY, env.TASTYTRADE_CLIENT_ID, env.TASTYTRADE_CLIENT_SECRET, env.TASTYTRADE_REFRESH_TOKEN, env.THETA_ACCESS_CLIENT_ID, env.THETA_ACCESS_CLIENT_SECRET].filter((value): value is string => !!value),
     status: (id: string, status: "recording" | "complete" | "unavailable") => { c.header("X-ARGUS-Trace-Id", id); c.header("X-ARGUS-Trace-Status", status); },
   };
 }
@@ -165,7 +165,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
   app.post("/api/strategies/:id/performance/:action?", async c => {
     const discussion = c.req.param("action") === "discuss";
     if (c.req.param("action") && !discussion) return c.notFound();
-    if (!c.get("session").local) return c.json({ error: { code: "history_local_only", message: "Hosted history requires a configured relay and shared provider limits." } }, 503);
+    if (!c.get("session").local && !thetaRelayConfig(c.env)) return c.json({ error: { code: "history_local_only", message: "Hosted history requires a configured relay and shared provider limits." } }, 503);
     let body: { revision: number; range: { start: string; end: string }; selectedDate?: string; request_id?: string; conversation?: unknown };
     try {
       body = await readJson(c.req.raw) as typeof body;
@@ -427,7 +427,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
   app.post("/api/price-history/:action?", async c => {
     const discussion = c.req.param("action") === "discuss";
     if (c.req.param("action") && !discussion) return c.notFound();
-    if (!c.get("session").local) return c.json({ error: { code: "history_local_only", message: "Hosted history requires a configured relay and shared provider limits." } }, 503);
+    if (!c.get("session").local && !thetaRelayConfig(c.env)) return c.json({ error: { code: "history_local_only", message: "Hosted history requires a configured relay and shared provider limits." } }, 503);
     let body: any;
     try { body = await readJson(c.req.raw); } catch { return c.json({ error: { code: "invalid_history_request" } }, 400); }
     if (!body || typeof body !== "object" || Object.keys(body).sort().join() !== (discussion ? "conversation,range,request_id,selectedDate,state" : "range,state") || !body.range || typeof body.range !== "object" || Object.keys(body.range).sort().join() !== "end,start") return c.json({ error: { code: "invalid_history_request" } }, 400);
@@ -683,3 +683,4 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
 
 export default createApp();
 export { QuoteFeed } from "./quote-feed";
+export { ThetaHistory } from "./theta-relay";

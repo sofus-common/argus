@@ -6,9 +6,9 @@
   "workers_dev": false,
   "preview_urls": false,
   "durable_objects": {
-    "bindings": [{ "name": "FEED", "class_name": "QuoteFeed" }]
+    "bindings": [{ "name": "FEED", "class_name": "QuoteFeed" }, { "name": "THETA_RELAY", "class_name": "ThetaHistory" }]
   },
-  "migrations": [{ "tag": "v1-feed", "new_sqlite_classes": ["QuoteFeed"] }],
+  "migrations": [{ "tag": "v1-feed", "new_sqlite_classes": ["QuoteFeed"] }, { "tag": "v2-theta", "new_sqlite_classes": ["ThetaHistory"] }],
   "secrets": {
     "required": ["OPENROUTER_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "FRED_API_KEY", "EXA_AI_KEY", "TASTYTRADE_CLIENT_ID", "TASTYTRADE_CLIENT_SECRET", "TASTYTRADE_REFRESH_TOKEN", "THETADATA_TERMINAL_URL"]
   },

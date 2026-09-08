@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added an optional shared Theta history relay for private Cloudflare operation.
+  One fixed-name Durable Object validates bounded read-only catalog/EOD requests,
+  persists pacing and restart recovery leases, and authenticates only to a fixed
+  HTTPS origin. Partial configuration fails closed; concurrent batches, redirects
+  and oversized responses are rejected. Saved performance and contract history
+  retain owner/revision checks and unchanged ledgers. Verified 126 focused tests,
+  TypeScript/build and independent review; hosted-shaped fixtures distinguish
+  $195 recorded P/L from $400 inventory value. Actual Tunnel/Access provisioning,
+  deployed persistence and live Theta transport remain unverified. No deployment,
+  new inference calls or dependencies; direct local and hosted terminal use must
+  remain mutually exclusive to preserve provider admission limits.
+
 - Added read-only conversation for saved historical position performance. Each
   question reloads server-owned recorded history, checks the saved revision before
   and after provider work, and validates refreshed accounting before displaying

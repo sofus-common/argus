@@ -112,6 +112,46 @@ local database binding. Do not use `wrangler.local.json` as a deployment config.
 Keep the dev server bound to loopback; local development is not a hosted login.
 Release verification must test every enabled hostname with and without Access.
 
+Hosted Theta history now has a separate `THETA_RELAY` Durable Object binding.
+It is inactive until server configuration supplies `THETA_RELAY_ORIGIN` (a fixed
+HTTPS origin), `THETA_ACCESS_CLIENT_ID` and `THETA_ACCESS_CLIENT_SECRET`. Store
+the service credentials as Worker secrets. Incomplete configuration fails closed;
+it never falls back to a local terminal. Every hosted catalog/EOD request uses
+the same `theta-terminal` object, including across users and credential rotation.
+The object rejects concurrent batches and persists request-start spacing and a
+recovery lease. Timeouts cannot prove the terminal stopped processing upstream.
+
+Provisioning is not performed here. Use a dedicated Cloudflare Tunnel hostname
+with an Access **Service Auth** policy permitting only the dedicated service token.
+The terminal must remain bound to loopback/internal networking. Tunnel ingress
+must allow only this exact read-path pattern, followed by a catch-all 404:
+
+```yaml
+ingress:
+  - hostname: theta.example.com
+    path: ^/v3/(option/(list/expirations|history/eod)|stock/history/eod)$
+    service: http://127.0.0.1:25503
+    originRequest:
+      access:
+        required: true
+        teamName: YOUR_TEAM
+        audTag:
+          - YOUR_THETA_ACCESS_AUDIENCE
+  - service: http_status:404
+```
+
+Replace the placeholders only during authorized setup. This follows Cloudflare's
+[service-token](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
+and [Tunnel ingress](https://developers.cloudflare.com/tunnel/advanced/local-management/configuration-file/)
+controls; it is not evidence that the hostname is protected. Before enabling use,
+verify absent/wrong tokens, every non-allowlisted path, direct-origin denial and
+two authenticated users' isolated histories. Do not run direct local Theta calls
+or local relay emulators alongside hosted use: neither shares the deployed
+admission state. Local development does not automatically load relay credentials
+from `.env`; never inject real relay credentials into local emulators while the
+hosted service uses that terminal. Local and hosted tests with
+mocked transport do not establish real Tunnel security or Theta availability.
+
 Analysis uses `google/gemini-3.8-flash` through OpenRouter with medium reasoning,
 no provider fallback and data collection denied. ZDR is not required, as explicitly
 requested by the owner. Secrets remain server-side. Calculated risk and payoff

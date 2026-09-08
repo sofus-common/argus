@@ -1,10 +1,32 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createThetaRequest } from "../src/broker-context";
+import { createThetaRequest, thetaRelayConfig, validateThetaPaths } from "../src/broker-context";
 
 const env = { THETADATA_TERMINAL_URL: "http://127.0.0.1:25503" };
 const paths = ["/v3/option/list/expirations?symbol=SPY&format=json", "/v3/option/history/eod?symbol=SPY&format=json", "/v3/stock/history/eod?symbol=SPY&format=json"];
 const json = (value: unknown) => new Response(JSON.stringify(value));
 afterEach(() => vi.useRealTimers());
+
+it("routes configured clients through one relay name without credential-dependent partitions or loopback fallback", async () => {
+  const direct = vi.fn<typeof fetch>();
+  const relayFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(JSON.parse(String(init?.body))).toEqual({ paths: [paths[0]] });
+    expect(JSON.stringify(init)).not.toContain('secret-token');
+    return Response.json([{ response: [] }]);
+  });
+  const getByName = vi.fn(() => ({ fetch: relayFetch }));
+  const configured = { THETA_RELAY: { getByName } as unknown as DurableObjectNamespace, THETA_RELAY_ORIGIN: 'https://theta.example.com', THETA_ACCESS_CLIENT_ID: 'client', THETA_ACCESS_CLIENT_SECRET: 'secret-token' };
+  for (const secret of ['secret-token', 'rotated-token']) expect(await createThetaRequest(direct)({ ...configured, THETA_ACCESS_CLIENT_SECRET: secret }, [paths[0]])).toEqual([{ response: [] }]);
+  expect(getByName.mock.calls).toEqual([['theta-terminal'], ['theta-terminal']]);
+  await expect(createThetaRequest(direct)({ ...env, THETA_RELAY_ORIGIN: configured.THETA_RELAY_ORIGIN }, [paths[0]])).rejects.toThrow();
+  expect(direct).not.toHaveBeenCalled();
+  expect(thetaRelayConfig({})).toBeNull();
+});
+
+it("rejects hosted bulk queries, duplicate parameters and invalid dates before relay admission", () => {
+  const valid = '/v3/option/history/eod?symbol=SPY&start_date=20260901&end_date=20260904&expiration=20260918&strike=100&right=call&format=json';
+  expect(() => validateThetaPaths([valid, paths[0]])).not.toThrow();
+  for (const path of [valid + '&symbol=QQQ', valid + '&limit=0', valid.replace('symbol=SPY', 'symbol=*'), valid.replace('20260901', '20260230'), valid.replace('20260904', '20261004'), valid.replace('strike=100', 'strike=*'), paths[1]]) expect(() => validateThetaPaths([path])).toThrow();
+});
 
 it("serializes bounded batches and retains provider-start spacing across batches", async () => {
   vi.useFakeTimers(); vi.setSystemTime(0);

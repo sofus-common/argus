@@ -88,6 +88,45 @@ it("refuses hosted history before loopback or storage access even with a valid l
   expect(provider).toHaveBeenCalledTimes(1);
 });
 
+it('loads owned hosted performance through shared relay without exposing credentials or changing the ledger', async () => {
+  const snapshot: MarketSnapshot = { id: 'hosted-history', underlying: 'SPY', source: 'Tastytrade', retrievedAt: '2026-09-01T18:00:00Z', spot: 100, spotAsOf: '2026-09-01T18:00:00Z', availableExpiries: ['2026-09-11'], contracts: [{ contractId: 'SPY   260911C00100000', type: 'call', strike: 100, expiry: '2026-09-11T20:15:00Z', multiplier: 100, bid: 2, ask: 2, iv: 0.2, quoteAsOf: '2026-09-01T18:00:00Z' }] };
+  const store = createSavedStore(db), state = createMarketStrategy('long-call', snapshot);
+  state.pricing!.entryMode = 'fixed'; state.feeAllowance = 5;
+  const saved = await store.create(JSON.stringify([issuer, subjectOne]), 'Hosted performance', state, snapshot);
+  const relayFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    expect(body.paths[0]).toContain('/v3/option/history/eod?');
+    expect(body.paths[0]).toContain('strike=100');
+    const row = { created: '2026-09-04T17:15:00', last_trade: '2026-09-04T16:00:00', bid: 3, ask: 5 };
+    return Response.json(body.paths.map((path: string) => path.startsWith('/v3/option/') ? { response: [{ contract: { symbol: 'SPY', expiration: '2026-09-11', strike: 100, right: 'CALL' }, data: [row] }] } : { response: [{ ...row, bid: 99, ask: 101 }] }));
+  });
+  const settings = { ...bindings(), THETA_RELAY: { getByName: vi.fn(() => ({ fetch: relayFetch })) } as unknown as DurableObjectNamespace, THETA_RELAY_ORIGIN: 'https://theta.example.com', THETA_ACCESS_CLIENT_ID: 'relay-client', THETA_ACCESS_CLIENT_SECRET: 'private-relay-secret' };
+  const provider = vi.fn<typeof fetch>(async input => {
+    expect(String(input)).toBe(`${issuer}/cdn-cgi/access/certs`);
+    return Response.json({ keys: [jwk] });
+  });
+  const app = createApp(provider), path = `/api/strategies/${saved.id}/performance`, body = { revision: 1, range: { start: '2026-09-04', end: '2026-09-04' } };
+  expect((await call(app, path, 'POST', body, jwtTwo, settings)).status).toBe(404);
+  expect((await call(app, path, 'POST', { ...body, revision: 2 }, jwtOne, settings)).status).toBe(409);
+  expect(relayFetch).not.toHaveBeenCalled();
+  const response = await call(app, path, 'POST', body, jwtOne, settings);
+  expect(response.status).toBe(200);
+  const output = await response.json() as any;
+  expect(output.performance.rows[0].combinedPnl).toBe(195);
+  expect(JSON.stringify(output)).not.toContain('private-relay-secret');
+  expect(await store.get(JSON.stringify([issuer, subjectOne]), saved.id)).toEqual(saved);
+  expect(relayFetch).toHaveBeenCalledTimes(1);
+  const reopened = await (await call(app, `/api/strategies/${saved.id}`, 'GET', undefined, jwtOne, settings)).json() as any;
+  const historyBody = { state: reopened.record.state, range: body.range };
+  expect((await call(app, '/api/price-history', 'POST', historyBody, jwtTwo, settings)).status).toBe(409);
+  expect(relayFetch).toHaveBeenCalledTimes(1);
+  const history = await call(app, '/api/price-history', 'POST', historyBody, jwtOne, settings);
+  expect(history.status).toBe(200);
+  expect((await history.json() as any).history.rows[0].value.mid).toBe(400);
+  expect(relayFetch).toHaveBeenCalledTimes(2);
+  expect(await store.get(JSON.stringify([issuer, subjectOne]), saved.id)).toEqual(saved);
+});
+
 it("exports verbatim owned saved revisions without restoring quotes or converting history", async () => {
   const provider = vi.fn<typeof fetch>(async url => {
     if (String(url) !== `${issuer}/cdn-cgi/access/certs`) throw new Error("Unexpected provider call");
