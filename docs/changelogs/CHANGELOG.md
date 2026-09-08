@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Reverified the local saved-position lifecycle under unchanged active V16:
+  synthetic import, changed-strike/expiry roll, close, stale-revision rejection,
+  daily reconciliation, AI explanation, export and revisit. Independent review
+  confirmed gross realized profit less one allowance, unchanged next-day net P/L,
+  unchanged saved accounting after discussion, and cleanup of the test record.
+  Two inference calls used 3,403 reported tokens; no prompt/runtime changes.
+  Separately, the real-price browser comparison task stopped before inference
+  on stale quotes and a failed refresh, preserving held costs. That full task,
+  live historical marks and representative session reliability remain open.
+
 - Verified actual local feed disconnect/reconnect on the same held-cost position:
   disconnect cleared marks, reconnect restored coverage, entry costs stayed fixed,
   and automatic repricing remained off. Missing bid/ask source timestamps kept
