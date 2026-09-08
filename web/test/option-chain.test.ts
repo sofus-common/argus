@@ -8,6 +8,17 @@ const db = (workerEnv as { DB: D1Database }).DB;
 beforeAll(async () => { await db.batch(migration.split(";").filter(sql => sql.trim()).map(sql => db.prepare(sql))); });
 const env = { DB: db, TASTYTRADE_CLIENT_SECRET: "secret", TASTYTRADE_REFRESH_TOKEN: "refresh" };
 const dates = ["2099-09-18", "2099-09-25"];
+it('restores cash-index terms without converting equity-shaped captures into index levels', async () => {
+  const store = createOptionChainStore(fixture());
+  const equity = await store.load(env, undefined, 'index-owner');
+  const index = { ...equity, underlying: 'XSP', underlyingKind: 'cash-index' as const, indexSourceTime: equity.retrievedAt, spotAsOf: equity.retrievedAt,
+    contractTerms: { exerciseStyle: 'European' as const, settlement: 'cash' as const, multiplier: 100 as const, settlementSession: 'PM' as const },
+    contracts: equity.contracts.map(c => ({ ...c, contractId: c.contractId.replace('SPY', 'XSP') })) };
+  const restored = await store.restore(index, env, 'index-owner');
+  expect(await store.get(restored.id, env, 'index-owner')).toEqual(restored);
+  await expect(store.capture(restored, [restored.contracts[0].contractId], streamed(restored.contracts[0].contractId), env, 'index-owner')).rejects.toThrow();
+});
+
 it('reports bounded load failure stages without raw provider or storage errors', async () => {
   await expect(createOptionChainStore(fixture('iv')).load(env)).rejects.toMatchObject({ stage: 'quotes', reason: 'Missing volatility' });
   await expect(createOptionChainStore(fixture('crossed')).load(env)).rejects.toMatchObject({ stage: 'quotes', reason: 'Crossed quote' });

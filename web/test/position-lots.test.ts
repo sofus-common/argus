@@ -15,6 +15,22 @@ const asset = (base = fixture()): LotAsset => {
 };
 const transaction = (patch: Partial<LotTransaction> = {}): LotTransaction => ({ id: "tx", at, recordedAt: at, closes: [], opens: [], ...patch });
 
+it('retains cash-index kind across ledger round trips and rejects stock openings', () => {
+  const state = createStrategy('long-call');
+  state.underlying = 'XSP'; state.underlyingKind = 'cash-index';
+  state.legs = state.legs.map(leg => ({ ...leg, contractId: `XSP   ${leg.expiry.slice(2, 10).replaceAll('-', '')}C${String(leg.strike * 1000).padStart(8, '0')}` }));
+  state.pricing = { mode: 'market', snapshotId: 'index', basis: 'mid', entryMode: 'fixed' };
+  const base = createPosition(state), ledger = upgradePositionLots(base);
+  const opened = recordLotTransaction(ledger, transaction({ opens: [{ id: 'added', asset: asset(base), side: 'long', quantity: 1, entryPrice: 3 }] }));
+  const restored = JSON.parse(JSON.stringify(opened));
+  expect(restored.legacy.initial.underlyingKind).toBe('cash-index');
+  expect(projectPositionLots(restored).lots).toHaveLength(2);
+  const snapshot: MarketSnapshot = { id: 'index', underlying: 'XSP', underlyingKind: 'cash-index', contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, source: 'Tastytrade', spot: state.spot, retrievedAt: at, spotAsOf: at, indexSourceTime: at, availableExpiries: [state.legs[0].expiry.slice(0, 10)], contracts: state.legs.map(leg => ({ contractId: leg.contractId, type: leg.type, strike: leg.strike, expiry: leg.expiry, multiplier: 100, bid: 3, ask: 5, iv: leg.iv, quoteAsOf: at })) };
+  expect(valuePositionLots(restored, snapshot, 'mid').remainingState?.underlyingKind).toBe('cash-index');
+  expect(() => valuePositionLots(restored, { ...snapshot, underlyingKind: undefined, contractTerms: undefined }, 'mid')).toThrow();
+  expect(() => recordLotTransaction(ledger, transaction({ opens: [{ id: 'stock', asset: { kind: 'stock', symbol: 'XSP' }, side: 'long', quantity: 1, entryPrice: 100 }] }))).toThrow();
+});
+
 it("reconstructs dated holdings through a roll using latest corrected costs and close prices", () => {
   const base = fixture(); base.initial.stock = { shares: -10, entryPrice: 100 }; base.initial.excludedLegIds = [base.initial.legs[0].id];
   const legacy = recordClose(base, { id: "legacy-close", assetId: `option:${base.initial.legs[0].id}`, quantity: 1, price: 3, at });

@@ -70,7 +70,8 @@ export interface MarketContract {
 
 export interface MarketSnapshot {
   imported?: true;
-  contractTerms?: { exerciseStyle: "American"; settlement: "physical-shares"; sharesPerContract: 100; settlementSession: "PM" };
+  underlyingKind?: "cash-index";
+  contractTerms?: { exerciseStyle: "American"; settlement: "physical-shares"; sharesPerContract: 100; settlementSession: "PM" } | { exerciseStyle: "European"; settlement: "cash"; multiplier: 100; settlementSession: "PM" };
   underlying: string;
   strikeCenter?: number;
   historical?: true;
@@ -78,6 +79,7 @@ export interface MarketSnapshot {
   source: "Tastytrade";
   captureSource?: "DXLink";
   spotSourceTimes?: { bid: string; ask: string };
+  indexSourceTime?: string;
   retrievedAt: string;
   spot: number;
   spotAsOf: string;
@@ -86,6 +88,7 @@ export interface MarketSnapshot {
 }
 
 export interface StrategyState {
+  underlyingKind?: "cash-index";
   valuationModel?: "european-bsm-v1" | "american-crr-1024-v1";
   id: string;
   version: number;
@@ -418,6 +421,7 @@ export function createMarketStrategy(requestedId: TemplateId, snapshot: MarketSn
   }
   const state: StrategyState = {
     valuationModel: "european-bsm-v1",
+    ...(snapshot.underlyingKind ? { underlyingKind: snapshot.underlyingKind } : {}),
     id: requestedId, version: 1, name: definition.name, underlying: snapshot.underlying, spot: snapshot.spot,
     valuationTimestamp: snapshot.retrievedAt, rate: 0.04, dividendYield: 0.012,
     scenarioDate: snapshot.retrievedAt, scenarioSpot: snapshot.spot, ivShift: 0, legs,
@@ -439,6 +443,7 @@ export function validateMarketConstruction(state: StrategyState, snapshot: Marke
 
 function validateMarketPosition(state: StrategyState, snapshot: MarketSnapshot, errors: string[]): string[] {
   if (state?.underlying !== snapshot.underlying) errors.push("market underlying must match the snapshot");
+  if (state?.underlyingKind !== snapshot.underlyingKind || snapshot.underlyingKind === 'cash-index' && !validContractTerms(snapshot)) errors.push("market instrument kind and contract terms must match");
   if (!state || !state.pricing || state.pricing.mode !== "market") return [...errors, "market pricing metadata is required"];
   if (state.pricing.snapshotId !== snapshot.id) errors.push("market snapshot does not match; refresh required");
   if (state.pricing.historical !== snapshot.historical) errors.push("historical quote provenance does not match");
@@ -454,12 +459,26 @@ function validateMarketPosition(state: StrategyState, snapshot: MarketSnapshot, 
   return errors;
 }
 
+export function validContractTerms(snapshot: MarketSnapshot): boolean {
+  const terms = snapshot.contractTerms;
+  if (snapshot.underlyingKind !== undefined && snapshot.underlyingKind !== "cash-index") return false;
+  if (terms === undefined) return snapshot.underlyingKind === undefined;
+  if (!terms || typeof terms !== "object" || Array.isArray(terms) || terms.settlementSession !== "PM") return false;
+  return snapshot.underlyingKind === "cash-index"
+    ? Object.keys(terms).sort().join() === "exerciseStyle,multiplier,settlement,settlementSession" && terms.exerciseStyle === "European" && terms.settlement === "cash" && terms.multiplier === 100
+    : Object.keys(terms).sort().join() === "exerciseStyle,settlement,settlementSession,sharesPerContract" && terms.exerciseStyle === "American" && terms.settlement === "physical-shares" && terms.sharesPerContract === 100;
+}
+
 export function contractTermsFacts(snapshot?: MarketSnapshot) {
   if (snapshot?.imported) return { status: "unknown" as const, basis: "Imported file metadata is unverified; no provider-verified contract terms are available." };
   const terms = snapshot?.contractTerms;
-  if (!terms || terms.exerciseStyle !== "American" || terms.settlement !== "physical-shares" || terms.sharesPerContract !== 100 || terms.settlementSession !== "PM") {
+  if (!snapshot || !terms || !validContractTerms(snapshot)) {
     return { status: "unknown" as const, basis: "Supported contract terms are unavailable; do not infer exercise style or settlement from the underlying symbol or valuation model." };
   }
+  if (terms.settlement === "cash") return {
+    ...terms, underlying: snapshot.underlying, status: "provider-verified-standard-window" as const,
+    basis: "Recorded European PM cash-delivery contract checks with a 100 cash multiplier. Index values are not executable shares or official settlement values. No early exercise, physical assignment or automatic settlement cashflows are modeled. Historical terms are not a current provider check; broker exercise deadlines are unknown.",
+  };
   return {
     exerciseStyle: terms.exerciseStyle, settlement: terms.settlement, sharesPerContract: terms.sharesPerContract, settlementSession: terms.settlementSession,
     underlying: snapshot!.underlying, status: "provider-verified-standard-window" as const,
@@ -469,7 +488,7 @@ export function contractTermsFacts(snapshot?: MarketSnapshot) {
 
 export function calculateConditionalAssignment(state: StrategyState, snapshot?: MarketSnapshot) {
   const assignmentTerms = contractTermsFacts(snapshot);
-  const scenarios = snapshot && !snapshot.historical && assignmentTerms.status === "provider-verified-standard-window" && validateMarketStrategy(state, snapshot).length === 0
+  const scenarios = snapshot && !snapshot.historical && assignmentTerms.status === "provider-verified-standard-window" && assignmentTerms.settlement === "physical-shares" && validateMarketStrategy(state, snapshot).length === 0
     ? state.legs.filter(leg => leg.side === "short").map(leg => {
       const shareChange = (leg.type === "call" ? -1 : 1) * leg.contracts * leg.multiplier;
       const resultingShares = (state.stock?.shares ?? 0) + shareChange, grossStrikeCashflow = -shareChange * leg.strike;
@@ -553,6 +572,7 @@ export function mergeAnalysisProposal(state: StrategyState, proposal: StrategySt
   const included = projectAnalysisPosition(state);
   if (!included) throw new Error("Include holdings before proposing changes");
   assertValid(proposal);
+  if (proposal.underlyingKind !== state.underlyingKind) throw new Error("Proposal cannot change instrument kind");
   if (proposal.id !== state.id || proposal.version !== state.version + 1) throw new Error("Proposal identity or version mismatch");
   const excluded = state.legs.filter(leg => state.excludedLegIds?.includes(leg.id));
   if (!excluded.length) return structuredClone(proposal);
@@ -575,6 +595,8 @@ export function mergeAnalysisProposal(state: StrategyState, proposal: StrategySt
 function validatePosition(state: StrategyState, construction: boolean): string[] {
   const errors: string[] = [];
   if (!state || typeof state !== "object") return ["strategy must be an object"];
+  if (state.underlyingKind !== undefined && state.underlyingKind !== "cash-index") errors.push("unsupported underlying kind");
+  if (state.underlyingKind === "cash-index" && (state.valuationModel !== "european-bsm-v1" || state.stock !== undefined)) errors.push("cash-index positions require European valuation and cannot hold shares");
   if (state.valuationModel !== undefined && state.valuationModel !== "european-bsm-v1" && state.valuationModel !== "american-crr-1024-v1") errors.push("unsupported valuation model");
   if (state.feeAllowance !== undefined && (!finite(state.feeAllowance) || state.feeAllowance < 0)) errors.push("cost allowance must be finite and non-negative");
   const market = state.pricing?.mode === "market";
@@ -632,7 +654,7 @@ function validatePosition(state: StrategyState, construction: boolean): string[]
     if (!finite(item.strike) || item.strike <= 0) errors.push(`${item.id}: strike must be positive and finite`);
     if (!finite(item.entryPrice) || item.entryPrice < 0) errors.push(`${item.id}: entry price must be non-negative and finite`);
     if (!finite(item.iv) || item.iv <= 0 || !finite(effectiveIv(state, item)) || effectiveIv(state, item) <= 0) errors.push(`${item.id}: shifted IV must be positive and finite`);
-    if (item.multiplier !== 100) errors.push(`${item.id}: only standard 100-share contracts are supported`);
+    if (item.multiplier !== 100) errors.push(`${item.id}: only standard 100-multiplier contracts are supported`);
     const expiry = timestamp(item.expiry);
     if (!Number.isFinite(expiry) || (Number.isFinite(valuation) && expiry <= valuation)) errors.push(`${item.id}: expiry must follow valuation`);
     else if (!construction || !excludedIds.has(item.id)) earliest = Math.min(earliest, expiry);
@@ -1256,6 +1278,7 @@ export type CandidateSearchDomain = { families: Array<'options' | 'covered-call'
 export function searchCandidates(context: StrategyState, snapshot: MarketSnapshot, input: { targetSpot: number; targetDate: string; maxLoss: number; feeAllowance: number; basis: PricingBasis; objective: "target-pnl" | "return-on-risk" | "expiry-probability" }, domain?: CandidateSearchDomain) {
   if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== 'families,maxEntryOutlay' || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !['options', 'covered-call', 'protective-put', 'collar', 'call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'].includes(family)) || !finite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0)) throw new Error('Invalid candidate search domain');
   const options = domain === undefined || domain.families.includes('options');
+  if (context.underlyingKind === 'cash-index' && domain?.families.some(family => ['covered-call', 'protective-put', 'collar'].includes(family))) throw new Error('Cash-index discovery cannot include stock families');
   if (!input || Object.keys(input).sort().join() !== "basis,feeAllowance,maxLoss,objective,targetDate,targetSpot" || !finite(input.targetSpot) || input.targetSpot <= 0 || input.targetSpot > 1_000_000 || !finite(input.maxLoss) || input.maxLoss <= 0 || !finite(input.feeAllowance) || input.feeAllowance < 0 || !["mid", "natural"].includes(input.basis) || !["target-pnl", "return-on-risk", "expiry-probability"].includes(input.objective) || typeof input.targetDate !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(input.targetDate) || !Number.isFinite(Date.parse(input.targetDate)) || new Date(input.targetDate).toISOString() !== (input.targetDate.includes(".") ? input.targetDate : input.targetDate.replace("Z", ".000Z")) || Date.parse(input.targetDate) < Date.parse(snapshot.retrievedAt)) throw new Error("Invalid candidate search request");
   if (snapshot.historical || snapshot.contracts.length > MAX_CHAIN_CONTRACTS || new Set(snapshot.contracts.map(c => c.contractId)).size !== snapshot.contracts.length || validateMarketStrategy(context, snapshot).length) throw new Error("Candidate snapshot unavailable or invalid");
   const mixed = domain?.families.some(family => family.endsWith('-calendar') || family.endsWith('-diagonal')) ?? false;
@@ -1263,6 +1286,7 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
   const contracts = [...snapshot.contracts].filter(c => Date.parse(c.expiry) >= Date.parse(input.targetDate)).sort((a, b) => a.contractId.localeCompare(b.contractId));
   const base = (legs: OptionLeg[]): StrategyState => ({
     id: "candidate", version: context.version, name: "Quoted candidate", underlying: snapshot.underlying,
+    ...(context.underlyingKind ? { underlyingKind: context.underlyingKind } : {}),
     valuationModel: context.valuationModel, spot: snapshot.spot, valuationTimestamp: snapshot.retrievedAt,
     rate: context.rate, dividendYield: context.dividendYield, ivShift: context.ivShift,
     scenarioSpot: input.targetSpot, scenarioDate: input.targetDate, feeAllowance: input.feeAllowance,

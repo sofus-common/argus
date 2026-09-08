@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added the cash-index state foundation for XSP: explicit European cash terms,
+  no-share and physical-assignment guards, durable instrument identity through
+  construction, search, lot records and draft recovery, and separate DXLink Trade
+  timestamp provenance. Malformed, future, stale or mismatched index provenance
+  fails closed. Existing equity-shaped stream captures cannot convert an index
+  into a stock midpoint. Legacy equity unknown-terms analysis remains unchanged.
+  This is not live XSP support: provider admission, index streaming, full UI/history
+  workflows and European mixed-expiry optimization remain pending. No new model
+  calls, dependencies, migrations or deployment.
+
 - Fixed saved positions becoming unreachable after the newest 50 records. Added
   bounded owner-scoped pagination, explicit Load more/Refresh controls and
   deterministic timestamp/ID ordering. Malformed cursors are rejected before SQL;

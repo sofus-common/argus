@@ -18,6 +18,7 @@ export function readWorkspaceDraft(raw: string): WorkspaceDraft {
   const state: StrategyState = { id, version, name, underlying, spot, valuationTimestamp, rate, dividendYield, scenarioDate, scenarioSpot, ivShift,
     legs: input.legs.map(({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier }) => ({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier })),
     ...(input.excludedLegIds !== undefined ? { excludedLegIds: [...input.excludedLegIds] } : {}),
+    ...(input.underlyingKind !== undefined ? { underlyingKind: input.underlyingKind } : {}),
     ...(valuationModel !== undefined ? { valuationModel } : {}), ...(stock !== undefined ? { stock } : {}), ...(feeAllowance !== undefined ? { feeAllowance } : {}), ...(expiryIvShifts !== undefined ? { expiryIvShifts } : {}),
   };
   let snapshot: MarketSnapshot | null = null;

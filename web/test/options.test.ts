@@ -4,6 +4,8 @@ import { americanGreeks, americanPrice } from "../src/american-price";
 import {
   TEMPLATES,
   calculateStrategy,
+  contractTermsFacts,
+  calculateConditionalAssignment,
   firstExpiryRange,
   pnlDisplayBasis,
   expirationProbability,
@@ -37,6 +39,30 @@ import {
 } from "../src/options";
 
 const IDS = TEMPLATES.map((template) => template.id);
+describe('cash-index durable state', () => {
+  const snapshot: MarketSnapshot = { id: 'index', underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', indexSourceTime: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09'], contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, contracts: [95, 100, 105].map(strike => ({ contractId: `XSP   261009C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100, bid: 1, ask: 3, iv: .2, quoteAsOf: '2026-09-01T12:00:00.000Z' })) };
+  it('preserves index kind through construction and search and enforces its model without a snapshot', () => {
+    const state = createMarketStrategy('long-call', snapshot);
+    expect(state.underlyingKind).toBe('cash-index');
+    expect(validateStrategy(state)).toEqual([]);
+    for (const patch of [{ stock: { shares: 1, entryPrice: 100 } }, { valuationModel: 'american-crr-1024-v1' }, { valuationModel: undefined }, { underlyingKind: 'future' }]) expect(validateStrategy({ ...state, ...patch } as StrategyState).length).toBeGreaterThan(0);
+    expect(validateMarketStrategy({ ...state, underlyingKind: undefined }, snapshot).length).toBeGreaterThan(0);
+    expect(validateMarketStrategy(state, { ...snapshot, contractTerms: undefined }).length).toBeGreaterThan(0);
+    expect(() => createMarketStrategy('covered-call', snapshot)).toThrow();
+    const input = { targetSpot: 105, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 1000, feeAllowance: 0, basis: 'mid' as const, objective: 'target-pnl' as const };
+    const found = searchCandidates(state, snapshot, input);
+    expect(found.candidates.length).toBeGreaterThan(0);
+    for (const candidate of found.candidates) expect(candidate.state.underlyingKind).toBe('cash-index');
+    expect(() => searchCandidates(state, snapshot, input, { families: ['covered-call'], maxEntryOutlay: 100000 })).toThrow();
+    expect(() => searchCandidates(state, snapshot, input, { families: ['call-calendar'], maxEntryOutlay: 100000 })).toThrow();
+  });
+  it('reports cash terms without physical assignment and never verifies imported terms', () => {
+    const state = createMarketStrategy('short-call', snapshot);
+    expect(contractTermsFacts(snapshot)).toMatchObject({ settlement: 'cash', multiplier: 100, exerciseStyle: 'European' });
+    expect(contractTermsFacts({ ...snapshot, imported: true }).status).toBe('unknown');
+    expect(calculateConditionalAssignment(state, snapshot).status).toBe('unavailable');
+  });
+});
 describe('mixed-expiry candidate bounds', () => {
   const snapshot: MarketSnapshot = { id: 'mixed-search', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09', '2026-11-09'], contracts: ['2026-10-09', '2026-11-09'].flatMap(date => (['call', 'put'] as const).flatMap(type => [95, 105].map(strike => ({ contractId: `SPY   ${date.slice(2).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: `${date}T20:00:00.000Z`, multiplier: 100 as const, bid: date.includes('10-09') ? 1 : 3, ask: date.includes('10-09') ? 3 : 5, iv: .25, quoteAsOf: '2026-09-01T12:00:00.000Z' })))) };
   const input = { targetSpot: 102, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 10000, feeAllowance: 5, basis: 'mid' as const, objective: 'target-pnl' as const };
@@ -1345,7 +1371,7 @@ describe("validation", () => {
 
     const adjusted = createStrategy("long-call");
     adjusted.legs[0].multiplier = 50;
-    expect(validateStrategy(adjusted)).toContain("call: only standard 100-share contracts are supported");
+    expect(validateStrategy(adjusted)).toContain("call: only standard 100-multiplier contracts are supported");
 
     const expiries = createStrategy("long-strangle");
     expiries.legs.push(...['2026-09-25', '2026-10-02', '2026-10-09'].map(date => ({ ...expiries.legs[0], id: date, contractId: date, expiry: `${date}T20:00:00.000Z` })));

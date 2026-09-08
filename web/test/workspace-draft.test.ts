@@ -4,6 +4,48 @@ import { readWorkspaceDraft, recoverWorkspaceDraft, type WorkspaceDraft } from '
 
 afterEach(() => vi.useRealTimers());
 
+it('preserves cash-index identity and Trade event provenance through draft recovery', () => {
+  const value = draft(true);
+  Object.assign(value.state, { underlying: 'XSP', underlyingKind: 'cash-index', valuationModel: 'european-bsm-v1' });
+  delete value.state.stock;
+  value.state.legs.forEach(leg => { leg.contractId = leg.contractId.replace('SPY', 'XSP'); });
+  Object.assign(value.snapshot!, { underlying: 'XSP', underlyingKind: 'cash-index', indexSourceTime: value.state.valuationTimestamp,
+    contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' } });
+  value.snapshot!.contracts.forEach(leg => { leg.contractId = leg.contractId.replace('SPY', 'XSP'); });
+  const recovered = recoverWorkspaceDraft(value);
+  expect(recovered.state).toMatchObject({ underlyingKind: 'cash-index', valuationModel: 'european-bsm-v1' });
+  expect(recovered.snapshot).toMatchObject({ underlyingKind: 'cash-index', indexSourceTime: value.state.valuationTimestamp, contractTerms: value.snapshot!.contractTerms });
+  expect(recovered.state.legs).toEqual(value.state.legs);
+  expect(readWorkspaceDraft(JSON.stringify(recovered))).toEqual(recovered);
+  const captured = structuredClone(value);
+  captured.snapshot!.captureSource = 'DXLink';
+  captured.snapshot!.contracts.forEach(c => { c.sourceTimes = { bid: c.quoteAsOf, ask: c.quoteAsOf, iv: c.quoteAsOf }; });
+  expect(recoverWorkspaceDraft(captured).snapshot).toMatchObject({ captureSource: 'DXLink', indexSourceTime: value.state.valuationTimestamp });
+  const unsynchronized = structuredClone(captured);
+  Object.assign(unsynchronized.snapshot!, { indexSourceTime: new Date(Date.parse(value.state.valuationTimestamp) - 60_001).toISOString(), spotAsOf: new Date(Date.parse(value.state.valuationTimestamp) - 60_001).toISOString() });
+  expect(() => readWorkspaceDraft(JSON.stringify(unsynchronized))).toThrow('Capture timestamps disagree');
+  const mutations: Array<(v: any) => void> = [
+    v => { delete v.state.underlyingKind; },
+    v => { delete v.snapshot.underlyingKind; },
+    v => { v.state.underlyingKind = 'future'; },
+    v => { v.snapshot.underlyingKind = 'future'; },
+    v => { v.state.stock = { shares: 100, entryPrice: 100 }; },
+    v => { v.state.valuationModel = 'american-crr-1024-v1'; },
+    v => { delete v.snapshot.indexSourceTime; },
+    v => { v.snapshot.indexSourceTime = new Date(Date.parse(v.snapshot.retrievedAt) + 1).toISOString(); },
+    v => { v.snapshot.indexSourceTime = new Date(Date.parse(v.snapshot.retrievedAt) - 300001).toISOString(); },
+    v => { v.snapshot.spotSourceTimes = { bid: v.snapshot.spotAsOf, ask: v.snapshot.spotAsOf }; },
+    v => { v.snapshot.contractTerms.sharesPerContract = 100; },
+    v => { v.snapshot.contractTerms.multiplier = 10; },
+    v => { v.snapshot.contractTerms.settlementSession = 'AM'; },
+    v => { delete v.snapshot.contractTerms; },
+  ];
+  for (const mutate of mutations) { const invalid = structuredClone(value); mutate(invalid); expect(() => readWorkspaceDraft(JSON.stringify(invalid))).toThrow(); }
+  const equity = draft(true);
+  Object.assign(equity.snapshot!, { indexSourceTime: equity.state.valuationTimestamp });
+  expect(() => readWorkspaceDraft(JSON.stringify(equity))).toThrow();
+});
+
 it.each(['界', '\u0000'])('recovers eight held legs across four expiries with 200 quotes and maximum-length %j draft text', text => {
   const value = draft(true), state = value.state, snapshot = value.snapshot!;
   const dates = ['2026-10-09', '2026-10-16', '2026-10-23', '2026-10-30'];

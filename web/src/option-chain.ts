@@ -154,6 +154,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       selectedIds = structuredClone(selectedIds); capture = structuredClone(capture);
       const base = await get(baseSnapshot?.id, env, owner);
       if (!base) throw new Error("Snapshot unavailable");
+      if (base.underlyingKind === 'cash-index') throw new Error('Index capture requires an index-level feed');
       if (!Array.isArray(selectedIds) || selectedIds.length > MAX_OPTION_LEGS || new Set(selectedIds).size !== selectedIds.length || selectedIds.some(id => typeof id !== "string" || !base.contracts.some(c => c.contractId === id && Date.parse(c.expiry) > Date.now()))) throw new Error("Invalid capture selection");
       const retrievedAt = timestamp(capture?.capturedAt), at = Date.parse(retrievedAt);
       if (at > Date.now() || Date.now() - at > 60_000 || !Array.isArray(capture.contracts) || capture.contracts.length !== selectedIds.length || new Set(capture.contracts.map(c => c?.contractId)).size !== selectedIds.length || capture.contracts.some(c => !selectedIds.includes(c?.contractId))) throw new Error("Invalid capture");

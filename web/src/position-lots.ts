@@ -1,4 +1,4 @@
-import { SAMPLE_EXPIRIES, SAMPLE_STRIKES, sampleContractId, pruneExpiryIvShifts, validateMarketStrategy, type MarketSnapshot, type OptionLeg, type PricingBasis, type StrategyState } from "./options";
+import { SAMPLE_EXPIRIES, SAMPLE_STRIKES, sampleContractId, pruneExpiryIvShifts, validateMarketStrategy, validContractTerms, type MarketSnapshot, type OptionLeg, type PricingBasis, type StrategyState } from "./options";
 import { projectPosition, recordPriceCorrection, recordCloseVoid, type PositionRecord, type PriceCorrection, type CloseVoid } from "./position-lifecycle";
 
 export type LotAsset = { kind: "stock"; symbol: string } | { kind: "option"; contractId: string; type: "call" | "put"; strike: number; expiry: string; multiplier: number };
@@ -24,6 +24,7 @@ const assetFingerprint = (asset: LotAsset) => fingerprint(asset.kind === "option
 function validateAsset(asset: LotAsset, legacy: PositionRecord, at: string) {
   const state = legacy.initial;
   if (asset?.kind === "stock") {
+    if (state.underlyingKind === "cash-index") throw new Error("Cash-index positions cannot open stock lots");
     if (!keys(asset, "kind,symbol") || asset.symbol !== state.underlying) throw new Error("Invalid opening stock identity");
     return;
   }
@@ -239,6 +240,7 @@ export function valuePositionLots(position: PositionLots, snapshot: MarketSnapsh
   const projection = projectPositionLots(position), { initial, lots } = projection;
   if (!lots.length) throw new Error("Closed position already has a realized total");
   if (!snapshot || typeof snapshot.id !== "string" || !snapshot.id || snapshot.underlying !== initial.underlying || !["mid", "natural"].includes(basis) || !Number.isFinite(snapshot.spot) || snapshot.spot <= 0 || !Array.isArray(snapshot.contracts) || new Set(snapshot.contracts.map(c => c.contractId)).size !== snapshot.contracts.length) throw new Error("Incompatible lot valuation snapshot");
+  if (snapshot.underlyingKind !== initial.underlyingKind || snapshot.underlyingKind === 'cash-index' && !validContractTerms(snapshot)) throw new Error("Incompatible lot instrument kind or terms");
   const retrieved = Date.parse(snapshot.retrievedAt), minimum = Date.parse(projection.asOf), times: number[] = [];
   if (!Number.isFinite(retrieved) || retrieved < minimum || retrieved > Date.now()) throw new Error("Valuation must follow recorded executions");
   const sourceTime = (value: string) => {
