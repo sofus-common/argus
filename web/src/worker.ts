@@ -9,7 +9,7 @@ import { createMarketContextLoader, type MarketBindings } from "./market-context
 import { createBrokerContextLoader, createThetaRequest, searchSymbols, type BrokerBindings } from "./broker-context";
 import { buildPriceHistory, loadPriceHistory } from "./price-history";
 import { buildIntradayHistory, buildIvHistory } from "./intraday-history";
-import { createOptionChainStore } from "./option-chain";
+import { createOptionChainStore, OptionChainLoadError } from "./option-chain";
 import { TEMPLATES, CandidateSearchLimitError, calculateStrategy, validateStrategy, validateMarketStrategy, validateConstruction, validateMarketConstruction, type StrategyState } from "./options";
 import {
   AnalysisVerificationError,
@@ -375,8 +375,8 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
       const snapshot = await chains.load(c.env ?? {}, dates, c.get("session").owner, symbol, { center, retain });
       c.header("Cache-Control", "no-store");
       return c.json({ snapshot });
-    } catch {
-      return c.json({ error: { code: "chain_unavailable", message: "Real option pricing is unavailable. Your current position is unchanged." } }, 503);
+    } catch (error) {
+      return c.json({ error: { code: "chain_unavailable", message: "Real option pricing is unavailable. Your current position is unchanged.", ...(c.get("session").local && error instanceof OptionChainLoadError ? { diagnostic: { stage: error.stage, reason: error.reason } } : {}) } }, 503);
     }
   });
 

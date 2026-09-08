@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added fixed, secret-safe option-chain failure stages and reason codes for
+  local development only; hosted responses remain generic. Regression checks
+  cover provider/storage error redaction and hosted isolation. A real rejected
+  quote was 223ms ahead of the local clock; an independent Windows time-server
+  probe measured roughly 625ms host lag and Windows Time was stopped. No quote
+  guard was relaxed or system clock changed. Clock correction and subsequent
+  real-session verification remain outstanding.
+
 - Real-data verification found remaining reliability gaps, not a release pass.
   A real four-leg SPY workspace retained all fixed costs and its exclusion on
   successful REST refresh; a failed refresh preserved the existing position.

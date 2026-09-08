@@ -8,6 +8,20 @@ const db = (workerEnv as { DB: D1Database }).DB;
 beforeAll(async () => { await db.batch(migration.split(";").filter(sql => sql.trim()).map(sql => db.prepare(sql))); });
 const env = { DB: db, TASTYTRADE_CLIENT_SECRET: "secret", TASTYTRADE_REFRESH_TOKEN: "refresh" };
 const dates = ["2099-09-18", "2099-09-25"];
+it('reports bounded load failure stages without raw provider or storage errors', async () => {
+  await expect(createOptionChainStore(fixture('iv')).load(env)).rejects.toMatchObject({ stage: 'quotes', reason: 'Missing volatility' });
+  await expect(createOptionChainStore(fixture('crossed')).load(env)).rejects.toMatchObject({ stage: 'quotes', reason: 'Crossed quote' });
+  await expect(createOptionChainStore(fixture('future')).load(env)).rejects.toMatchObject({ stage: 'quotes', reason: 'Future quote timestamp' });
+  const privateText = 'private-token-and-database-details';
+  const provider = vi.fn<typeof fetch>(async () => { throw new Error(privateText) });
+  const authError = await createOptionChainStore(provider).load(env).catch(error => error);
+  expect(authError).toMatchObject({ stage: 'authentication', reason: 'Unavailable' });
+  expect(JSON.stringify(authError)).not.toContain(privateText);
+  const storage = { ...env, DB: { ...db, prepare: () => { throw new Error(privateText) } } as unknown as D1Database };
+  const storageError = await createOptionChainStore(fixture()).load(storage).catch(error => error);
+  expect(storageError).toMatchObject({ stage: 'storage', reason: 'Unavailable' });
+  expect(JSON.stringify(storageError)).not.toContain(privateText);
+});
 const id = (date: string, type: string, strike: number) => `SPY   ${date.slice(2).replaceAll("-", "")}${type}${String(strike * 1000).padStart(8, "0")}`;
 function streamed(contractId: string) {
   const now = Date.now();

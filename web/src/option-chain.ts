@@ -4,6 +4,14 @@ import type { StreamCapture } from "./quote-feed";
 import { capturedProvenance, timestamp, validatedSnapshot } from "./market-snapshot";
 
 export type OptionChainBindings = BrokerBindings & { DB?: D1Database };
+export class OptionChainLoadError extends Error {
+  readonly reason: string;
+  constructor(readonly stage: 'validation' | 'authentication' | 'catalog' | 'selection' | 'instruments' | 'quotes' | 'storage', error: unknown) {
+    super("Option chain unavailable: authentication, entitlement, timeout or incomplete provider data.");
+    const message = error instanceof Error ? error.message : '';
+    this.reason = ['Invalid quote', 'Crossed quote', 'Future quote timestamp', 'Missing volatility', 'Missing quote', 'Invalid timestamp', 'Incomplete response', 'Invalid instrument', 'Invalid expiry', 'Conflicting expiry schedules', 'Timed out', 'Oversized', 'Not configured', 'Quote snapshot storage unavailable'].includes(message) ? message : 'Unavailable';
+  }
+}
 async function credentialKey(env: BrokerBindings) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([env.TASTYTRADE_CLIENT_ID, env.TASTYTRADE_CLIENT_SECRET, env.TASTYTRADE_REFRESH_TOKEN])));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -19,7 +27,9 @@ function items(value: any): any[] {
 }
 function quote(value: any) {
   const bid = number(value?.bid), ask = number(value?.ask), quoteAsOf = timestamp(value?.["updated-at"]);
-  if (bid < 0 || ask <= 0 || ask < bid || ask > 100_000 || !Number.isFinite(bid) || !Number.isFinite(ask) || Date.parse(quoteAsOf) > Date.now()) throw new Error("Invalid quote");
+  if (ask < bid) throw new Error("Crossed quote");
+  if (Date.parse(quoteAsOf) > Date.now()) throw new Error("Future quote timestamp");
+  if (bid < 0 || ask <= 0 || ask > 100_000 || !Number.isFinite(bid) || !Number.isFinite(ask)) throw new Error("Invalid quote");
   return { bid, ask, quoteAsOf };
 }
 
@@ -48,23 +58,28 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
     } catch { return undefined; }
   }
   async function load(env: OptionChainBindings, expiries?: string[], owner = "local-development", symbol = "SPY", window: { center?: number; retain?: string[] } = {}): Promise<MarketSnapshot> {
+    let stage: OptionChainLoadError['stage'] = 'storage';
     try {
       database(env);
+      stage = 'validation';
       if (typeof symbol !== "string" || !/^[A-Z]{1,6}$/.test(symbol)) throw new Error("Invalid underlying");
       if (!window || typeof window !== "object" || window.center !== undefined && (!Number.isFinite(window.center) || window.center <= 0 || window.center > 1_000_000)) throw new Error("Invalid strike center");
       const retain = window.retain === undefined ? [] : window.retain;
       if (!Array.isArray(retain) || retain.length > 4 || new Set(retain).size !== retain.length || retain.some(id => typeof id !== "string" || id.length !== 21 || id.slice(0, 6) !== symbol.padEnd(6) || !/^\d{6}[CP]\d{8}$/.test(id.slice(6)))) throw new Error("Invalid retained contracts");
       const deadline = Date.now() + 30_000;
+      stage = 'authentication';
       const token = await tastyToken(env, request);
       const get = (path: string, limit?: number) => {
         if (Date.now() >= deadline) throw new Error("Timed out");
         return request(`https://api.tastyworks.com${path}`, { headers: { Authorization: `Bearer ${token}`, "User-Agent": "argus/0.1" } }, limit);
       };
+      stage = 'catalog';
       const [rawChain, rawSpot] = await Promise.all([get(`/option-chains/${symbol}/nested`, 2_097_152), get(`/market-data/by-type?equity=${symbol}`)]);
       const underlying = quote(items(rawSpot).find(x => x.symbol === symbol));
       const spot = (underlying.bid + underlying.ask) / 2;
       const strikeCenter = window.center ?? spot;
       if (spot <= 0) throw new Error("Invalid spot");
+      stage = 'selection';
       const chains = items(rawChain).filter(x => x["underlying-symbol"] === symbol && x["root-symbol"] === symbol && x["option-chain-type"] === "Standard" && x["shares-per-contract"] === 100 && Array.isArray(x.deliverables) && x.deliverables.length === 1 && x.deliverables[0].symbol === symbol && x.deliverables[0]["deliverable-type"] === "Shares" && number(x.deliverables[0].amount) === 100);
       const today = new Date().toISOString().slice(0, 10);
       const windows = chains.flatMap(x => Array.isArray(x.expirations) ? x.expirations : []).filter(x => typeof x["expiration-date"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x["expiration-date"]) && Number.isFinite(Date.parse(x["expiration-date"])) && new Date(x["expiration-date"]).toISOString().slice(0, 10) === x["expiration-date"] && x["expiration-date"] > today && x["settlement-type"] === "PM" && Array.isArray(x.strikes));
@@ -86,6 +101,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       if (contracts.some(c => c.contractId.slice(6, 12) !== c.date.slice(2).replaceAll("-", "") || c.contractId[12] !== (c.type === "call" ? "C" : "P") || Number(c.contractId.slice(13)) / 1000 !== c.strike)) throw new Error("Mismatched contract identity");
       // ponytail: standard expiry schedules verified on one call/put per date; per-strike metadata if adjusted contracts are supported.
       const representatives = selected.flatMap(date => (["call", "put"] as const).map(type => contracts.find(c => c.date === date && c.type === type)!));
+      stage = 'instruments';
       const schedules = await Promise.all(representatives.map(async c => {
         const instrument = (await get(`/instruments/equity-options/${encodeURIComponent(c.contractId)}`)).data;
         if (instrument?.symbol !== c.contractId || instrument["underlying-symbol"] !== symbol || instrument["root-symbol"] !== symbol || instrument["shares-per-contract"] !== 100 || instrument["exercise-style"] !== "American" || instrument["settlement-type"] !== "PM" || instrument["option-chain-type"] !== "Standard" || instrument["option-type"] !== (c.type === "call" ? "C" : "P") || number(instrument["strike-price"]) !== c.strike || instrument["expiration-date"] !== c.date) throw new Error("Invalid instrument");
@@ -94,6 +110,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         return { date: c.date, expiry, expiresAt };
       }));
       for (const date of selected) { const pair = schedules.filter(s => s.date === date); if (pair[0].expiry !== pair[1].expiry || pair[0].expiresAt !== pair[1].expiresAt) throw new Error("Conflicting expiry schedules"); }
+      stage = 'quotes';
       const rawQuotes = items(await get(`/market-data/by-type?${new URLSearchParams({ "equity-option": contracts.map(c => c.contractId).join(",") })}`, 1_048_576));
       const normalized: MarketContract[] = contracts.map(c => {
         const expiry = schedules.find(s => s.date === c.date)!.expiry;
@@ -107,8 +124,9 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       if (Date.now() > deadline) throw new Error("Timed out");
       const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: symbol, strikeCenter, source: "Tastytrade", retrievedAt: new Date().toISOString(), spot, spotAsOf: underlying.quoteAsOf, availableExpiries, contracts: normalized };
       snapshot.contractTerms = { exerciseStyle: "American", settlement: "physical-shares", sharesPerContract: 100, settlementSession: "PM" };
+      stage = 'storage';
       return await register(snapshot, env, owner);
-    } catch { throw new Error("Option chain unavailable: authentication, entitlement, timeout or incomplete provider data."); }
+    } catch (error) { throw new OptionChainLoadError(stage, error); }
   }
   return {
     load,

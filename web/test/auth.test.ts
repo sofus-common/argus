@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { sign } from "hono/jwt";
 import { AuthError, checkRequestOrigin, createAuthenticator, type AuthBindings } from "../src/auth";
+import { createApp } from "../src/worker";
 
 const env: AuthBindings = { ACCESS_TEAM_DOMAIN: "https://argus.cloudflareaccess.com", ACCESS_AUD: "argus-audience", APP_ORIGIN: "https://argus.example.com" };
 let privateKey: CryptoKey;
@@ -19,6 +20,15 @@ const request = (jwt?: string, url = env.APP_ORIGIN!) => new Request(url, { head
 const provider = () => vi.fn<typeof fetch>(async () => Response.json({ keys: [publicKey] }));
 
 describe("private workspace authentication", () => {
+  it('restricts safe chain diagnostics to authenticated local development', async () => {
+    const app = createApp(provider());
+    const local = await app.request('http://localhost:5173/api/chain', {}, { ARGUS_LOCAL_DEV: 'true' });
+    expect(local.status).toBe(503);
+    expect((await local.json() as any).error.diagnostic).toEqual({ stage: 'storage', reason: 'Quote snapshot storage unavailable' });
+    const hosted = await app.request(`${env.APP_ORIGIN}/api/chain`, { headers: { 'Cf-Access-Jwt-Assertion': await token() } }, { ...env, ARGUS_LOCAL_DEV: 'true' });
+    expect(hosted.status).toBe(503);
+    expect(await hosted.json()).toEqual({ error: { code: 'chain_unavailable', message: 'Real option pricing is unavailable. Your current position is unchanged.' } });
+  });
   it("rejects alternate origins before token verification even with a valid identity", async () => {
     const fetcher = provider(), auth = createAuthenticator(fetcher), jwt = await token();
     for (const url of ["https://argus.workers.dev", "https://preview.argus.example.com", "http://argus.example.com", "https://argus.example.com:8443", "http://localhost:5173"]) {
