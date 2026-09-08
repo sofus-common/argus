@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Fixed saved positions becoming unreachable after the newest 50 records. Added
+  bounded owner-scoped pagination, explicit Load more/Refresh controls and
+  deterministic timestamp/ID ordering. Malformed cursors are rejected before SQL;
+  stale pages are discarded and a late Load retains its selected older summary.
+  Verified 91 focused tests, TypeScript/build and 35 desktop/mobile browser checks,
+  including 51-record reopening and the independently identified refresh/load
+  race. The browser fixture now freezes Date construction as well as Date.now,
+  fixing a time-of-day-dependent lifecycle false failure. No migration, provider
+  requests, AI calls or deployment; this is not a portfolio-return dashboard.
+
 - Added an optional shared Theta history relay for private Cloudflare operation.
   One fixed-name Durable Object validates bounded read-only catalog/EOD requests,
   persists pacing and restart recovery leases, and authenticates only to a fixed

@@ -26,6 +26,15 @@ export class SavedStoreError extends Error {
 type Row = SavedStrategySummary & { state_json: string; snapshot_json: string | null; lifecycle_json: string | null };
 const summaryColumns = "id, title, revision, created_at AS createdAt, updated_at AS updatedAt";
 const columns = `${summaryColumns}, state_json, snapshot_json, lifecycle_json`;
+const encodeCursor = ({ updatedAt, id }: Pick<SavedStrategySummary, 'updatedAt' | 'id'>) => btoa(JSON.stringify({ updatedAt, id })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function readCursor(cursor: string) {
+  try {
+    if (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(cursor)) throw new Error();
+    const value = JSON.parse(atob(cursor.replace(/-/g, '+').replace(/_/g, '/')));
+    if (!value || Object.keys(value).sort().join() !== 'id,updatedAt' || typeof value.updatedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.updatedAt) || new Date(value.updatedAt).toISOString() !== value.updatedAt || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.id) || encodeCursor(value) !== cursor) throw new Error();
+    return value as Pick<SavedStrategySummary, 'updatedAt' | 'id'>;
+  } catch { throw new SavedStoreError('invalid_request', 400); }
+}
 const decode = ({ state_json, snapshot_json, lifecycle_json, ...summary }: Row): SavedStrategy => {
   const state = JSON.parse(state_json), lifecycle = lifecycle_json === null ? null : JSON.parse(lifecycle_json);
   if (lifecycle_json !== null) {
@@ -85,6 +94,13 @@ export function createSavedStore(db: D1Database) {
     throw new SavedStoreError("conflict", 409);
   }
   return {
+    async listPage(owner: string, cursor?: string) {
+      const after = cursor === undefined ? null : readCursor(cursor);
+      const statement = db.prepare(`SELECT ${summaryColumns} FROM saved_strategies WHERE owner = ?${after ? ' AND (updated_at < ? OR (updated_at = ? AND id > ?))' : ''} ORDER BY updated_at DESC, id ASC LIMIT 51`);
+      const result = await (after ? statement.bind(owner, after.updatedAt, after.updatedAt, after.id) : statement.bind(owner)).all<SavedStrategySummary>();
+      const strategies = result.results.slice(0, 50);
+      return { strategies, nextCursor: result.results.length > 50 ? encodeCursor(strategies[49]) : null };
+    },
     async list(owner: string) {
       const result = await db.prepare(`SELECT ${summaryColumns} FROM saved_strategies WHERE owner = ? ORDER BY updated_at DESC, id LIMIT 50`).bind(owner).all<SavedStrategySummary>();
       return result.results;

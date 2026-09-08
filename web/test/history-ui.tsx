@@ -22,11 +22,12 @@ function assert(value: unknown, message: string): asserts value { if (!value) th
 
 async function run() {
   button.disabled = true; output.textContent = ''
-  const originalFetch = window.fetch, originalNow = Date.now
+  const originalFetch = window.fetch, originalNow = Date.now, originalDate = Date
   const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }, priorAct = environment.IS_REACT_ACT_ENVIRONMENT
   environment.IS_REACT_ACT_ENVIRONMENT = true
   const today = new Date().toISOString().slice(0, 10), fixedNow = Date.parse(`${today}T14:12:34Z`)
   Date.now = () => fixedNow
+  globalThis.Date = new Proxy(originalDate, { construct(target, args) { return Reflect.construct(target, args.length ? args : [fixedNow]) } })
   const state = createStrategy('bull-call')
   state.pricing = { mode: 'market', snapshotId: 'synthetic-history-ui', basis: 'mid' }
   state.legs.forEach((leg, i) => { leg.strike = 770 + i * 5; leg.expiry = '2027-10-09T20:00:00.000Z'; leg.contractId = `SPY   271009C00${leg.strike}000` })
@@ -137,6 +138,54 @@ async function run() {
         await act(async () => root!.render(<PositionPerformance record={record} />)); await click('Load position performance'); await waitFor(() => !!chat());
         await ask(); const closing = calls.length - 1; await unmount(); assert(calls[closing].signal?.aborted, 'Unmount did not cancel discussion');
       } finally { await unmount(); window.fetch = priorFetch }
+    });
+    await test('Saved library pages reach older positions and discard pages after a refresh', async () => {
+      await unmount(); const priorFetch = window.fetch;
+      const stamp = new Date(fixedNow - 120000).toISOString();
+      const records = Array.from({ length: 51 }, (_, i) => ({ id: `library-${i}`, title: `Library position ${i}`, revision: 1, createdAt: stamp, updatedAt: stamp, state: createStrategy('long-call'), snapshot: null }));
+      let defer = false, release: (() => void) | undefined, deferRefresh = false, refreshRelease: (() => void) | undefined, deferLoad = false, loadRelease: (() => void) | undefined;
+      const loaded: string[] = [];
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Library fixture', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies') {
+          if (deferRefresh) return new Promise<Response>(resolve => { refreshRelease = () => resolve(Response.json({ strategies: records.slice(0, 50), nextCursor: 'page-two' })); });
+          return Response.json({ strategies: records.slice(0, 50), nextCursor: 'page-two' });
+        }
+        if (url === '/api/strategies?cursor=page-two') {
+          if (defer) return new Promise<Response>(resolve => { release = () => resolve(Response.json({ strategies: [records[50]], nextCursor: null })); });
+          return Response.json({ strategies: [records[50]], nextCursor: null });
+        }
+        if (url === '/api/strategies/library-50') { loaded.push(String(url)); if (deferLoad) return new Promise<Response>(resolve => { loadRelease = () => resolve(Response.json({ record: records[50] })); }); return Response.json({ record: records[50] }); }
+        throw new Error(`Unexpected library request: ${String(url)} ${init?.method ?? 'GET'}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 200 && !check(); i++) await settleTimers(); assert(check(), 'Library state did not settle'); };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 51);
+        assert([...fixture.querySelectorAll('button')].some(node => node.textContent === 'Load more saved positions'), 'Saved library has no next-page control');
+        await change('Saved positions', records[0].id); await click('Load more saved positions');
+        await waitFor(() => fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 52);
+        assert((fixture.querySelector('[aria-label="Saved positions"]') as unknown as { value: string }).value === records[0].id, 'Loading a page changed selection');
+        await change('Saved positions', records[50].id); await click('Load');
+        await waitFor(() => loaded.length === 1);
+        assert((fixture.querySelector('[aria-label="Saved strategy title"]') as HTMLInputElement).value === records[50].title, 'Older saved record did not reopen');
+        deferRefresh = true; deferLoad = true;
+        await click('Refresh saved positions'); await waitFor(() => !!refreshRelease);
+        await click('Load'); await waitFor(() => !!loadRelease);
+        await act(async () => refreshRelease!()); refreshRelease = undefined;
+        await waitFor(() => fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 51);
+        await act(async () => loadRelease!()); loadRelease = undefined;
+        await waitFor(() => fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 52);
+        assert((fixture.querySelector('[aria-label="Saved positions"]') as unknown as { value: string }).value === records[50].id, 'Late load stranded its selected older summary');
+        deferRefresh = false; deferLoad = false;
+        await click('Refresh saved positions');
+        await waitFor(() => fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 51);
+        assert((fixture.querySelector('[aria-label="Saved positions"]') as unknown as { value: string }).value === '', 'Refresh left a stranded older selection');
+        defer = true; await click('Load more saved positions'); await waitFor(() => !!release);
+        await click('Refresh saved positions'); await act(async () => release!()); release = undefined;
+        await settleTimers();
+        assert(fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 51, 'Stale next page survived refresh');
+      } finally { release?.(); refreshRelease?.(); loadRelease?.(); await unmount(); window.fetch = priorFetch }
     });
     await test('American calendar discovery preserves bound scope through comparison, save, reopen and Undo', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
@@ -1422,7 +1471,7 @@ async function run() {
       await pending.finish(); assert(!fixture.querySelector('.history-charts'), 'Late preset response survived manual date change')
     })
   } finally {
-    await unmount(); window.fetch = originalFetch; Date.now = originalNow
+    await unmount(); window.fetch = originalFetch; globalThis.Date = originalDate; Date.now = originalNow
     if (priorAct === undefined) delete environment.IS_REACT_ACT_ENVIRONMENT; else environment.IS_REACT_ACT_ENVIRONMENT = priorAct
     output.textContent += `TOTAL ${passed} passed, ${failed} failed. Globals restored; no provider calls.\n`; button.disabled = false
   }

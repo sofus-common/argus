@@ -977,6 +977,9 @@ export function App() {
   const [session, setSession] = useState<{ label: string; local: boolean; recoveryKey: string } | null>(null)
   const [saved, setSaved] = useState<SavedSummary[]>([])
   const savedListRequest = useRef(0)
+  const savedListController = useRef<AbortController | null>(null)
+  const [savedCursor, setSavedCursor] = useState<string | null>(null)
+  const [savedListPending, setSavedListPending] = useState(false)
   const [savedIdentity, setSavedIdentity] = useState<SavedSummary | null>(null)
   const [savedTitle, setSavedTitle] = useState('')
   const [savedContent, setSavedContent] = useState<string | null>(() => workspaceContent(strategy, ''))
@@ -989,6 +992,8 @@ export function App() {
   }, [unsavedChanges])
   const titleRef = useRef('')
   const [selectedSaved, setSelectedSaved] = useState('')
+  const selectedSavedRef = useRef(selectedSaved)
+  useEffect(() => { selectedSavedRef.current = selectedSaved }, [selectedSaved])
   const [lifecycleSaved, setLifecycleSaved] = useState('')
   const [lotSaved, setLotSaved] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -996,20 +1001,45 @@ export function App() {
   const [workspaceNotice, setWorkspaceNotice] = useState('')
   const [workspaceError, setWorkspaceError] = useState('')
   const workspaceRequest = useRef(0)
-  const refreshSaved = async () => {
+  const refreshSaved = async (cursor?: string) => {
+    if (cursor && savedListController.current) return
     const sequence = ++savedListRequest.current
-    const response = await fetch('/api/strategies', { signal: AbortSignal.timeout(12000) })
-    const body = await response.json() as { strategies: SavedSummary[]; error?: { message?: string } }
-    if (!response.ok) throw new Error(body.error?.message ?? 'Saved strategies unavailable.')
-    if (sequence === savedListRequest.current) setSaved(body.strategies)
+    savedListController.current?.abort()
+    const controller = new AbortController()
+    savedListController.current = controller
+    setSavedListPending(true)
+    try {
+      const response = await fetch(`/api/strategies${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]) })
+      const body = await response.json() as { strategies: SavedSummary[]; nextCursor?: string | null; error?: { message?: string } }
+      if (sequence !== savedListRequest.current) return
+      if (!response.ok) throw new Error(body.error?.message ?? 'Saved strategies unavailable.')
+      if (!Array.isArray(body.strategies) || body.strategies.length > 50 || body.strategies.some(item => !item || typeof item.id !== 'string' || !item.id || item.id.length > 200 || typeof item.title !== 'string' || item.title.length > 120 || !Number.isSafeInteger(item.revision) || item.revision < 1 || typeof item.updatedAt !== 'string' || !Number.isFinite(Date.parse(item.updatedAt))) || new Set(body.strategies.map(item => item.id)).size !== body.strategies.length || (body.nextCursor != null && (typeof body.nextCursor !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(body.nextCursor) || body.nextCursor === cursor))) throw new Error('Saved library response is invalid. Existing selections are unchanged.')
+      setSaved(items => {
+        const combined = new Map((cursor ? items : []).map(item => [item.id, item]))
+        for (const item of body.strategies) if (!combined.has(item.id) || combined.get(item.id)!.revision <= item.revision) combined.set(item.id, item)
+        return [...combined.values()]
+      })
+      setSavedCursor(body.nextCursor ?? null)
+      if (!cursor && selectedSavedRef.current && !body.strategies.some(item => item.id === selectedSavedRef.current)) {
+        setSelectedSaved('')
+        setWorkspaceNotice('Saved library refreshed. Use Load more saved positions to select an older record again. The open position is unchanged.')
+      }
+    } catch (error) {
+      if (sequence === savedListRequest.current) throw error
+    } finally {
+      if (sequence === savedListRequest.current) { savedListController.current = null; setSavedListPending(false) }
+    }
   }
   useEffect(() => {
+    let active = true
     void fetch('/api/bootstrap').then(async response => {
       const body = await response.json() as { session: { label: string; local: boolean; recoveryKey: string }; error?: { message?: string } }
+      if (!active) return
       if (!response.ok) throw new Error(body.error?.message ?? 'Private session unavailable.')
       setSession(body.session)
       await refreshSaved()
-    }).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Private workspace unavailable.'))
+    }).catch(error => { if (active) setWorkspaceError(error instanceof Error ? error.message : 'Private workspace unavailable.') })
+    return () => { active = false; savedListRequest.current++; savedListController.current?.abort() }
   }, [])
   useEffect(() => {
     const pane = conversationPane.current
@@ -1257,6 +1287,7 @@ export function App() {
         setChainPending(false)
       }
       setSavedIdentity(record)
+      setSaved(items => items.some(item => item.id === record.id) ? items : [...items, record])
       setSavedContent(workspaceContent(strategyRef.current, record.title))
       setSelectedSaved(record.id)
       setSavedTitle(record.title)
@@ -1495,6 +1526,9 @@ export function App() {
               <label>Position title<input aria-label="Saved strategy title" maxLength={120} value={savedTitle} placeholder={strategy.name} onChange={event => { titleRef.current = event.target.value; setSavedTitle(event.target.value) }} /></label>
               <button disabled={workspaceBusy || !session} onClick={() => void savedAction('save')}>Save</button><button disabled={workspaceBusy || !session} onClick={() => void savedAction('copy')}>Save as new</button><button onClick={newWorkspace}>New</button>
               <label className="saved-picker">Saved positions<select aria-label="Saved positions" value={selectedSaved} onChange={event => setSelectedSaved(event.target.value)}><option value="">Choose a saved position</option>{saved.map(item => <option key={item.id} value={item.id}>{item.title} · {shortDate(item.updatedAt)} · r{item.revision}</option>)}</select></label>
+              <button disabled={workspaceBusy || !session} onClick={() => void refreshSaved().catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Saved library unavailable.'))}>Refresh saved positions</button>
+              {savedCursor && <button disabled={workspaceBusy || savedListPending} onClick={() => void refreshSaved(savedCursor).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Saved library unavailable.'))}>Load more saved positions</button>}
+              <small role="status">{savedListPending ? 'Loading saved positions…' : `${saved.length} saved positions loaded${savedCursor ? ' · more available' : ''}`}</small>
               <button disabled={workspaceBusy || !selectedSaved} onClick={() => void savedAction('load')}>Load</button><button disabled={workspaceBusy || !selectedSaved} onClick={() => void savedAction('delete')}>Delete</button>
               <button disabled={workspaceBusy || !selectedSaved} onClick={() => void exportSaved()}>Export saved JSON</button>
               <button disabled={workspaceBusy || !selectedSaved} onClick={() => setLifecycleSaved(selectedSaved)}>Manage closes</button>

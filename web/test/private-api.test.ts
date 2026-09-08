@@ -593,6 +593,29 @@ function call(app: ReturnType<typeof createApp>, path: string, method = "GET", b
 }
 
 describe("private workspace boundary", () => {
+  it('returns bounded owner-only pages and rejects malformed list queries before SQL', async () => {
+    const app = authenticatedApp(), owner = JSON.stringify([issuer, subjectOne]), store = createSavedStore(db);
+    const created = [];
+    for (let i = 0; i < 51; i++) created.push(await store.create(owner, `Paged ${i}`, createStrategy('long-call')));
+    const firstResponse = await call(app, '/api/strategies');
+    expect(firstResponse.status).toBe(200);
+    expect(firstResponse.headers.get('Cache-Control')).toBe('no-store');
+    const first = await firstResponse.json() as any;
+    expect(first.strategies).toHaveLength(50);
+    expect(first.nextCursor).toMatch(/^[A-Za-z0-9_-]{1,1024}$/);
+    const second = await (await call(app, `/api/strategies?cursor=${first.nextCursor}`)).json() as any;
+    expect(first.strategies.some((record: any) => second.strategies.some((next: any) => next.id === record.id))).toBe(false);
+    expect([...first.strategies, ...second.strategies].map((record: any) => record.id)).toEqual(expect.arrayContaining(created.map(record => record.id)));
+    const foreign = await (await call(app, `/api/strategies?cursor=${first.nextCursor}`, 'GET', undefined, jwtTwo)).json() as any;
+    expect(JSON.stringify(foreign)).not.toContain(created[0].id);
+    for (const record of foreign.strategies) expect(created.map(item => item.id)).not.toContain(record.id);
+    const prepare = vi.fn(() => { throw new Error('Must not query'); });
+    for (const query of ['?cursor=', '?cursor=!', `?cursor=${'x'.repeat(1025)}`, `?cursor=${first.nextCursor}&cursor=${first.nextCursor}`, '?limit=100', '?owner=foreign']) {
+      expect((await call(app, `/api/strategies${query}`, 'GET', undefined, jwtOne, { ...bindings(), DB: { prepare } as unknown as D1Database })).status).toBe(400);
+    }
+    expect(prepare).not.toHaveBeenCalled();
+    expect((await call(app, `/api/strategies?cursor=${first.nextCursor}`, 'GET', undefined, '')).status).toBe(401);
+  });
   it("loads symbol-bound context without inference and rejects invalid or limited requests first", async () => {
     const provider = vi.fn<typeof fetch>(async url => String(url) === `${issuer}/cdn-cgi/access/certs` ? Response.json({ keys: [jwk] }) : new Response("Unavailable", { status: 503 }));
     const app = createApp(provider), config = { ...bindings(), TASTYTRADE_CLIENT_SECRET: undefined, TASTYTRADE_REFRESH_TOKEN: undefined };

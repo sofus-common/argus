@@ -144,7 +144,11 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     if (limited && !limited.success) return c.json({ error: { code: "rate_limited", message: "Try saving or loading again later." } }, 429);
     await next();
   });
-  app.get("/api/strategies", async c => c.json({ strategies: await createSavedStore(c.env.DB!).list(c.get("session").owner) }));
+  app.get("/api/strategies", async c => {
+    const query = new URL(c.req.url).searchParams;
+    if ([...query.keys()].some(key => key !== 'cursor') || query.getAll('cursor').length > 1) throw new SavedStoreError('invalid_request', 400);
+    return c.json(await createSavedStore(c.env.DB!).listPage(c.get("session").owner, query.get('cursor') ?? undefined));
+  });
   app.get("/api/strategies/:id/lifecycle", async c => {
     const record = await createSavedStore(c.env.DB!).get(c.get("session").owner, c.req.param("id"));
     if (record.lifecycle?.schemaVersion === 2) return c.json({ error: { code: "lot_view_required", message: "This position contains dated lots. Original-inventory close management is unavailable." } }, 409);

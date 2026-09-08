@@ -12,6 +12,47 @@ beforeAll(async () => {
   await db.batch((migration + lifecycleMigration).split(";").filter(sql => sql.trim()).map(sql => db.prepare(sql)));
 });
 
+it('keeps positions beyond the first fifty reachable through owner-scoped pages', async () => {
+  const store = createSavedStore(db), owner = crypto.randomUUID(), state = createStrategy('long-call');
+  const created = [];
+  for (let i = 0; i < 51; i++) created.push(await store.create(owner, `Position ${i}`, state));
+  const first = await store.listPage(owner);
+  expect(first.strategies).toHaveLength(50);
+  expect(first.nextCursor).not.toBeNull();
+  const second = await store.listPage(owner, first.nextCursor!);
+  expect(second.strategies).toHaveLength(1);
+  expect(second.nextCursor).toBeNull();
+  expect(new Set([...first.strategies, ...second.strategies].map(record => record.id)).size).toBe(created.length);
+  expect((await store.listPage('another-owner', first.nextCursor!)).strategies).toEqual([]);
+});
+
+it('pages timestamp ties deterministically and requires refresh for records moved before the cursor', async () => {
+  const store = createSavedStore(db), owner = crypto.randomUUID(), state = createStrategy('long-call'), at = '2026-01-01T00:00:00.000Z';
+  const created = [];
+  for (let i = 0; i < 102; i++) created.push(await store.create(owner, `Tied ${i}`, state));
+  await db.prepare('UPDATE saved_strategies SET updated_at = ? WHERE owner = ?').bind(at, owner).run();
+  const ordered = created.map(record => record.id).sort(), first = await store.listPage(owner);
+  expect(first.strategies.map(record => record.id)).toEqual(ordered.slice(0, 50));
+  await store.update(owner, ordered[0], 1, 'Already seen, updated', state);
+  await store.update(owner, ordered[60], 1, 'Unseen, updated', state);
+  const inserted = await store.create(owner, 'New record', state);
+  const second = await store.listPage(owner, first.nextCursor!);
+  const third = await store.listPage(owner, second.nextCursor!);
+  expect([...second.strategies, ...third.strategies].map(record => record.id)).toEqual(ordered.slice(50).filter(id => id !== ordered[60]));
+  expect(third.nextCursor).toBeNull();
+  const refreshed = await store.listPage(owner);
+  expect(refreshed.strategies.map(record => record.id)).toEqual(expect.arrayContaining([ordered[0], ordered[60], inserted.id]));
+});
+
+it('rejects noncanonical or malformed cursors before querying storage', async () => {
+  let queries = 0;
+  const store = createSavedStore({ prepare() { queries++; throw new Error('Must not query'); } } as unknown as D1Database);
+  const encode = (value: unknown) => btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const value = { updatedAt: '2026-01-01T00:00:00.000Z', id: 'position' };
+  for (const cursor of ['', '!', 'x'.repeat(1025), encode(null), encode({ ...value, id: '../foreign' }), encode({ ...value, updatedAt: '2026-02-30T00:00:00.000Z' }), encode({ ...value, extra: 1 }), encode({ id: value.id, updatedAt: value.updatedAt }), `${encode(value)}=`]) await expect(store.listPage('owner', cursor)).rejects.toMatchObject({ status: 400, code: 'invalid_request' });
+  expect(queries).toBe(0);
+});
+
 it("round trips eight-leg four-expiry holdings and reconciles closes and rolls without crossing owners", async () => {
   const store = createSavedStore(db), owner = crypto.randomUUID(), recipient = crypto.randomUUID();
   const at = "2026-09-05T12:00:00.000Z", markedAt = "2026-09-06T12:00:00.000Z";

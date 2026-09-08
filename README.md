@@ -89,6 +89,11 @@ Real quote catalogs are copied from the server cache, never accepted from the
 browser. Reopened quotes are marked historical and keep their original quote and
 valuation timestamps. Refresh prices is a separate action. Snapshot handles and
 records are scoped to the authenticated owner; API responses are not cached.
+The saved picker loads 50 records at a time. **Load more saved positions** reaches
+older records; **Refresh saved positions** restarts from the newest page. Records
+changed elsewhere can move ahead of a cursor, so refresh to see new or updated
+records. Refresh may clear an older picker selection with an explicit notice;
+it never replaces the open position. Pending pages are discarded after refresh.
 
 Export saved JSON downloads the selected record's current stored revision,
 including original quote data and close/roll/correction history. It excludes
