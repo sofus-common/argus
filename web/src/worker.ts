@@ -8,6 +8,7 @@ import { projectPositionLots, upgradePositionLots, valuePositionLots, recordLotT
 import { createMarketContextLoader, type MarketBindings } from "./market-context";
 import { createBrokerContextLoader, createThetaRequest, searchSymbols, type BrokerBindings } from "./broker-context";
 import { buildPriceHistory, loadPriceHistory } from "./price-history";
+import { loadPositionPerformance, preparePositionPerformance, validatePerformanceRange } from "./position-performance";
 import { buildIntradayHistory, buildIvHistory } from "./intraday-history";
 import { createOptionChainStore, OptionChainLoadError } from "./option-chain";
 import { MAX_OPTION_LEGS, MAX_OPTION_EXPIRIES } from "./options";
@@ -159,6 +160,30 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
       const position = savedPosition(record);
       return c.json({ record, projection: projectPositionLots(position.schemaVersion === 2 ? position : upgradePositionLots(position)) });
     } catch { return c.json({ error: { code: "invalid_position", message: "Valid held entry costs are required to view dated lots." } }, 422); }
+  });
+  app.post("/api/strategies/:id/performance", async c => {
+    if (!c.get("session").local) return c.json({ error: { code: "history_local_only", message: "Hosted history requires a configured relay and shared provider limits." } }, 503);
+    let body: { revision: number; range: { start: string; end: string } };
+    try {
+      body = await readJson(c.req.raw) as typeof body;
+      if (!body || Object.keys(body).sort().join() !== "range,revision" || !Number.isSafeInteger(body.revision) || body.revision < 1) throw new Error();
+      validatePerformanceRange(body.range);
+    } catch (error) { return c.json({ error: { code: error instanceof Error && error.message === "too_large" ? "request_too_large" : "invalid_request" } }, error instanceof Error && error.message === "too_large" ? 413 : 400); }
+    const owner = c.get("session").owner, id = c.req.param("id"), store = createSavedStore(c.env.DB!);
+    const record = await store.get(owner, id);
+    if (record.revision !== body.revision) throw new SavedStoreError("conflict", 409);
+    let position: ReturnType<typeof upgradePositionLots>;
+    try {
+      const saved = savedPosition(record);
+      position = saved.schemaVersion === 2 ? saved : upgradePositionLots(saved);
+    } catch { return c.json({ error: { code: "invalid_position", message: "A saved listed position with held entry costs is required." } }, 422); }
+    try { preparePositionPerformance(position, body.range); }
+    catch { return c.json({ error: { code: "invalid_request", message: "Performance requires a listed position, at most 31 complete dates and 64 held identities." } }, 400); }
+    let performance: Awaited<ReturnType<typeof loadPositionPerformance>>;
+    try { performance = await loadPositionPerformance(position, body.range, c.env, thetaRequest); }
+    catch { return c.json({ error: { code: "history_unavailable", message: "Daily performance unavailable or terminal busy. Missing marks have not been substituted; the saved position is unchanged." } }, 503); }
+    if ((await store.get(owner, id)).revision !== body.revision) throw new SavedStoreError("conflict", 409);
+    return c.json({ savedId: id, revision: record.revision, range: body.range, source: "Theta EOD", performance });
   });
   app.post("/api/strategies/:id/valuation", async c => {
     let body: { revision: number; snapshotId: string; basis: "mid" | "natural" };

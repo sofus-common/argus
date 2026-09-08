@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { PositionPerformance } from './PositionPerformance'
 import type { StrategyState } from './options'
 import { assertRemainingLotInventory } from './lot-scenarios'
 import type { SavedStrategy } from './saved-strategies'
@@ -321,6 +322,7 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
     {busy && <p role="status">Updating lot records…</p>}{error && <p role="alert" className="workspace-error">{error}</p>}{notice && <p role="status">{notice}</p>}
     <button disabled={busy} onClick={() => void load()}>Reload saved record</button>
     {current && <><h3>Remaining lot inventory</h3>{inventory(current.projection)}{totals(current.projection)}
+      {!busy && !uncertain && !reviewing && <PositionPerformance key={`${savedId}:${current.record.revision}`} record={current.record} />}
       {valuation?.remainingState && <section><button disabled={busy || uncertain || reviewing} onClick={analyze}>Analyze remaining holdings</button><p>Opens a separate unsaved analysis with effective weighted lot costs. Excludes recorded realized P/L and the original allowance. Undo restores the previous strategy; saved history is unchanged.</p></section>}
       {valuation && !valuation.remainingState && <p>Builder analysis unavailable: {valuation.analysisUnavailable ?? 'This remaining inventory cannot be represented in the strategy builder.'}</p>}
       <div inert={!!amendmentReview}>

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added saved-position historical P/L with dated holdings, realized/unrealized
+  reconciliation, daily dollar changes, observed daily high/low and inspectable
+  per-lot report marks. Closes and rolls change the historical inventory; missing
+  and expired-unsettled holdings remain gaps, and closed periods need no marks.
+  The read-only endpoint binds ownership and revision before and after retrieval.
+  Theta requests reuse existing pacing, with 31-date/64-identity bounds and no
+  silent truncation. The UI recomputes returned accounting before displaying it
+  and rejects altered or stale results. Verified 101 focused tests, TypeScript,
+  production build, independent accounting/UI review and 28 browser checks at
+  both desktop and mobile widths. Real historical-provider behavior and full saved-position lifecycle
+  browser qualification remain pending. These are restated report-midpoint
+  estimates with unknown quote age, not market-close or synchronized valuations,
+  percentage/account returns, dividend/financing accounting or inferred settlement.
+
 - Added dated position-lot replay using the latest audited corrections and voids.
   Full-ledger validation preserves stable lot IDs, held quantities and corrected
   costs before applying the historical cutoff. Realized P/L reconciles through

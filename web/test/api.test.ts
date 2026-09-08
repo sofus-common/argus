@@ -1,5 +1,8 @@
 import { env } from "cloudflare:workers";
+import { sign } from "hono/jwt";
 import snapshotMigration from "../migrations/0003_quote_snapshots.sql?raw";
+import savedMigration from "../migrations/0001_saved_strategies.sql?raw";
+import lifecycleMigration from "../migrations/0002_position_lifecycle.sql?raw";
 import promptMigration from "../migrations/0004_analysis_prompts.sql?raw";
 import traceMigration from "../migrations/0005_analysis_traces.sql?raw";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -9,10 +12,66 @@ import { MODEL, RESPONSE_SCHEMA, spar, strategyFacts, parseSparringRequest, disc
 import { createApp, type Bindings } from "../src/worker";
 import { createPosition } from "../src/position-lifecycle";
 import { projectPositionLots, upgradePositionLots } from "../src/position-lots";
+import { createSavedStore } from "../src/saved-strategies";
 
 const local = { ARGUS_LOCAL_DEV: "true" };
 const traceDB = (env as { DB: D1Database }).DB;
 beforeAll(async () => { await traceDB.batch([...promptMigration.split(/;\s*(?=CREATE|$)/), ...traceMigration.split(/;\s*(?=CREATE|$)/)].filter(sql => sql.trim()).map(sql => traceDB.prepare(sql))); });
+beforeAll(async () => { await traceDB.batch((savedMigration + lifecycleMigration).split(";").filter(sql => sql.trim()).map(sql => traceDB.prepare(sql))); });
+it("binds daily performance to the owner and saved revision before provider access", async () => {
+  const store = createSavedStore(traceDB), state = createStrategy("long-call");
+  const own = await store.create("local-development", "Own", state), foreign = await store.create("another-owner", "Private", state);
+  const provider = vi.fn<typeof fetch>(), app = createApp(provider), bindings = { ...local, DB: traceDB, THETADATA_TERMINAL_URL: "http://127.0.0.1:25503" };
+  const range = { start: "2026-09-01", end: "2026-09-04" };
+  const request = (id: string, body: unknown, settings = bindings) => app.request(`http://localhost/api/strategies/${id}/performance`, { method: "POST", headers: { "content-type": "application/json", Origin: "http://localhost", "X-ARGUS-Request": "1" }, body: JSON.stringify(body) }, settings);
+  expect((await request(foreign.id, { revision: 1, range })).status).toBe(404);
+  expect((await request(own.id, { revision: 2, range })).status).toBe(409);
+  expect((await request(own.id, { revision: 1, range })).status).toBe(400);
+  for (const body of [{ revision: 0, range }, { revision: 1, range, state }, { revision: 1, range: { ...range, extra: true } }, { revision: 1, range: { start: "2026-02-30", end: "2026-03-01" } }, { revision: 1, range: { start: "2026-01-01", end: "2026-09-04" } }, { revision: 1, range: { start: "2099-01-01", end: "2099-01-02" } }, { revision: 1, range: { start: range.end, end: range.start } }]) expect((await request(own.id, body)).status).toBe(400);
+  expect((await request(own.id, { revision: 1, range }, { ...bindings, SAVED_RATE_LIMITER: { limit: async () => ({ success: false }) } } as typeof bindings)).status).toBe(429);
+  expect(provider).not.toHaveBeenCalled();
+});
+it("returns saved daily estimates read-only and rejects a revision changed during retrieval", async () => {
+  const store = createSavedStore(traceDB), range = { start: "2026-09-04", end: "2026-09-04" };
+  const snapshot: MarketSnapshot = { id: "performance-snapshot", underlying: "SPY", source: "Tastytrade", spot: 100, retrievedAt: "2026-09-04T12:00:00.000Z", spotAsOf: "2026-09-04T12:00:00.000Z", availableExpiries: ["2026-10-09"], contracts: [{ contractId: "SPY   261009C00100000", type: "call", strike: 100, expiry: "2026-10-09T20:00:00.000Z", multiplier: 100, bid: 2, ask: 3, iv: .25, quoteAsOf: "2026-09-04T12:00:00.000Z" }] };
+  const state = createMarketStrategy("long-call", snapshot); state.legs = []; state.stock = { shares: 100, entryPrice: 98 }; state.feeAllowance = 5; state.pricing!.entryMode = "fixed";
+  for (const changed of [false, true]) {
+    const record = await store.create("local-development", "Stock performance", state, snapshot);
+    const provider = vi.fn<typeof fetch>(async url => {
+      expect(String(url)).toContain("/v3/stock/history/eod?");
+      if (changed) await store.update("local-development", record.id, record.revision, "Changed while loading", state, snapshot);
+      return Response.json({ response: [{ created: "2026-09-04T17:15:00.000", last_trade: "2026-09-04T16:00:00.000", bid: 100, ask: 102 }] });
+    });
+    const result = await createApp(provider).request(`http://localhost/api/strategies/${record.id}/performance`, { method: "POST", headers: { "content-type": "application/json", Origin: "http://localhost", "X-ARGUS-Request": "1" }, body: JSON.stringify({ revision: record.revision, range }) }, { ...local, DB: traceDB, THETADATA_TERMINAL_URL: "http://127.0.0.1:25503" });
+    expect(result.status).toBe(changed ? 409 : 200);
+    expect(provider).toHaveBeenCalledOnce();
+    expect(result.headers.get("Cache-Control")).toBe("no-store");
+    if (!changed) {
+      const body = await result.json() as any;
+      expect(body).toMatchObject({ savedId: record.id, revision: record.revision, range, source: "Theta EOD", performance: { rows: [{ date: range.start, grossRealizedPnl: 0, unrealizedPnl: 300, combinedPnl: 295 }] } });
+      expect(typeof body.performance.basis).toBe("string");
+      expect(await store.get("local-development", record.id)).toEqual(record);
+    }
+  }
+});
+it("keeps daily performance local-only and enforces origin and authentication guards", async () => {
+  const bindings = { ACCESS_TEAM_DOMAIN: "https://argus.cloudflareaccess.com", ACCESS_AUD: "performance", APP_ORIGIN: "https://argus.example.com", DB: traceDB, ARGUS_LOCAL_DEV: "true" };
+  const keys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  const jwt = await sign({ iss: bindings.ACCESS_TEAM_DOMAIN, aud: [bindings.ACCESS_AUD], sub: "owner", exp: Math.floor(Date.now() / 1000) + 600 }, { ...await crypto.subtle.exportKey("jwk", keys.privateKey), kid: "performance", alg: "RS256" }, "RS256");
+  const provider = vi.fn<typeof fetch>(async url => {
+    expect(String(url)).toBe(`${bindings.ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs`);
+    return Response.json({ keys: [{ ...await crypto.subtle.exportKey("jwk", keys.publicKey), kid: "performance", alg: "RS256" }] });
+  });
+  const app = createApp(provider), body = JSON.stringify({ revision: 1, range: { start: "2026-09-01", end: "2026-09-04" } });
+  const headers = { "content-type": "application/json", Origin: bindings.APP_ORIGIN, "X-ARGUS-Request": "1" };
+  expect((await app.request(`${bindings.APP_ORIGIN}/api/strategies/private/performance`, { method: "POST", headers, body }, bindings)).status).toBe(401);
+  expect((await app.request("http://localhost/api/strategies/private/performance", { method: "POST", headers, body }, { ...local, DB: traceDB })).status).toBe(403);
+  expect(provider).not.toHaveBeenCalled();
+  const hosted = await app.request(`${bindings.APP_ORIGIN}/api/strategies/private/performance`, { method: "POST", headers: { ...headers, "Cf-Access-Jwt-Assertion": jwt }, body }, bindings);
+  expect(hosted.status).toBe(503);
+  expect(await hosted.json()).toMatchObject({ error: { code: "history_local_only" } });
+  expect(provider).toHaveBeenCalledOnce();
+});
 it("protects symbol discovery and keeps provider failures and credentials private", async () => {
   const provider = vi.fn<typeof fetch>(async input => String(input).endsWith("/oauth/token") ? new Response(JSON.stringify({ access_token: "private-token" })) : new Response(JSON.stringify({ data: { items: [{ symbol: "AAPL", description: "Apple Inc.", options: true, "instrument-type": "Equity" }] } })));
   const app = createApp(provider), credentials = { ...local, TASTYTRADE_CLIENT_SECRET: "secret", TASTYTRADE_REFRESH_TOKEN: "refresh" };

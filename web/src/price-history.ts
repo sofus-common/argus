@@ -27,7 +27,7 @@ function localTimestamp(value: unknown): string {
   day(value.slice(0, 10))
   return value.slice(0, 19) + '.' + (value.split('.')[1] ?? '').padEnd(3, '0')
 }
-function marks(raw: unknown, range: HistoricalRange): Map<string, HistoricalMark> {
+export function historicalMarks(raw: unknown, range: HistoricalRange): Map<string, HistoricalMark> {
   if (!Array.isArray(raw) || raw.length > 31) throw new Error('Invalid history rows')
   const result = new Map<string, HistoricalMark>()
   for (const item of raw) {
@@ -59,9 +59,9 @@ export function buildPriceHistory(state: StrategyState, optionResponses: unknown
     if (!response.length) return new Map<string, HistoricalMark>()
     const item = record(response[0]), contract = record(item.contract)
     if (contract.symbol !== state.underlying || contract.strike !== leg.strike || contract.right !== leg.type.toUpperCase() || contract.expiration !== leg.expiry.slice(0, 10)) throw new Error('Historical contract mismatch')
-    return marks(item.data, range)
+    return historicalMarks(item.data, range)
   })
-  const stock = marks(record(stockResponse).response, range)
+  const stock = historicalMarks(record(stockResponse).response, range)
   const rows = Array.from({ length: days }, (_, index) => {
     const date = new Date(Date.parse(start) + index * 86_400_000).toISOString().slice(0, 10)
     const underlying = stock.get(date) ?? null

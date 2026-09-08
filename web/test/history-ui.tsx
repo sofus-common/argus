@@ -4,6 +4,10 @@ import { PriceHistory } from '../src/PriceHistory'
 import { HistoryCharts } from '../src/HistoryCharts'
 import { App, SnapshotAge, StreamedMarks, AssignmentOutcomes } from '../src/App'
 import { SavedImport } from '../src/SavedImport'
+import { PositionPerformance } from '../src/PositionPerformance'
+import { buildPositionPerformance } from '../src/position-performance'
+import { createPosition } from '../src/position-lifecycle'
+import { upgradePositionLots } from '../src/position-lots'
 import { calculateStrategy, createMarketStrategy, createStrategy, type MarketSnapshot } from '../src/options'
 import { buildIntradayHistory, buildIvHistory } from '../src/intraday-history'
 import { buildPriceHistory } from '../src/price-history'
@@ -80,6 +84,51 @@ async function run() {
     finally { await unmount() }
   }
   try {
+    await test('Saved performance validates dated P/L, gaps, response identity and cancellation', async () => {
+      await unmount(); const priorFetch = window.fetch;
+      const stamp = '2026-09-01T12:00:00.000Z', expiry = '2026-10-09T20:00:00.000Z';
+      const snapshot: MarketSnapshot = { id: 'performance-quotes', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2026-10-09'], contracts: [{ contractId: 'SPY   261009C00100000', type: 'call', strike: 100, expiry, multiplier: 100, bid: 1.9, ask: 2.1, iv: .2, quoteAsOf: stamp }] };
+      const held = createMarketStrategy('long-call', snapshot); held.pricing!.entryMode = 'fixed'; held.feeAllowance = 7;
+      const record = { id: 'performance-saved', title: 'Performance fixture', revision: 3, createdAt: stamp, updatedAt: stamp, state: held, snapshot, lifecycle: createPosition(held) };
+      const range = { start: '2026-09-01', end: '2026-09-03' };
+      const performance = buildPositionPerformance(upgradePositionLots(record.lifecycle), [{ response: [{ contract: { symbol: 'SPY', strike: 100, expiration: '2026-10-09', right: 'CALL' }, data: [1, 3].map(day => ({ bid: day === 1 ? 2.9 : .9, ask: day === 1 ? 3.1 : 1.1, created: `2026-09-0${day}T17:15:00.000`, last_trade: `2026-09-0${day}T16:00:00.000` })) }] }], { response: [] }, range);
+      const response = () => ({ savedId: record.id, revision: record.revision, range, source: 'Theta EOD', performance });
+      const calls: Array<{ signal?: AbortSignal | null; finish: (body: unknown) => void }> = [];
+      window.fetch = (async (url, init) => {
+        assert(url === '/api/strategies/performance-saved/performance', 'Unexpected performance request');
+        const body = JSON.parse(String(init?.body)); assert(body.revision === 3 && body.range.start === range.start && body.range.end === range.end, 'Performance request lost revision or selected dates');
+        return new Promise<Response>(resolve => calls.push({ signal: init?.signal, finish: body => resolve(Response.json(body)) }));
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 100 && !check(); i++) await settleTimers(); assert(check(), 'Performance workflow did not settle') };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<PositionPerformance record={record} />));
+        await change('Performance start date', range.start); await change('Performance end date', range.end);
+        await click('Load position performance'); assert(calls.length === 1 && fixture.textContent?.includes('Loading recorded-position history'), 'Explicit load did not start');
+        await act(async () => calls[0].finish(response())); await waitFor(() => !!fixture.querySelector('[aria-label="Selected performance accounting"]'));
+        assert(fixture.querySelectorAll('svg').length === 1 && fixture.querySelectorAll('[data-history-segment]').length === 2, 'Saved performance bridged missing marks or included an underlying plot');
+        assert(fixture.textContent?.includes('-$107.00') && fixture.textContent.includes('$93.00') && fixture.textContent.includes('2026-09-03T17:15:00.000'), 'P/L or raw report times were lost');
+        await change('Inspect history date', '1');
+        assert(fixture.querySelector('[aria-label="Selected performance accounting"]')?.textContent?.includes('No admissible dated mark'), 'Missing lot identity was not explained');
+        await click('Load position performance'); const tampered = structuredClone(response()); tampered.performance.rows[0].combinedPnl = 999;
+        await act(async () => calls[1].finish(tampered)); await waitFor(() => !!fixture.querySelector('[role="alert"]'));
+        assert(!fixture.querySelector('svg'), 'Altered P/L was displayed');
+        await click('Load position performance'); await act(async () => calls[2].finish({ ...response(), revision: 2 }));
+        await waitFor(() => !!fixture.querySelector('[role="alert"]')); assert(!fixture.querySelector('svg'), 'Stale revision was displayed');
+        await click('Load position performance'); await change('Performance end date', '2026-09-02');
+        assert(calls[3].signal?.aborted, 'Date change did not cancel performance');
+        await act(async () => calls[3].finish(response())); assert(!fixture.querySelector('svg'), 'Late response survived date change');
+        await change('Performance end date', range.end); await click('Load position performance'); await unmount();
+        assert(calls[4].signal?.aborted, 'Unmount did not cancel performance');
+      } finally { await unmount(); window.fetch = priorFetch }
+    });
+    await test('Performance chart preserves P/L gaps and does not reuse fixed-inventory labels', async () => {
+      await unmount();
+      root = createRoot(fixture);
+      await act(async () => root!.render(<HistoryCharts performanceLabel="Net position P/L" rows={[{ label: '2026-09-01', value: 0, underlying: null }, { label: '2026-09-02', value: null, underlying: null }, { label: '2026-09-03', value: -10, underlying: null }]} selected={0} onInspect={() => {}} />));
+      assert(fixture.querySelectorAll('svg').length === 1 && fixture.querySelectorAll('[data-history-segment]').length === 2, 'Performance chart bridged a gap or retained underlying plot');
+      assert(fixture.textContent?.includes('Net position P/L') && fixture.textContent.includes('$0.00'), 'Performance chart omitted label or zero');
+      assert(!/Fixed current holdings|Current inventory|Quote sides|point for discussion/.test(fixture.textContent ?? ''), 'Performance chart reused misleading inventory labels');
+    });
     await test('Saved JSON preview binds the chosen file, imports once and distinguishes uncertain writes from failed refreshes', async () => {
       await unmount(); const priorFetch = window.fetch;
       let posts = 0, refreshes = 0, failRefresh = false, deferRefresh = false;
