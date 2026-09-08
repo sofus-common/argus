@@ -24,6 +24,8 @@ import {
   translateStrikes,
   marketLeg,
   searchCandidates,
+  candidateOptionFamily,
+  CANDIDATE_OPTION_FAMILIES,
   compareSearchCandidate,
   COMPARISON_TOPICS,
   parseComparisonIntent,
@@ -289,6 +291,57 @@ describe('mixed-expiry candidate bounds', () => {
       expect(candidate.state.valuationModel).toBe('european-bsm-v1');
       expect(validateMarketStrategy(candidate.state, index)).toEqual([]);
     }
+  });
+});
+describe('explicit same-expiry candidate families', () => {
+  const snapshot: MarketSnapshot = { id: 'family-search', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09'], contracts: [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   261009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100 as const, bid: 1, ask: 3, iv: .2, quoteAsOf: '2026-09-01T12:00:00.000Z' }))) };
+  const input = { targetSpot: 103, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 100000, feeAllowance: 5, basis: 'mid' as const, objective: 'target-pnl' as const };
+  it('ranks only requested directional verticals against an independent payoff oracle', () => {
+    const held = createMarketStrategy('long-call', snapshot), before = structuredClone({ held, snapshot });
+    for (const basis of ['mid', 'natural'] as const) for (const objective of ['target-pnl', 'return-on-risk'] as const) {
+      const calls = snapshot.contracts.filter(quote => quote.type === 'call');
+      const oracle = calls.flatMap(long => calls.filter(short => short.strike > long.strike).map(short => {
+        const entry = basis === 'mid' ? 0 : 200;
+        const pnl = Math.round(((Math.max(0, 103 - long.strike) - Math.max(0, 103 - short.strike)) * 100 - entry - 5) * 100) / 100;
+        return { id: `long:${long.contractId}|short:${short.contractId}`, pnl, loss: entry + 5, score: objective === 'target-pnl' ? pnl : pnl / (entry + 5) };
+      })).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 5);
+      const result = searchCandidates(held, snapshot, { ...input, basis, objective }, { families: ['bull-call'], maxEntryOutlay: 10000 });
+      expect(result).toMatchObject({ planned: 10, evaluated: 10, eligible: 10 });
+      expect(result.candidates.map(candidate => ({ id: candidate.id, pnl: candidate.metrics.scenarioPnl, loss: candidate.metrics.maxLoss, score: candidate.score }))).toEqual(oracle);
+      expect(() => compareSearchCandidate(held, snapshot, { id: result.candidates[0].id, request: { ...input, basis, objective }, domain: result.domain }, Date.parse(snapshot.retrievedAt))).not.toThrow();
+    }
+    expect({ held, snapshot }).toEqual(before);
+  });
+  it('partitions all sixteen families and unions the options umbrella without duplicates', () => {
+    const held = createMarketStrategy('long-call', snapshot), legacy = searchCandidates(held, snapshot, input);
+    const counts = [5, 5, 10, 10, 10, 10, 5, 10, 4, 4, 4, 4, 10, 10, 5, 5];
+    CANDIDATE_OPTION_FAMILIES.forEach((family, index) => {
+      expect(candidateOptionFamily(createStrategy(family).legs), family).toBe(family);
+      const result = searchCandidates(held, snapshot, input, { families: [family], maxEntryOutlay: 100000 });
+      expect(result.planned, family).toBe(counts[index]); expect(result.evaluated, family).toBe(counts[index]);
+      expect(result.candidates.length, family).toBeGreaterThan(0);
+      for (const candidate of result.candidates) {
+        expect(candidateOptionFamily(candidate.state.legs), family).toBe(family);
+        expect(candidateOptionFamily([...candidate.state.legs].reverse()), family).toBe(family);
+      }
+    });
+    for (const families of [[...CANDIDATE_OPTION_FAMILIES], ['options' as const, ...CANDIDATE_OPTION_FAMILIES]]) {
+      const result = searchCandidates(held, snapshot, input, { families, maxEntryOutlay: 100000 });
+      expect(result.planned).toBe(counts.reduce((a, b) => a + b)); expect(result.planned).toBe(legacy.planned);
+      expect(result.candidates).toEqual(legacy.candidates);
+    }
+    expect(searchCandidates(held, snapshot, input)).toEqual(legacy);
+  });
+  it('rejects unsupported leg structures rather than trusting strategy names', () => {
+    const legs = createMarketStrategy('call-butterfly', snapshot).legs;
+    expect(candidateOptionFamily(legs)).toBe('call-butterfly');
+    for (const invalid of [[], [legs[0], legs[0]], legs.map(leg => ({ ...leg, contracts: 3 })), legs.map((leg, index) => index ? leg : { ...leg, expiry: '2026-11-09T20:00:00.000Z' }), legs.map((leg, index) => index ? leg : { ...leg, multiplier: 10 } as unknown as OptionLeg), legs.map((leg, index) => index ? leg : { ...leg, strike: NaN }), legs.map((leg, index) => index ? leg : { ...leg, strike: leg.strike - 1 })]) expect(candidateOptionFamily(invalid)).toBeNull();
+  });
+  it('counts only selected families before applying the bounded-search cap', () => {
+    const wide = { ...snapshot, contracts: Array.from({ length: 50 }, (_, i) => i + 75).flatMap(strike => snapshot.contracts.slice(0, 2).map(quote => ({ ...quote, strike, contractId: `SPY   261009${quote.type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}` }))) };
+    const held = createMarketStrategy('long-call', wide);
+    expect(() => searchCandidates(held, wide, input)).toThrow('300,000 structures');
+    expect(searchCandidates(held, wide, input, { families: ['bull-call'], maxEntryOutlay: 100000 })).toMatchObject({ planned: 1225, evaluated: 1225 });
   });
 });
 describe('explicit stock-backed candidate domain', () => {

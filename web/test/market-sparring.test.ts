@@ -849,6 +849,10 @@ it('rejects malformed discovery domains and unsupported model or objective befor
     const fresh = { ...snapshot, spotAsOf: snapshot.retrievedAt, contracts: snapshot.contracts.map(c => ({ ...c, quoteAsOf: snapshot.retrievedAt })) };
     const search = { targetSpot: 655, targetDate: snapshot.retrievedAt, maxLoss: 1000, feeAllowance: 5, basis: 'natural', objective: 'target-pnl' };
     const valid = { families: ['call-calendar'], maxEntryOutlay: 1000 };
+    const directOnly = { ...search, domain: { families: ['bull-call'], maxEntryOutlay: 1000 } };
+    const directOnlyFetcher = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { tool_calls: [{ id: 'direct-only-domain', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify(directOnly) } }] } }] }));
+    await expect(spar(request(), 'key', directOnlyFetcher, context, fresh)).rejects.toThrow('Invalid scenario tool request');
+    expect(directOnlyFetcher).toHaveBeenCalledTimes(1);
     for (const args of [null, [], { ...search, domain: null }, ...[{ families: [] }, { families: ['options'] }, { families: ['flow'], maxEntryOutlay: 1 }, { families: ['options', 'options'], maxEntryOutlay: 1 }, { families: ['options'], maxEntryOutlay: -1 }, { families: ['options'], maxEntryOutlay: '100' }, { ...valid, extra: true }].map(domain => ({ ...search, domain })), { ...search, domain: valid }, { ...search, domain: valid, objective: 'expiry-probability' }, { ...search, domain: { families: ['options'], maxEntryOutlay: 1 }, snapshotId: 'other-owner' }]) {
       const input = request(); if ((args as any)?.objective === 'expiry-probability') input.state.valuationModel = 'american-crr-1024-v1';
       const before = structuredClone(input);

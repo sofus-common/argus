@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { expirationProbability, firstExpirySpreadLossBound, validateMarketStrategy, type MarketSnapshot, type StrategyState, type searchCandidates } from './options'
+import { CANDIDATE_OPTION_FAMILIES, candidateOptionFamily, expirationProbability, firstExpirySpreadLossBound, validateMarketStrategy, type MarketSnapshot, type StrategyState, type searchCandidates } from './options'
 import { requestWorkspaceValuation } from './workspace-valuation-client'
 
 export type CandidateSearchResult = ReturnType<typeof searchCandidates>
 type Search = CandidateSearchResult['request']
 type Domain = NonNullable<Parameters<typeof searchCandidates>[3]>
-const familyLabels = { options: 'Options only', 'covered-call': 'Covered call', 'protective-put': 'Protective put', collar: 'Collar', 'call-calendar': 'Call calendar', 'put-calendar': 'Put calendar', 'call-diagonal': 'Call diagonal', 'put-diagonal': 'Put diagonal' } as const
+const familyLabels = { options: 'Options only', 'long-call': 'Long call', 'long-put': 'Long put', 'bull-call': 'Bull call spread', 'bear-call': 'Bear call spread', 'bull-put': 'Bull put spread', 'bear-put': 'Bear put spread', 'long-straddle': 'Long straddle', 'long-strangle': 'Long strangle', 'call-butterfly': 'Call butterfly', 'put-butterfly': 'Put butterfly', 'short-call-butterfly': 'Short call butterfly', 'short-put-butterfly': 'Short put butterfly', 'iron-butterfly': 'Iron butterfly', 'inverse-iron-butterfly': 'Inverse iron butterfly', 'iron-condor': 'Iron condor', 'inverse-iron-condor': 'Inverse iron condor', 'covered-call': 'Covered call', 'protective-put': 'Protective put', collar: 'Collar', 'call-calendar': 'Call calendar', 'put-calendar': 'Put calendar', 'call-diagonal': 'Call diagonal', 'put-diagonal': 'Put diagonal' } as const
+const specificOptionFamily = (family: string) => CANDIDATE_OPTION_FAMILIES.some(value => value === family)
 const mixedFamily = (family: string) => family.endsWith('-calendar') || family.endsWith('-diagonal')
 const supportedFamily = (family: string, state: StrategyState) => !mixedFamily(family) || state.valuationModel === 'american-crr-1024-v1' || (state.valuationModel ?? 'european-bsm-v1') === 'european-bsm-v1' && (!family.startsWith('call-') || state.dividendYield <= 0)
 const entryOutlay = (state: StrategyState) => Math.max(0, state.legs.reduce((sum, leg) => sum + (leg.side === 'long' ? 1 : -1) * leg.entryPrice * leg.contracts * leg.multiplier, (state.stock?.shares ?? 0) * (state.stock?.entryPrice ?? 0)) + (state.feeAllowance ?? 0))
@@ -31,7 +32,10 @@ export async function checkSearch(raw: unknown, state: StrategyState, snapshot: 
       const put = next.legs.find(leg => leg.type === 'put' && leg.side === 'long'), call = next.legs.find(leg => leg.type === 'call' && leg.side === 'short')
       const family = next.legs.length === 1 && call ? 'covered-call' : next.legs.length === 1 && put ? 'protective-put' : next.legs.length === 2 && put && call && put.strike <= call.strike ? 'collar' : null
       if (next.stock.shares !== 100 || next.stock.entryPrice !== snapshot.spot || next.legs.some(leg => leg.contracts !== 1) || !family || !domain?.families.includes(family)) throw new Error('Stock-backed candidate is outside the selected families or captured share price.')
-    } else if (domain && !domain.families.includes('options')) throw new Error('Option-only candidate is outside the selected families.')
+    } else {
+      const family = candidateOptionFamily(next.legs)
+      if (!family || domain && !domain.families.includes('options') && !domain.families.includes(family)) throw new Error('Option-only candidate is outside the selected families.')
+    }
     const { metrics } = await requestWorkspaceValuation(next, signal)
     const lossBound = mixed ? firstExpirySpreadLossBound(next) : undefined
     const risk = lossBound?.amount ?? metrics.maxLoss
@@ -58,6 +62,7 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
   const validDate = Number.isFinite(Date.parse(`${date}Z`)) && Date.parse(`${date}Z`) >= Date.parse(snapshot.retrievedAt)
   const hasMixed = families.some(mixedFamily), supported = families.every(family => supportedFamily(family, state))
   const availableFamilies = (Object.keys(familyLabels) as Domain['families']).filter(family => state.underlyingKind !== 'cash-index' || !['covered-call', 'protective-put', 'collar'].includes(family))
+  const familyControl = (family: Domain['families'][number]) => <label key={family}><input type="checkbox" aria-label={`Optimizer ${familyLabels[family].toLowerCase()}`} disabled={!supportedFamily(family, state)} checked={families.includes(family)} onChange={event => { invalidate(); setFamilies(event.target.checked ? [...families.filter(value => family === 'options' ? !specificOptionFamily(value) : !specificOptionFamily(family) || value !== 'options'), family] : families.filter(value => value !== family)) }} />{familyLabels[family]}</label>
   const valid = !!target.trim() && Number(target) > 0 && Number(target) <= 1000000 && !!loss.trim() && Number.isFinite(Number(loss)) && Number(loss) > 0 && !!fee.trim() && Number.isFinite(Number(fee)) && Number(fee) >= 0 && validDate && families.length > 0 && !!outlay.trim() && Number.isFinite(Number(outlay)) && Number(outlay) >= 0 && supported && (!hasMixed || objective !== 'expiry-probability')
   const search = async () => {
     if (!valid || pending || disabled) return
@@ -78,7 +83,7 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
   return <section className="verified-risk" aria-label="Strategy optimizer"><details><summary>Find a strategy · deterministic optimizer</summary>
     <p>Search this quoted window for a new position. No AI call, order or holding change. Snapshot {snapshot.id} · workspace v{state.version} · {snapshot.contracts.length} quotes.</p>
     <form onSubmit={event => { event.preventDefault(); void search() }}><fieldset className="chain-window" disabled={disabled}>
-      <fieldset><legend>Search families</legend>{availableFamilies.map(family => <label key={family}><input type="checkbox" aria-label={`Optimizer ${familyLabels[family].toLowerCase()}`} disabled={!supportedFamily(family, state)} checked={families.includes(family)} onChange={event => { invalidate(); setFamilies(event.target.checked ? [...families, family] : families.filter(value => value !== family)) }} />{familyLabels[family]}</label>)}</fieldset>
+      <fieldset><legend>Search families</legend>{familyControl('options')}<p>Options only searches all supported same-expiry option strategies. Choose specific strategies below to narrow the search before ranking.</p><details><summary>Choose specific option strategies{families.some(specificOptionFamily) ? ` · ${families.filter(specificOptionFamily).length} selected` : ''}</summary>{availableFamilies.filter(specificOptionFamily).map(familyControl)}</details>{availableFamilies.filter(family => family !== 'options' && !specificOptionFamily(family)).map(familyControl)}</fieldset>
       <label>Maximum net entry outlay · USD<input aria-label="Optimizer maximum entry outlay" type="number" min="0" step="any" required value={outlay} onChange={event => { invalidate(); setOutlay(event.target.value) }} /></label>
       <p>Outlay is net option debit plus {state.underlyingKind !== 'cash-index' && 'share purchase cost and '}fee allowance, floored at zero. It is not margin, buying power or total capital at risk.{state.underlyingKind !== 'cash-index' && ' Stock-backed families buy 100 shares at the dated underlying spot mark, not a bid/ask or natural fill; quote basis applies only to options.'}</p>
       <label>Target price<input aria-label="Optimizer target price" type="number" min="0.001" max="1000000" step="any" required value={target} onChange={event => { invalidate(); setTarget(event.target.value) }} /></label>

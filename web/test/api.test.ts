@@ -98,6 +98,20 @@ it("searches quoted candidates directly without inference and rejects stale or f
   const result = await request({ state, search });
   expect(result.status).toBe(200); expect(await result.json()).toEqual({ search: searchCandidates(state, snapshot, search) });
   expect(result.headers.get("Cache-Control")).toBe("no-store"); expect(state).toEqual(original);
+  const verticalDomain = { families: ["bull-call"], maxEntryOutlay: 1000 };
+  const verticalResult = await request({ state, search, domain: verticalDomain });
+  expect(verticalResult.status).toBe(200);
+  const verticalBody = await verticalResult.json() as any;
+  expect(verticalBody.search.domain).toEqual(verticalDomain);
+  expect(verticalBody.search.planned).toBe(3);
+  expect(verticalBody.search.candidates).toHaveLength(3);
+  for (const candidate of verticalBody.search.candidates) {
+    const [long, short] = candidate.state.legs;
+    expect(long.type).toBe('call'); expect(short.type).toBe('call');
+    expect(long.side).toBe('long'); expect(short.side).toBe('short');
+    expect(long.strike).toBeLessThan(short.strike);
+    expect(candidate.metrics).toEqual(calculateStrategy(candidate.state));
+  }
   const domain = { families: ["covered-call"], maxEntryOutlay: 9805 };
   const stockResult = await request({ state, search: { ...search, maxLoss: 10000 }, domain });
   expect(stockResult.status).toBe(200);

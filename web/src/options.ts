@@ -1281,7 +1281,24 @@ export function firstExpirySpreadLossBound(state: StrategyState) {
     basis: `Conservative intact-position loss bound at short expiry from the ${american ? 'American long option intrinsic floor' : 'European long option discounted no-arbitrage floor with fixed rate and continuous yield'}, signed entry debit and allowance. Not an attained maximum, lifetime risk, margin, executable liquidation, assignment, funding or settlement cashflows. Later position management is outside this bound.` };
 }
 
-export type CandidateSearchDomain = { families: Array<'options' | 'covered-call' | 'protective-put' | 'collar' | 'call-calendar' | 'put-calendar' | 'call-diagonal' | 'put-diagonal'>; maxEntryOutlay: number };
+export const CANDIDATE_OPTION_FAMILIES = ['long-call', 'long-put', 'bull-call', 'bear-call', 'bull-put', 'bear-put', 'long-straddle', 'long-strangle', 'call-butterfly', 'put-butterfly', 'short-call-butterfly', 'short-put-butterfly', 'iron-butterfly', 'inverse-iron-butterfly', 'iron-condor', 'inverse-iron-condor'] as const;
+export type CandidateOptionFamily = typeof CANDIDATE_OPTION_FAMILIES[number];
+export type CandidateSearchDomain = { families: Array<CandidateOptionFamily | 'options' | 'covered-call' | 'protective-put' | 'collar' | 'call-calendar' | 'put-calendar' | 'call-diagonal' | 'put-diagonal'>; maxEntryOutlay: number };
+export function candidateOptionFamily(legs: OptionLeg[]): CandidateOptionFamily | null {
+  if (!Array.isArray(legs) || !legs.length || legs.length > 4 || legs.some(leg => !leg || !['call', 'put'].includes(leg.type) || !['long', 'short'].includes(leg.side) || !finite(leg.strike) || leg.strike <= 0 || leg.multiplier !== 100 || ![1, 2].includes(leg.contracts) || typeof leg.contractId !== 'string' || !leg.contractId || !Number.isFinite(Date.parse(leg.expiry))) || new Set(legs.map(leg => leg.contractId)).size !== legs.length || new Set(legs.map(leg => leg.expiry)).size !== 1) return null;
+  const sorted = [...legs].sort((a, b) => a.strike - b.strike), [low, middle, high] = sorted;
+  if (legs.length === 1) return low.side === 'long' && low.contracts === 1 ? `long-${low.type}` : null;
+  if (legs.length === 3) return sorted.every(leg => leg.type === low.type) && low.strike < middle.strike && middle.strike < high.strike && Math.round(low.strike * 1000) + Math.round(high.strike * 1000) === 2 * Math.round(middle.strike * 1000) && low.contracts === 1 && middle.contracts === 2 && high.contracts === 1 && low.side === high.side && low.side !== middle.side ? `${low.side === 'short' ? 'short-' : ''}${low.type}-butterfly` : null;
+  if (legs.some(leg => leg.contracts !== 1)) return null;
+  if (legs.length === 2) {
+    if (low.type === middle.type) return low.strike < middle.strike && low.side !== middle.side ? `${low.side === 'long' ? 'bull' : 'bear'}-${low.type}` : null;
+    const put = legs.find(leg => leg.type === 'put')!, call = legs.find(leg => leg.type === 'call')!;
+    return put.side === 'long' && call.side === 'long' && put.strike <= call.strike ? `long-${put.strike === call.strike ? 'straddle' : 'strangle'}` : null;
+  }
+  const puts = sorted.filter(leg => leg.type === 'put'), calls = sorted.filter(leg => leg.type === 'call');
+  if (puts.length !== 2 || calls.length !== 2 || puts[0].strike >= puts[1].strike || calls[0].strike >= calls[1].strike || puts[1].strike > calls[0].strike || puts[0].side !== calls[1].side || puts[1].side !== calls[0].side || puts[0].side === puts[1].side) return null;
+  return `${puts[0].side === 'short' ? 'inverse-' : ''}iron-${puts[1].strike === calls[0].strike ? 'butterfly' : 'condor'}`;
+}
 export type CandidateSelection = { id: string; request: Parameters<typeof searchCandidates>[2]; domain?: CandidateSearchDomain };
 export const COMPARISON_TOPICS = ['target-pnl', 'cost-basis', 'structure', 'delta', 'gamma', 'theta', 'vega', 'rho', 'loss-bound', 'probability', 'apply-status'] as const;
 export type ComparisonIntent = {
@@ -1365,8 +1382,10 @@ export function compareSearchCandidate(state: StrategyState, snapshot: MarketSna
   };
 }
 export function searchCandidates(context: StrategyState, snapshot: MarketSnapshot, input: { targetSpot: number; targetDate: string; maxLoss: number; feeAllowance: number; basis: PricingBasis; objective: "target-pnl" | "return-on-risk" | "expiry-probability" }, domain?: CandidateSearchDomain) {
-  if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== 'families,maxEntryOutlay' || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !['options', 'covered-call', 'protective-put', 'collar', 'call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'].includes(family)) || !finite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0)) throw new Error('Invalid candidate search domain');
-  const options = domain === undefined || domain.families.includes('options');
+  if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== 'families,maxEntryOutlay' || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => ![...CANDIDATE_OPTION_FAMILIES, 'options', 'covered-call', 'protective-put', 'collar', 'call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'].includes(family)) || !finite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0)) throw new Error('Invalid candidate search domain');
+  const selected = (family: CandidateOptionFamily) => domain === undefined || domain.families.includes('options') || domain.families.includes(family);
+  const options = CANDIDATE_OPTION_FAMILIES.some(selected);
+  const verticalFamily = (long: MarketContract, short: MarketContract): CandidateOptionFamily => `${long.strike < short.strike ? 'bull' : 'bear'}-${long.type}`;
   if (context.underlyingKind === 'cash-index' && domain?.families.some(family => ['covered-call', 'protective-put', 'collar'].includes(family))) throw new Error('Cash-index discovery cannot include stock families');
   if (!input || Object.keys(input).sort().join() !== "basis,feeAllowance,maxLoss,objective,targetDate,targetSpot" || !finite(input.targetSpot) || input.targetSpot <= 0 || input.targetSpot > 1_000_000 || !finite(input.maxLoss) || input.maxLoss <= 0 || !finite(input.feeAllowance) || input.feeAllowance < 0 || !["mid", "natural"].includes(input.basis) || !["target-pnl", "return-on-risk", "expiry-probability"].includes(input.objective) || typeof input.targetDate !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(input.targetDate) || !Number.isFinite(Date.parse(input.targetDate)) || new Date(input.targetDate).toISOString() !== (input.targetDate.includes(".") ? input.targetDate : input.targetDate.replace("Z", ".000Z")) || Date.parse(input.targetDate) < Date.parse(snapshot.retrievedAt)) throw new Error("Invalid candidate search request");
   if (snapshot.historical || snapshot.contracts.length > MAX_CHAIN_CONTRACTS || new Set(snapshot.contracts.map(c => c.contractId)).size !== snapshot.contracts.length || validateMarketStrategy(context, snapshot).length) throw new Error("Candidate snapshot unavailable or invalid");
@@ -1394,14 +1413,17 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
     puts: contracts.filter(c => c.expiry === expiry && c.type === "put").sort((a, b) => a.strike - b.strike),
   }));
   const equalWings = (a: MarketContract, b: MarketContract, c: MarketContract) => Math.round(a.strike * 1000) + Math.round(c.strike * 1000) === 2 * Math.round(b.strike * 1000);
-  let planned = options ? contracts.length : 0;
+  let planned = contracts.filter(contract => selected(`long-${contract.type}`)).length;
   if (options) for (const { calls, puts } of groups) {
-    for (const put of puts) planned += calls.filter(call => put.strike <= call.strike).length;
+    for (const put of puts) planned += calls.filter(call => put.strike <= call.strike && selected(`long-${put.strike === call.strike ? 'straddle' : 'strangle'}`)).length;
     for (const group of [calls, puts]) {
-      for (const long of group) planned += group.filter(short => short.strike !== long.strike).length;
-      for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) for (let k = j + 1; k < group.length; k++) if (equalWings(group[i], group[j], group[k])) planned += 2;
+      for (const long of group) planned += group.filter(short => short.strike !== long.strike && selected(verticalFamily(long, short))).length;
+      for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) for (let k = j + 1; k < group.length; k++) if (equalWings(group[i], group[j], group[k])) planned += Number(selected(`${group[i].type}-butterfly`)) + Number(selected(`short-${group[i].type}-butterfly`));
     }
-    for (let q = 1; q < puts.length; q++) for (let c = 0; c < calls.length; c++) if (puts[q].strike <= calls[c].strike) planned += 2 * q * (calls.length - c - 1);
+    for (let q = 1; q < puts.length; q++) for (let c = 0; c < calls.length; c++) if (puts[q].strike <= calls[c].strike) {
+      const family = puts[q].strike === calls[c].strike ? 'butterfly' : 'condor';
+      planned += (Number(selected(`iron-${family}`)) + Number(selected(`inverse-iron-${family}`))) * q * (calls.length - c - 1);
+    }
   }
   for (const { calls, puts } of groups) {
     if (domain?.families.includes('covered-call')) planned += calls.length;
@@ -1441,15 +1463,15 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
   };
   if (options) for (const long of contracts) {
     const leg = longLegs.get(long.contractId)!;
-    evaluate([leg]);
-    for (const short of contracts) if (short.type === long.type && short.expiry === long.expiry && short.strike !== long.strike) evaluate([leg, marketLeg(short, "short", 1, short.contractId, input.basis)]);
+    if (selected(`long-${long.type}`)) evaluate([leg]);
+    for (const short of contracts) if (short.type === long.type && short.expiry === long.expiry && short.strike !== long.strike && selected(verticalFamily(long, short))) evaluate([leg, marketLeg(short, "short", 1, short.contractId, input.basis)]);
   }
   if (options) for (const { calls, puts } of groups) {
-    for (const put of puts) for (const call of calls) if (put.strike <= call.strike) evaluate([
+    for (const put of puts) for (const call of calls) if (put.strike <= call.strike && selected(`long-${put.strike === call.strike ? 'straddle' : 'strangle'}`)) evaluate([
       longLegs.get(put.contractId)!, longLegs.get(call.contractId)!,
     ]);
     for (const group of [calls, puts]) for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) for (let k = j + 1; k < group.length; k++) {
-      if (equalWings(group[i], group[j], group[k])) for (const side of ["long", "short"] as const) evaluate([
+      if (equalWings(group[i], group[j], group[k])) for (const side of ["long", "short"] as const) if (selected(`${side === 'short' ? 'short-' : ''}${group[i].type}-butterfly`)) evaluate([
         marketLeg(group[i], side, 1, group[i].contractId, input.basis),
         marketLeg(group[j], side === "long" ? "short" : "long", 2, group[j].contractId, input.basis),
         marketLeg(group[k], side, 1, group[k].contractId, input.basis),
@@ -1457,7 +1479,7 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
     }
     for (let p = 0; p < puts.length; p++) for (let q = p + 1; q < puts.length; q++) for (let c = 0; c < calls.length; c++) {
       if (puts[q].strike > calls[c].strike) continue;
-      for (let d = c + 1; d < calls.length; d++) for (const side of ["long", "short"] as const) evaluate([
+      for (let d = c + 1; d < calls.length; d++) for (const side of ["long", "short"] as const) if (selected(`${side === 'short' ? 'inverse-' : ''}iron-${puts[q].strike === calls[c].strike ? 'butterfly' : 'condor'}`)) evaluate([
         marketLeg(puts[p], side, 1, puts[p].contractId, input.basis),
         marketLeg(puts[q], side === "long" ? "short" : "long", 1, puts[q].contractId, input.basis),
         marketLeg(calls[c], side === "long" ? "short" : "long", 1, calls[c].contractId, input.basis),
@@ -1478,7 +1500,7 @@ export function searchCandidates(context: StrategyState, snapshot: MarketSnapsho
     probabilityBasis: "Snapshot spot/time to each expiry, using one shared nearest-spot quoted contract IV per expiry (contract ID breaks ties), plus global IV shift. Risk-neutral lognormal positive intact-expiry P/L after allowance, not forecast win rate, expected return, touch or assignment probability. Different expiries have different horizons; high probability can accompany small gains and large losses.",
     planned, evaluated, eligible, excludedRisk, excludedBudget, excludedBeforeTarget: snapshot.contracts.length - contracts.length,
     ...(domain ? { domain: { families: [...domain.families], maxEntryOutlay: domain.maxEntryOutlay }, excludedCost,
-      coverage: `Explicit families: ${domain.families.join(', ')}. Options selects the existing same-expiry option-only catalog. Covered calls use 100 long shares plus one short call; protective puts use 100 long shares plus one long put; collars use 100 long shares plus one long put and one short call with put strike at or below call strike. Each structure uses one expiry from this quoted window. No mixed-expiry, arbitrary ratios or other stock quantities.`,
+      coverage: `Explicit families: ${domain.families.join(', ')}. ${domain.families.some(family => CANDIDATE_OPTION_FAMILIES.includes(family as CandidateOptionFamily)) ? 'Named option families select only those directional structures; options includes the full same-expiry catalog once. Butterflies have equal wings and 1:2:1 quantities; iron structures allow unequal wings.' : 'Options selects the existing same-expiry option-only catalog.'} Covered calls use 100 long shares plus one short call; protective puts use 100 long shares plus one long put; collars use 100 long shares plus one long put and one short call with put strike at or below call strike. Each structure uses one expiry from this quoted window. No mixed-expiry, arbitrary ratios or other stock quantities.`,
       assumptions: `New positions, not adjustments to held shares or executable fills. Stock entries use dated underlying snapshot spot ${snapshot.spot}; ${input.basis} applies to option entry estimates only. Entry outlay is max(0, signed stock and option entry cost plus allowance), capped at ${domain.maxEntryOutlay}; not margin or buying power. Expiry-specific IV shifts reset; global IV shift remains. Risk is intact expiration loss, not assignment cashflows; target model P/L is not expected return or trading edge.` } : {}),
     ...(mixed ? {
       coverage: `Explicit families: ${domain!.families.join(', ')}. Existing options and stock families retain their same-expiry domains. Selected calendars use equal strikes; diagonals use unequal strikes. Each mixed pair is one short earlier-expiry and one long later-expiry option of the same type, with target at or before short expiry. Only captured quotes are searched; no reverse calendars, ratios or mixed stock positions.`,

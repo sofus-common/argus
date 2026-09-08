@@ -953,7 +953,7 @@ async function run() {
       held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.excludedLegIds = [held.legs[0].id];
       const seed = { id: 'direct-seed', title: 'Direct optimizer fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
       let activeSnapshot = snapshot, saved: typeof seed | undefined, searches = 0, aiCalls = 0;
-      let mode: 'normal' | 'deferred' | 'altered' | 'stock-altered' = 'normal', release: (() => void) | undefined;
+      let mode: 'normal' | 'deferred' | 'altered' | 'stock-altered' | 'wrong-family' = 'normal', release: (() => void) | undefined;
       let ranked: ReturnType<typeof searchCandidates> | undefined;
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
       window.fetch = (async (url, init) => {
@@ -967,7 +967,7 @@ async function run() {
         if (url === '/api/candidates') {
           searches++; const body = JSON.parse(String(init?.body)); ranked = searchCandidates(body.state, activeSnapshot, body.search, body.domain);
           assert(ranked.candidates.length > 0, 'Deterministic fixture yielded no ranked candidates');
-          const response = structuredClone(ranked);
+          const response = mode === 'wrong-family' ? { ...searchCandidates(body.state, activeSnapshot, body.search, { ...body.domain, families: ['long-call'] }), domain: body.domain } : structuredClone(ranked);
           if (mode === 'altered') response.candidates[0].state.legs[0].entryPrice = .01;
           if (mode === 'stock-altered') response.candidates[0].state.stock!.shares = 99;
           if (mode === 'deferred') return await new Promise<Response>(resolve => { release = () => resolve(Response.json({ search: response })); });
@@ -977,15 +977,33 @@ async function run() {
       }) as typeof fetch;
       const waitFor = async (check: () => boolean, stage: string) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), `Direct optimizer ${stage} did not settle: ${[...fixture.querySelectorAll('[role="alert"], .workspace-error')].map(element => element.textContent).join(' | ')}; searches=${searches}; optimizer=${fixture.querySelector('[aria-label="Strategy optimizer"]')?.textContent ?? 'missing'}`) };
       const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
-      const configure = async () => { await change('Optimizer target price', '120'); await change('Optimizer target date UTC', expiry.slice(0, 19)); await change('Optimizer maximum loss', '1000'); await change('Optimizer fee allowance', '0'); await change('Optimizer quote basis', 'mid'); await change('Optimizer objective', 'target-pnl'); };
+      const configure = async () => {
+        for (const label of ['Find a strategy · deterministic optimizer', 'Choose specific option strategies']) {
+          const summary = [...fixture.querySelectorAll<HTMLElement>('[aria-label="Strategy optimizer"] summary')].find(element => element.textContent?.startsWith(label));
+          assert(summary, `Missing ${label} disclosure`); if (!summary.parentElement!.hasAttribute('open')) await act(async () => summary.click());
+        }
+        const control = fixture.querySelector('[aria-label="Optimizer iron condor"]')?.getBoundingClientRect();
+        assert(control && control.width > 0 && control.height > 0, 'Disclosed iron condor control is not rendered');
+        await change('Optimizer target price', '120'); await change('Optimizer target date UTC', expiry.slice(0, 19)); await change('Optimizer maximum loss', '1000'); await change('Optimizer fee allowance', '0'); await change('Optimizer quote basis', 'mid'); await change('Optimizer objective', 'target-pnl');
+      };
+      const checked = (label: string) => fixture.querySelector<HTMLInputElement>(`[aria-label="Optimizer ${label}"]`)?.checked;
+      const toggle = async (label: string) => act(async () => { const field = fixture.querySelector<HTMLInputElement>(`[aria-label="${label}"]`); assert(field, `Missing ${label}`); field.click() });
       try {
         root = createRoot(fixture); await act(async () => root!.render(<App />));
         await waitFor(() => !!fixture.querySelector('option[value="direct-seed"]'), 'seed');
         await change('Saved positions', seed.id); await click('Load');
         await waitFor(() => !!fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'), 'load');
         const scenario = () => ['Scenario spot', 'Scenario date UTC'].map(label => (fixture.querySelector(`[aria-label="${label}"]`) as HTMLInputElement).value).join();
-        const original = inputs(), originalScenario = scenario(); await configure(); await click('Find strategies');
+        const original = inputs(), originalScenario = scenario(); await configure();
+        for (const label of ['long call', 'long put', 'bull call spread', 'bear call spread', 'bull put spread', 'bear put spread', 'long straddle', 'long strangle', 'call butterfly', 'put butterfly', 'short call butterfly', 'short put butterfly', 'iron butterfly', 'inverse iron butterfly', 'iron condor', 'inverse iron condor']) assert(fixture.querySelector(`[aria-label="Optimizer ${label}"]`), `Explicit ${label} family is missing`);
+        await toggle('Optimizer protective put'); await toggle('Optimizer put calendar'); await toggle('Optimizer iron condor');
+        assert(!checked('options only') && checked('iron condor') && checked('protective put') && checked('put calendar'), 'Narrow family did not replace umbrella while preserving stock and mixed selections');
+        await toggle('Optimizer options only');
+        assert(checked('options only') && !checked('iron condor') && checked('protective put') && checked('put calendar'), 'Umbrella did not replace explicit families while preserving stock and mixed selections');
+        await toggle('Optimizer protective put'); await toggle('Optimizer put calendar'); await toggle('Optimizer iron condor');
+        await click('Find strategies');
         await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'ranking');
+        assert(ranked!.domain?.families.join() === 'iron-condor' && ranked!.candidates.every(candidate => { const legs = [...candidate.state.legs].sort((a, b) => a.strike - b.strike); return legs.length === 4 && legs.map(leg => `${leg.side}:${leg.type}`).join() === 'long:put,short:put,short:call,long:call' && legs.every(leg => leg.contracts === 1) && legs.every((leg, i) => i === 0 || legs[i - 1].strike < leg.strike) }), 'Explicit iron condor request or ranked structure broadened to another family');
         const chosen = ranked!.candidates[0];
         await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspection');
         await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), 'comparison chart');
@@ -1000,9 +1018,21 @@ async function run() {
         await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, 'save');
         assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.excludedLegIds?.join() === held.excludedLegIds!.join(), 'Direct transfer lost fixed costs or exclusions');
         assert(JSON.stringify(saved!.state.legs[0]) === JSON.stringify(held.legs[0]), 'Direct transfer changed excluded held cost');
-        assert(saved!.state.legs.slice(1).map(leg => leg.contractId).join() === chosen.state.legs.map(leg => leg.contractId).join(), 'Applied holdings differ from inspected deterministic result');
+        const legContent = (legs: typeof held.legs) => legs.map(leg => JSON.stringify(leg)).sort().join();
+        assert(legContent(saved!.state.legs.filter(leg => !saved!.state.excludedLegIds?.includes(leg.id))) === legContent(chosen.state.legs), 'Applied holdings differ from inspected deterministic result');
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
         assert(inputs() === original, 'Direct candidate Undo changed original construction');
+        await change('Saved positions', 'direct-saved'); await click('Load');
+        await waitFor(() => fixture.querySelectorAll('.leg-list [aria-label="Contracts"]').length === 5, 'iron condor reopen');
+        assert([...fixture.querySelectorAll<HTMLInputElement>('.leg-list [aria-label="Contracts"]')].every(input => input.value === '1') && fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'), 'Reopened iron condor lost quantities or excluded holdings');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === original, 'Reopened iron condor Undo changed held position');
+        await configure(); await toggle('Optimizer iron condor'); mode = 'wrong-family'; await click('Find strategies');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Strategy optimizer"] [role="alert"]'), 'wrong-family rejection');
+        assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && !fixture.querySelector('.proposal-card') && inputs() === original, 'Validly priced long call escaped explicit iron condor domain');
+        mode = 'deferred'; await click('Find strategies'); await waitFor(() => !!release, 'family deferred search');
+        await toggle('Optimizer inverse iron condor'); await act(async () => release!()); release = undefined;
+        await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && inputs() === original, 'Changed family selection admitted stale search');
+        await toggle('Optimizer options only');
         mode = 'deferred'; await configure(); await click('Find strategies'); await waitFor(() => !!release, 'deferred version search');
         await click('Include all legs'); await act(async () => release!()); release = undefined;
         await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'Late optimizer result survived position version change');
@@ -1020,7 +1050,6 @@ async function run() {
         assert(fixture.querySelector('[aria-label="Optimizer comparison unavailable"]')?.textContent?.includes('beyond the first held option expiry') && !fixture.querySelector('[aria-label="Optimizer target comparison"]'), 'Unsupported held horizon produced a fabricated target comparison');
         await click('Keep current'); assert(inputs() === unchanged, 'Horizon-unavailable inspection changed holdings');
         await configure(); await change('Optimizer maximum entry outlay', '20000');
-        const toggle = async (label: string) => act(async () => fixture.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!.click());
         await toggle('Optimizer options only'); await toggle('Optimizer protective put');
         await click('Find strategies'); await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'stock ranking');
         await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'stock inspection');
@@ -1040,7 +1069,7 @@ async function run() {
         mode = 'deferred'; await click('Find strategies'); await waitFor(() => !!release, 'domain deferred');
         await change('Optimizer maximum entry outlay', '19000'); await act(async () => release!()); release = undefined;
         await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'Changed outlay admitted stale domain result');
-        assert(searches === 8 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
+        assert(searches === 10 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
       } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('XSP builder keeps European cash-index identity through loading, templates, save, reopen and Undo', async () => {

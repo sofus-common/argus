@@ -1144,6 +1144,7 @@ export async function spar(
           if (!args) throw new Error("Invalid candidate search request");
           const { domain, ...search } = args;
           const families = record(domain)?.families;
+          if (Array.isArray(families) && families.some(family => !CANDIDATE_TOOL.function.parameters.properties.domain.properties.families.items.enum.includes(family))) throw new Error('Candidate family is outside the active tool schema');
           if (!prompts.CANDIDATE_TOOL_DESCRIPTION && request.state.valuationModel !== 'american-crr-1024-v1' && Array.isArray(families) && families.some(family => typeof family === 'string' && /-(calendar|diagonal)$/.test(family))) throw new Error('European discovery prompts are not configured');
           calculated.candidateSearch = searchCandidates(request.state, snapshot, search as Parameters<typeof searchCandidates>[2], domain as Parameters<typeof searchCandidates>[3]);
         } else if (fn.name === "analyze_first_expiry") {

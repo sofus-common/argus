@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added direct optimizer selection for 16 named same-expiry option strategies,
+  including directional verticals and standard versus inverse iron structures.
+  Family constraints apply before search counting and top-five ranking; the
+  existing options umbrella remains a deduplicated union. Client admission checks
+  actual legs rather than returned names. Existing pricing, budgets and active
+  AI tool schema remain unchanged. No dependency, provider call or prompt change.
+  Verification: 717 tests, TypeScript/build and independent review passed;
+  44 desktop and 44 mobile checks cover disclosed controls, selection,
+  forged-family rejection, stale results,
+  comparison, Apply, save/reopen and Undo. Live pricing remains separately blocked;
+  bounded-window discovery is not a claim of global optimality or trading edge.
+
 - Added explicit saved-position expiry outcomes: no-exercise and recorded XSP
   cash settlement, with preview/confirm, exact retry, audited voids and historical
   reconciliation. Deterministic validation requires recorded contract terms for
