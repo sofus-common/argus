@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Extended direct calendar/diagonal discovery to European puts and nonpositive-
+  yield European calls, using discounted option-value floors for conservative
+  first-expiry loss budgets. Positive-yield European calls remain excluded as
+  unbounded; American bounds, quoted-entry costs and model identity are retained.
+  Search, comparison and transfer independently reconcile the same bound.
+  Added opt-in analysis-v14 prompt/tool configuration and offline enforcement
+  coverage; active v13 remains unchanged pending real-model qualification.
+  Verified numerical regressions, 223 focused tests, TypeScript/build and
+  independent review, and 40 desktop plus 40 mobile synthetic workflow checks.
+  No live-data, prompt-activation or deployment claim.
+
 - Corrected index lot-management and saved-performance premium units; total P/L
   remains USD and scenario levels use index points. Opening candidates now require
   matching instrument kind as well as symbol, and index records cannot offer stock

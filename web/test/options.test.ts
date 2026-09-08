@@ -109,9 +109,64 @@ describe('mixed-expiry candidate bounds', () => {
       expect(firstExpirySpreadLossBound({ ...state, legs: [...legs].reverse() })).toEqual(bound);
       expect(firstExpirySpreadLossBound({ ...state, legs: [{ ...legs[0], entryPrice: 10000 }, legs[1]] }).amount).toBe(0);
       expect(() => firstExpirySpreadLossBound({ ...state, legs: [{ ...legs[0], entryPrice: 1e308 }, legs[1]] })).toThrow();
-      for (const invalid of [{ ...state, valuationModel: 'european-bsm-v1' }, { ...state, stock: { shares: 1, entryPrice: 100 } }, { ...state, excludedLegIds: ['short'] }, { ...state, legs: legs.map(leg => ({ ...leg, side: leg.side === 'long' ? 'short' : 'long' })) }, { ...state, legs: [legs[0], { ...legs[1], contracts: 1 }] }]) expect(() => firstExpirySpreadLossBound(invalid as StrategyState)).toThrow();
+      for (const invalid of [{ ...state, stock: { shares: 1, entryPrice: 100 } }, { ...state, excludedLegIds: ['short'] }, { ...state, legs: legs.map(leg => ({ ...leg, side: leg.side === 'long' ? 'short' : 'long' })) }, { ...state, legs: [legs[0], { ...legs[1], contracts: 1 }] }]) expect(() => firstExpirySpreadLossBound(invalid as StrategyState)).toThrow();
     }
   }, 30000);
+  it('bounds European spreads against discounted payoff floors and model marks across carry and strike directions', () => {
+    const held = { ...createMarketStrategy('long-call', snapshot), valuationModel: 'european-bsm-v1' as const, scenarioDate: input.targetDate, feeAllowance: 7 };
+    for (const type of ['call', 'put'] as const) for (const [shortStrike, longStrike] of [[95, 95], [95, 105], [105, 95]]) for (const dividendYield of [-.04, 0, .08]) for (const rate of [-.03, .05]) {
+      const legs = [marketLeg(snapshot.contracts.find(c => c.type === type && c.strike === shortStrike && c.expiry.startsWith('2026-10'))!, 'short', 2, 'short', 'mid'), marketLeg(snapshot.contracts.find(c => c.type === type && c.strike === longStrike && c.expiry.startsWith('2026-11'))!, 'long', 2, 'long', 'mid')];
+      const state = { ...held, legs, dividendYield, rate };
+      if (type === 'call' && dividendYield > 0) {
+        expect(() => firstExpirySpreadLossBound(state)).toThrow();
+        expect(calculateStrategy(state).conditionalTail?.outcome).toBe('loss-unbounded');
+        continue;
+      }
+      const discount = Math.exp(-rate * 31 / 365), carry = Math.exp(-dividendYield * 31 / 365);
+      const knots = [0, shortStrike, longStrike * discount / carry];
+      const floorPnl = (spot: number) => 200 * (Math.max(0, type === 'call' ? spot * carry - longStrike * discount : longStrike * discount - spot * carry) - Math.max(0, type === 'call' ? spot - shortStrike : shortStrike - spot)) - 407;
+      const bound = firstExpirySpreadLossBound(state);
+      expect(bound.amount).toBeCloseTo(Math.max(0, -Math.min(...knots.map(floorPnl))), 9);
+      expect(bound.basis).toContain('European');
+      expect(firstExpirySpreadLossBound({ ...state, legs: [...legs].reverse() })).toEqual(bound);
+      for (const spot of [...knots, 1, 100, 1000, 1000000]) {
+        expect(floorPnl(spot)).toBeGreaterThanOrEqual(-bound.amount - 1e-6);
+        for (const iv of [.001, .25, 2]) expect(payoffSeries({ ...state, legs: legs.map(leg => ({ ...leg, iv })) }, spot, spot + 1, 2)[0].pnl).toBeGreaterThanOrEqual(-bound.amount - 1e-6);
+      }
+      expect(() => firstExpirySpreadLossBound({ ...state, rate: -1e308 })).toThrow();
+      expect(() => firstExpirySpreadLossBound({ ...state, rate: 1e308, dividendYield: -1e308 })).toThrow();
+    }
+  });
+  it('admits supported European domains and keeps risk, outlay and probability gates', () => {
+    const held = { ...createMarketStrategy('long-call', snapshot), valuationModel: 'european-bsm-v1' as const };
+    for (const dividendYield of [-.04, 0, .08]) {
+      const selected = { ...domain, families: dividendYield > 0 ? domain.families.filter(family => family.startsWith('put')) : domain.families };
+      const result = searchCandidates({ ...held, dividendYield }, snapshot, { ...input, objective: 'return-on-risk' }, selected);
+      expect(result.evaluated).toBe(dividendYield > 0 ? 4 : 8);
+      expect(result.eligible).toBe(result.evaluated);
+      expect(result.assumptions).toContain('European');
+      for (const candidate of result.candidates) {
+        expect(candidate.state.valuationModel).toBe('european-bsm-v1');
+        expect(candidate.lossBound).toEqual(firstExpirySpreadLossBound(candidate.state));
+        expect(candidate.metrics.maxLoss).toBeNull();
+        expect(candidate.score).toBe(candidate.metrics.scenarioPnl / candidate.lossBound!.amount);
+      }
+      expect(searchCandidates({ ...held, dividendYield }, snapshot, input, { ...selected, maxEntryOutlay: 204.99 })).toMatchObject({ eligible: 0, excludedCost: result.evaluated });
+      expect(searchCandidates({ ...held, dividendYield }, snapshot, { ...input, maxLoss: 204 }, selected)).toMatchObject({ eligible: 0, excludedBudget: result.evaluated });
+      expect(() => searchCandidates({ ...held, dividendYield }, snapshot, { ...input, objective: 'expiry-probability' }, selected)).toThrow();
+    }
+    for (const dividendYield of [.08, Number.MIN_VALUE]) expect(() => searchCandidates({ ...held, dividendYield }, snapshot, input, domain)).toThrow();
+    expect(searchCandidates({ ...held, valuationModel: undefined, dividendYield: 0 }, snapshot, input, domain).evaluated).toBe(8);
+    const index: MarketSnapshot = { ...snapshot, underlying: 'XSP', underlyingKind: 'cash-index', indexSourceTime: snapshot.spotAsOf, contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, contracts: snapshot.contracts.map(contract => ({ ...contract, contractId: contract.contractId.replace('SPY', 'XSP') })) };
+    const indexState = { ...createMarketStrategy('long-call', index), dividendYield: 0 };
+    const indexResult = searchCandidates(indexState, index, input, domain);
+    expect(indexResult.evaluated).toBe(8);
+    for (const candidate of indexResult.candidates) {
+      expect(candidate.state.underlyingKind).toBe('cash-index');
+      expect(candidate.state.valuationModel).toBe('european-bsm-v1');
+      expect(validateMarketStrategy(candidate.state, index)).toEqual([]);
+    }
+  });
 });
 describe('explicit stock-backed candidate domain', () => {
   const snapshot: MarketSnapshot = { id: 'stock-search', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09'], contracts: ([['call', 100], ['call', 110], ['put', 90], ['put', 100]] as const).map(([type, strike]) => ({ contractId: `SPY   261009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100, bid: 1, ask: 3, iv: .2, quoteAsOf: '2026-09-01T12:00:00.000Z' })) };

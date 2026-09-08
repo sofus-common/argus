@@ -1,4 +1,46 @@
 import { describe, expect, it, vi } from "vitest";
+import europeanPrompts from '../prompts/analysis-v14.json';
+
+it('pins European discovery to its opt-in bundle and rejects unsupported carry or ranking before continuation', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
+  try {
+    const fresh = { ...snapshot, spotAsOf: snapshot.retrievedAt, availableExpiries: ['2026-09-08', '2026-09-15'], contracts: ['2026-09-08', '2026-09-15'].flatMap((date, index) => snapshot.contracts.map(c => ({ ...c, expiry: `${date}T20:15:00.000Z`, contractId: c.contractId.replace('260908', date.slice(2).replaceAll('-', '')), bid: c.bid + index, ask: c.ask + index, quoteAsOf: snapshot.retrievedAt }))) };
+    for (const [family, yieldRate, objective, optedIn, accepted] of [
+      ['put-calendar', 0.02, 'target-pnl', true, true], ['put-diagonal', -0.02, 'return-on-risk', true, true],
+      ['call-calendar', 0, 'target-pnl', true, true], ['call-diagonal', -0.02, 'return-on-risk', true, true],
+      ['call-calendar', 0.02, 'target-pnl', true, false], ['put-calendar', 0.02, 'expiry-probability', true, false],
+      ['put-calendar', 0.02, 'target-pnl', false, false], ['call-calendar', 0, 'target-pnl', false, false],
+    ] as const) {
+      const input = request(); input.state.valuationModel = 'european-bsm-v1'; input.state.dividendYield = yieldRate;
+      const before = structuredClone(input), domain: CandidateSearchDomain = { families: [family], maxEntryOutlay: 1000 };
+      const search = { targetSpot: 655, targetDate: snapshot.retrievedAt, maxLoss: 100000, feeAllowance: 5, basis: 'natural' as const, objective };
+      const bundle = optedIn ? structuredClone(europeanPrompts) : undefined;
+      const pinnedDescription = bundle?.prompts.CANDIDATE_TOOL_DESCRIPTION;
+      const call = { id: 'european-search', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify({ ...search, domain }) } };
+      const normal = provider(reply());
+      const fetcher = vi.fn<typeof fetch>(async (url, init): Promise<Response> => {
+        if (fetcher.mock.calls.length === 1) {
+          if (bundle) bundle.prompts.CANDIDATE_TOOL_DESCRIPTION = 'Mutated after request capture';
+          return Response.json({ choices: [{ message: { tool_calls: [call] } }] });
+        }
+        return normal(url, init);
+      });
+      if (accepted) {
+        const result = await spar(input, 'key', fetcher, context, fresh, bundle);
+        expect(fetcher).toHaveBeenCalledTimes(3);
+        expect(result.calculated.candidateSearch).toEqual(searchCandidates(input.state, fresh, search, domain));
+        expect(result.calculated.candidateSearch!.candidates.length).toBeGreaterThan(0);
+        expect(result.reply.operations).toEqual([]);
+      } else {
+        await expect(spar(input, 'key', fetcher, context, fresh, bundle)).rejects.toThrow('Invalid scenario tool request');
+        expect(fetcher).toHaveBeenCalledOnce();
+      }
+      const sent = JSON.parse(String(fetcher.mock.calls[0][1]?.body)).tools.find((tool: any) => tool.function.name === 'search_candidates').function.description;
+      if (optedIn) expect(sent).toBe(pinnedDescription); else expect(sent).toContain('selected American valuation');
+      expect(input).toEqual(before);
+    }
+  } finally { vi.useRealTimers(); }
+}, 30000);
 import { calculateStrategy, evaluateScenario, scenarioFacts, scenarioTable, scenarioSpotAttribution, createMarketStrategy, createStrategy, marketLeg, validateMarketStrategy, validateMarketConstruction, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, type MarketSnapshot, type CandidateSearchDomain } from "../src/options";
 import { AnalysisVerificationError, InvalidProposalError, RESPONSE_SCHEMA, parseSparringRequest, strategyFacts, spar, type SparringReply, type SparringRequest } from "../src/sparring";
 import type { MarketContext } from "../src/market-context";

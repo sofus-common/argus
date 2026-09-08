@@ -1043,7 +1043,7 @@ export async function spar(
           ]),
           ...toolMessages,
         ],
-        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [CANDIDATE_TOOL] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
+        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [{ ...CANDIDATE_TOOL, function: { ...CANDIDATE_TOOL.function, description: prompts.CANDIDATE_TOOL_DESCRIPTION ?? CANDIDATE_TOOL.function.description } }] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
         provider: {
           allow_fallbacks: false,
           data_collection: "deny",
@@ -1104,6 +1104,8 @@ export async function spar(
           const args = record(JSON.parse(fn.arguments));
           if (!args) throw new Error("Invalid candidate search request");
           const { domain, ...search } = args;
+          const families = record(domain)?.families;
+          if (!prompts.CANDIDATE_TOOL_DESCRIPTION && request.state.valuationModel !== 'american-crr-1024-v1' && Array.isArray(families) && families.some(family => typeof family === 'string' && /-(calendar|diagonal)$/.test(family))) throw new Error('European discovery prompts are not configured');
           calculated.candidateSearch = searchCandidates(request.state, snapshot, search as Parameters<typeof searchCandidates>[2], domain as Parameters<typeof searchCandidates>[3]);
         } else if (fn.name === "analyze_first_expiry") {
           const bounds = readFirstExpiryBounds(JSON.parse(fn.arguments));

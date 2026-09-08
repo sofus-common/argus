@@ -11,6 +11,28 @@ import conciseCandidate from "../prompts/analysis-v4.json";
 import factualCandidate from "../prompts/analysis-v5.json";
 import selectionCandidate from "../prompts/analysis-v9.json";
 import transferCandidate from "../prompts/analysis-v10.json";
+import europeanCandidate from "../prompts/analysis-v14.json";
+
+it('versions European search without changing unrelated prompt strings or activating the candidate', () => {
+  const candidate = readAnalysisPrompts(europeanCandidate);
+  expect(candidate.version).toBe('analysis-v14');
+  expect(candidate.prompts.CANDIDATE_TOOL_DESCRIPTION).toContain('European put calendars/diagonals');
+  for (const key of Object.keys(defaultAnalysisPrompts.prompts) as Array<keyof typeof defaultAnalysisPrompts.prompts>) {
+    if (key === 'SYSTEM_PROMPT' || key === 'VERIFICATION_PROMPT') {
+      expect(candidate.prompts[key]).toContain('dividend yield at or below zero');
+      expect(candidate.prompts[key]).not.toContain('selected American model');
+    } else expect(candidate.prompts[key]).toBe(defaultAnalysisPrompts.prompts[key]);
+  }
+  expect(defaultAnalysisPrompts.version).toBe('analysis-v13');
+});
+
+it('preserves the active baseline digest and admits a bounded optional versioned search description', async () => {
+  expect(defaultAnalysisPrompts.version).toBe('analysis-v13');
+  expect(await promptDigest(defaultAnalysisPrompts)).toBe('c3eabc1493a100f4bd77c20b583e460a1b3161180fce6e97c737043c8499be89');
+  const bundle = { ...defaultAnalysisPrompts, version: 'search-test', prompts: { ...defaultAnalysisPrompts.prompts, CANDIDATE_TOOL_DESCRIPTION: 'Synthetic description' } };
+  expect(readAnalysisPrompts(bundle).prompts).toMatchObject({ CANDIDATE_TOOL_DESCRIPTION: 'Synthetic description' });
+  for (const text of ['', ' ', 1, 'x'.repeat(65537)]) expect(() => readAnalysisPrompts({ ...bundle, prompts: { ...bundle.prompts, CANDIDATE_TOOL_DESCRIPTION: text } })).toThrow();
+});
 
 it('versions frozen quote-estimate provenance without changing unrelated prompts', () => {
   const candidate = readAnalysisPrompts(transferCandidate), previous = readAnalysisPrompts(selectionCandidate);

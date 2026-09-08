@@ -212,11 +212,12 @@ async function run() {
         assert(fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 51, 'Stale next page survived refresh');
       } finally { release?.(); refreshRelease?.(); loadRelease?.(); await unmount(); window.fetch = priorFetch }
     });
-    await test('American calendar discovery preserves bound scope through comparison, save, reopen and Undo', async () => {
+    for (const symbol of ['SPY', 'XSP']) await test(`${symbol} calendar discovery preserves bound scope through comparison, save, reopen and Undo`, async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
       const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];
-      const snapshot: MarketSnapshot = { id: 'mixed-discovery', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [95, 100, 105].map(strike => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}C${String(strike * 1000).padStart(8, '0')}`, type: 'call' as const, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp }))) };
-      const held = createMarketStrategy('long-call', snapshot); held.valuationModel = 'american-crr-1024-v1'; held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.feeAllowance = 5;
+      const type = symbol === 'XSP' ? 'put' : 'call', model = symbol === 'XSP' ? 'european-bsm-v1' : 'american-crr-1024-v1';
+      const snapshot: MarketSnapshot = { id: 'mixed-discovery', source: 'Tastytrade', underlying: symbol, ...(symbol === 'XSP' ? { underlyingKind: 'cash-index' as const, indexSourceTime: stamp, contractTerms: { exerciseStyle: 'European' as const, settlement: 'cash' as const, multiplier: 100 as const, settlementSession: 'PM' as const } } : {}), spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [95, 100, 105].map(strike => ({ contractId: `${symbol}   ${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp }))) };
+      const held = createMarketStrategy(type === 'put' ? 'long-put' : 'long-call', snapshot); held.valuationModel = model; held.dividendYield = .02; held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.feeAllowance = 5;
       const seed = { id: 'mixed-seed', title: 'Mixed search fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
       let saved: typeof seed | undefined, mode: 'normal' | 'altered' | 'deferred' = 'normal', release: (() => void) | undefined, calls = 0;
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
@@ -240,13 +241,14 @@ async function run() {
       const configure = async () => {
         await change('Optimizer target date UTC', dates[0].slice(0, 19)); await change('Optimizer target price', '100');
         await act(async () => fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer options only"]')!.click());
-        await act(async () => fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call calendar"]')!.click());
+        await act(async () => fixture.querySelector<HTMLInputElement>(`[aria-label="Optimizer ${type} calendar"]`)!.click());
       };
       try {
         root = createRoot(fixture); await act(async () => root!.render(<App />));
         await waitFor(() => !!fixture.querySelector('option[value="mixed-seed"]'), 'seed');
         await change('Saved positions', seed.id); await click('Load');
-        await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer call calendar"]') && !fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call calendar"]')!.disabled, 'American model');
+        await waitFor(() => !!fixture.querySelector(`[aria-label="Optimizer ${type} calendar"]`) && !fixture.querySelector<HTMLInputElement>(`[aria-label="Optimizer ${type} calendar"]`)!.disabled, 'selected model');
+        if (symbol === 'XSP') assert(fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call calendar"]')?.disabled && fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call diagonal"]')?.disabled && !fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer put diagonal"]')?.disabled, 'European positive-yield call families were admitted or put families disabled');
         const before = inputs(); await configure(); await click('Find strategies');
         await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'ranking');
         assert(fixture.querySelector('[aria-label="Deterministic quoted candidates"]')!.textContent!.toLowerCase().includes('conservative'), 'Calendar bound not labeled');
@@ -256,7 +258,7 @@ async function run() {
         const boundScope = fixture.querySelector('[aria-label="Candidate conservative first-expiry bound"]')?.textContent ?? '';
         assert(boundScope.includes('Conservative first-expiry loss bound') && boundScope.includes('does not cap losses before first expiry or lifetime losses'), 'Inspection omitted bound scope');
         await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, 'save');
-        assert(saved!.state.legs.length === 2 && new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && saved!.state.valuationModel === 'american-crr-1024-v1', 'Calendar transfer lost expiries or explicit model');
+        assert(saved!.state.legs.length === 2 && new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && saved!.state.valuationModel === model && saved!.state.underlyingKind === held.underlyingKind && saved!.state.dividendYield === held.dividendYield && saved!.state.legs.every(leg => leg.type === type), 'Calendar transfer lost expiries, explicit model or underlying identity');
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Calendar Undo lost held inputs');
         await change('Saved positions', 'mixed-copy'); await click('Load'); await waitFor(() => fixture.querySelectorAll('.leg-row').length === 2, 'reopen');
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Reopened calendar Undo changed holding');
