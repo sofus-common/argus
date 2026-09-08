@@ -5,9 +5,11 @@ import { HistoryCharts } from '../src/HistoryCharts'
 import { App, SnapshotAge, StreamedMarks, AssignmentOutcomes } from '../src/App'
 import { SavedImport } from '../src/SavedImport'
 import { PositionPerformance } from '../src/PositionPerformance'
+import { LotManagement } from '../src/LotManagement'
+import type { SavedStrategy } from '../src/saved-strategies'
 import { buildPositionPerformance } from '../src/position-performance'
 import { createPosition } from '../src/position-lifecycle'
-import { upgradePositionLots } from '../src/position-lots'
+import { projectPositionLots, recordLotTransaction, upgradePositionLots } from '../src/position-lots'
 import { calculateStrategy, createMarketStrategy, createStrategy, type MarketSnapshot } from '../src/options'
 import { buildIntradayHistory, buildIvHistory } from '../src/intraday-history'
 import { buildPriceHistory } from '../src/price-history'
@@ -84,6 +86,68 @@ async function run() {
     finally { await unmount() }
   }
   try {
+    await test('Lot manager rolls, revisits and closes saved holdings with revision-bound performance', async () => {
+      await unmount(); const priorFetch = window.fetch;
+      const stamp = '2026-09-01T12:00:00.000Z', range = { start: '2026-09-01', end: '2026-09-03' };
+      const snapshot: MarketSnapshot = { id: 'roll-performance-quotes', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2026-10-09', '2026-10-16'], contracts: [100, 105].map((strike, index) => ({ contractId: `SPY   2610${index ? '16' : '09'}C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry: `2026-10-${index ? '16' : '09'}T20:00:00.000Z`, multiplier: 100, bid: 1.9, ask: 2.1, iv: .2, quoteAsOf: stamp })) };
+      const held = createMarketStrategy('long-call', snapshot); held.pricing!.entryMode = 'fixed'; held.legs[0].contracts = 2; held.feeAllowance = 7;
+      const source = createMarketStrategy('long-call', { ...snapshot, contracts: [snapshot.contracts[1]] });
+      let saved: SavedStrategy = { id: 'roll-performance', title: 'Recorded roll fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot, lifecycle: createPosition(held) };
+      const originalState = JSON.stringify(saved.state), sourceState = JSON.stringify(source);
+      let confirmed = 0, callbacks = 0, dismissed = 0;
+      const performanceRevisions: number[] = [];
+      const ledger = () => saved.lifecycle!.schemaVersion === 2 ? saved.lifecycle! : upgradePositionLots(saved.lifecycle!);
+      const loaded = () => ({ record: saved, projection: projectPositionLots(ledger()) });
+      const marks = (index: number) => ({ response: [{ contract: { symbol: 'SPY', strike: index ? 105 : 100, expiration: `2026-10-${index ? '16' : '09'}`, right: 'CALL' }, data: [1, 2, 3].map(day => { const mid = index ? day === 3 ? 6.5 : 6 : day === 1 ? 3 : day === 2 ? 4 : 4.5; return { bid: mid - .1, ask: mid + .1, created: `2026-09-0${day}T17:15:00.000`, last_trade: `2026-09-0${day}T16:00:00.000` } }) }] });
+      window.fetch = (async (url, init) => {
+        const endpoint = '/api/strategies/roll-performance';
+        if (url === `${endpoint}/lots`) return Response.json(loaded());
+        const body = JSON.parse(String(init?.body)); assert(body.revision === saved.revision, 'Lot workflow used a stale saved revision');
+        if (url === `${endpoint}/performance`) {
+          assert(JSON.stringify(body.range) === JSON.stringify(range), 'Performance lost the selected date range');
+          performanceRevisions.push(body.revision);
+          const performance = buildPositionPerformance(ledger(), saved.lifecycle!.schemaVersion === 2 ? [marks(0), marks(1)] : [marks(0)], { response: [] }, range);
+          return Response.json({ savedId: saved.id, revision: saved.revision, range, source: 'Theta EOD', performance });
+        }
+        if (url === `${endpoint}/transactions/preview`) return Response.json({ revision: saved.revision, projection: projectPositionLots(recordLotTransaction(ledger(), body.transaction)) });
+        if (url === `${endpoint}/transactions`) {
+          saved = { ...saved, revision: saved.revision + 1, updatedAt: new Date().toISOString(), lifecycle: recordLotTransaction(ledger(), body.transaction) }; confirmed++;
+          return Response.json(loaded());
+        }
+        throw new Error('Unexpected lot performance fixture request');
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 200 && !check(); i++) await settleTimers(); assert(check(), `Lot performance workflow did not settle: ${fixture.querySelector('[role="alert"]')?.textContent ?? ''}`) };
+      const mountManager = async () => { root = createRoot(fixture); await act(async () => root!.render(<LotManagement savedId={saved.id} source={source} onClose={() => { dismissed++ }} onRecorded={async () => { callbacks++ }} onAnalyze={() => { throw new Error('Recorded workflow changed builder') }} />)); await waitFor(() => !!fixture.querySelector('[aria-label="Saved position performance"]')) };
+      const loadPerformance = async () => { await change('Performance start date', range.start); await change('Performance end date', range.end); await click('Load position performance'); await waitFor(() => !!fixture.querySelector('[aria-label="Selected performance accounting"]')) };
+      const accounting = (name: string) => [...fixture.querySelectorAll('[aria-label="Selected performance accounting"] dt')].find(item => item.textContent === name)?.nextElementSibling?.textContent;
+      const check = async (label: string) => { const input = fixture.querySelector<HTMLInputElement>(`[aria-label="${label}"]`); assert(input && !input.disabled, `Missing ${label}`); await act(async () => input.click()) };
+      try {
+        await mountManager(); await loadPerformance();
+        assert(accounting('Gross realized P/L') === '$0.00' && accounting('Remaining unrealized P/L') === '$500.00' && accounting('Net position P/L') === '$493.00', 'Legacy position performance did not reconcile');
+        await check('Close lot initial:option:0'); await change('Close quantity initial:option:0', '1'); await change('Close price initial:option:0', '3');
+        await check(`Open leg ${source.legs[0].id}`); await change(`Open price ${source.legs[0].id}`, '4'); await change('Transaction UTC datetime', '2026-09-02T12:00:00');
+        await click('Preview transaction'); await waitFor(() => !!fixture.querySelector('[aria-label="Transaction preview"]'));
+        assert(confirmed === 0 && saved.revision === 1 && !fixture.querySelector('[aria-label="Saved position performance"]'), 'Preview wrote a transaction or retained stale performance');
+        await click('Confirm recorded transaction'); await waitFor(() => callbacks === 1 && !!fixture.querySelector('[aria-label="Saved position performance"]'));
+        assert(Number(saved.revision) === 2 && saved.lifecycle?.schemaVersion === 2 && saved.lifecycle.transactions.length === 1, 'Roll was not recorded exactly once');
+        assert(!fixture.querySelector('[aria-label="Selected performance accounting"]'), 'Recording retained performance from the prior revision');
+        await loadPerformance();
+        assert(accounting('Gross realized P/L') === '$100.00' && accounting('Remaining unrealized P/L') === '$500.00' && accounting('Position allowance · deducted once') === '$7.00' && accounting('Net position P/L') === '$593.00', 'Rolled performance did not reconcile realized, remaining and allowance');
+        await change('Inspect history date', '0'); assert(accounting('Net position P/L') === '$193.00', 'Roll was applied before its execution date');
+        await change('Inspect history date', '1'); assert(accounting('Net position P/L') === '$493.00', 'Roll date did not include the replacement holding');
+        await click('Close'); assert(dismissed === 1, 'Lot manager did not close'); await unmount(); await mountManager();
+        assert(Number(saved.revision) === 2 && fixture.querySelector('.lot-inventory')?.textContent?.includes(snapshot.contracts[1].contractId), 'Revisit lost the saved replacement holding');
+        await loadPerformance(); assert(accounting('Net position P/L') === '$593.00', 'Revisited performance changed');
+        for (const lot of projectPositionLots(ledger()).lots) {
+          await check(`Close lot ${lot.id}`); await change(`Close price ${lot.id}`, lot.asset.kind === 'option' && lot.asset.strike === 100 ? '4.5' : '6.5');
+        }
+        await change('Transaction UTC datetime', '2026-09-03T12:00:00'); await click('Preview transaction'); await waitFor(() => !!fixture.querySelector('[aria-label="Transaction preview"]'));
+        await click('Confirm recorded transaction'); await waitFor(() => callbacks === 2 && !!fixture.querySelector('[aria-label="Saved position performance"]'));
+        await loadPerformance();
+        assert(projectPositionLots(ledger()).status === 'closed' && accounting('Gross realized P/L') === '$600.00' && accounting('Remaining unrealized P/L') === '$0.00' && accounting('Net position P/L') === '$593.00', 'Final close lost realized reconciliation');
+        assert(performanceRevisions.join() === '1,2,2,3' && Number(confirmed) === 2 && JSON.stringify(saved.state) === originalState && JSON.stringify(source) === sourceState, 'Saved revisions or original builder holdings changed unexpectedly');
+      } finally { await unmount(); window.fetch = priorFetch }
+    });
     await test('Saved performance validates dated P/L, gaps, response identity and cancellation', async () => {
       await unmount(); const priorFetch = window.fetch;
       const stamp = '2026-09-01T12:00:00.000Z', expiry = '2026-10-09T20:00:00.000Z';

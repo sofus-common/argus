@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Qualified the rendered lot-manager workflow from legacy holdings through roll
+  preview/confirmation, revised historical P/L, close/revisit and final closure.
+  Synthetic accounting reconciles $600 realized less $7 allowance to $593 net;
+  earlier dates retain their actual recorded inventory and previews do not write.
+  Added an opt-in local HTTP/D1 check (`node test/live-performance.mjs --run`)
+  covering import, a changed-strike/expiry roll, final close, stale-revision
+  rejection, closed daily P/L, export and revisit. It reconciles $193 net and
+  removes only its newly created synthetic record. TypeScript, independent
+  review and 29 browser harness checks at desktop/mobile widths passed.
+  Live Theta EOD verification is still blocked: loopback port
+  25503 refuses connections and Docker's active Linux engine is unavailable.
+  Synthetic workflow proof does not establish real historical-price admission.
+
 - Added saved-position historical P/L with dated holdings, realized/unrealized
   reconciliation, daily dollar changes, observed daily high/low and inspectable
   per-lot report marks. Closes and rolls change the historical inventory; missing
