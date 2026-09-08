@@ -25,6 +25,7 @@ import {
   validateMarketConstruction,
   validateConstruction,
   projectAnalysisPosition,
+  mergeAnalysisProposal,
   SAMPLE_EXPIRIES,
   SAMPLE_STRIKES,
   sampleContractId,
@@ -924,7 +925,7 @@ export function App() {
   const [history, setHistory] = useState<StrategyState[]>([])
   const analysisState = useMemo(() => projectAnalysisPosition(strategy), [strategy])
   const hasExclusions = !!strategy.excludedLegIds?.length
-  const analysisUnavailable = !analysisState || hasExclusions
+  const analysisUnavailable = !analysisState
   const [rangeSelection, setRangeSelection] = useState<{ underlying: string; value: ChartRange }>()
   const chartRange = rangeSelection?.underlying === strategy.underlying ? rangeSelection.value : undefined
   const [breakevenResult, setBreakevenResult] = useState<BreakevenResult>()
@@ -1306,7 +1307,7 @@ export function App() {
   }
 
   const captureAndReview = async () => {
-    if (analysisUnavailable) return setEditError('Include all legs before requesting AI review. Exclusion-aware AI proposals are not available yet.')
+    if (analysisUnavailable) return setEditError('Include at least one holding before requesting AI review.')
     if (reviewRequest.current || chainPending) return
     const generation = reviewGeneration.current
     const captured = await loadMarket(true, undefined, strategyRef.current.underlying, undefined, true)
@@ -1315,7 +1316,7 @@ export function App() {
   }
 
   const spar = async (prompt = composer, probabilityRange?: { lower: number; upper: number }, source?: { position: StrategyState; snapshot: MarketSnapshot }, firstExpiryRange?: { min: number; max: number }) => {
-    if (analysisUnavailable) return setEditError('AI analysis requires a nonempty position with all legs included. Exclusion-aware proposals are not available yet; your holdings are unchanged.')
+    if (analysisUnavailable) return setEditError('AI analysis requires at least one included holding; your holdings are unchanged.')
     if (!prompt.trim() || reviewRequest.current) return
     stopAutomatic()
     const american = americanPreviewActive.current
@@ -1345,12 +1346,14 @@ export function App() {
           setMessages((items) => [...items, { role: 'argus', text: 'That proposal expired because the strategy changed while I was checking it.', note: 'STALE PROPOSAL · strategy unchanged' }])
           return
         }
-        if (validateStrategy(data.next_state).length) throw new Error('The proposed position failed validation. Your position is unchanged.')
-        if (data.next_state.pricing && (!reviewedSnapshot || validateMarketStrategy(data.next_state, reviewedSnapshot).length)) throw new Error('The proposal does not match the loaded quote snapshot.')
+        if (validateConstruction(data.next_state).length) throw new Error('The proposed position failed validation. Your position is unchanged.')
+        if (data.next_state.pricing && (!reviewedSnapshot || validateMarketConstruction(data.next_state, reviewedSnapshot).length)) throw new Error('The proposal does not match the loaded quote snapshot.')
+        const includedNext = projectAnalysisPosition(data.next_state), includedBefore = projectAnalysisPosition(reviewedPosition)
+        if (!includedNext || !includedBefore || JSON.stringify(mergeAnalysisProposal(reviewedPosition, includedNext)) !== JSON.stringify(data.next_state)) throw new Error('The proposal changed retained holdings or analysis selection. Your position is unchanged.')
         if (data.reply.operations.length) {
           const [next, before] = await Promise.all([
-            requestWorkspaceValuation(data.next_state, controller.signal),
-            requestWorkspaceValuation(reviewedPosition, controller.signal),
+            requestWorkspaceValuation(includedNext, controller.signal),
+            requestWorkspaceValuation(includedBefore, controller.signal),
           ])
           if (reviewRequest.current !== controller) return
           if (strategyRef.current.version !== baseVersion) {
@@ -1361,7 +1364,7 @@ export function App() {
           setView('curve')
         }
       }
-      setMessages((items) => [...items, { role: 'argus', text: data.reply?.text ?? data.error?.message ?? 'Live sparring is unavailable until an OpenRouter key is configured.', analysis: data.reply ? { reply: data.reply, calculated: data.calculated!, market_context: data.market_context!, positionVersion: baseVersion, positionName: reviewedPosition.name, positionUnderlying: reviewedPosition.underlying, position: reviewedPosition, positionSnapshot: reviewedSnapshot } : undefined, note: data.error ? `${data.error.code.replaceAll('_', ' ')} · position unchanged` : data.reply?.operations.length ? 'PROPOSAL READY · review the comparison' : 'ARGUS · analysis' }])
+      setMessages((items) => [...items, { role: 'argus', text: data.reply?.text ?? data.error?.message ?? 'Live sparring is unavailable until an OpenRouter key is configured.', analysis: data.reply ? { reply: data.reply, calculated: data.calculated!, market_context: data.market_context!, positionVersion: baseVersion, positionName: reviewedPosition.name, positionUnderlying: reviewedPosition.underlying, position: projectAnalysisPosition(reviewedPosition)!, positionSnapshot: reviewedSnapshot } : undefined, note: data.error ? `${data.error.code.replaceAll('_', ' ')} · position unchanged` : data.reply?.operations.length ? 'PROPOSAL READY · review the comparison' : 'ARGUS · analysis' }])
     } catch (error) {
       if (reviewRequest.current !== controller) return
       setMessages((items) => [...items, { role: 'argus', text: error instanceof Error ? error.message : 'Unable to complete this review. Try again.', note: 'REVIEW FAILED · position unchanged' }])
@@ -1388,15 +1391,16 @@ export function App() {
     reviewRequest.current = controller
     setPending(true); setProposal(null)
     try {
-      const next = { ...structuredClone(candidate.state), id: current.id, version: current.version + 1 }
-      if (validateMarketStrategy(next, snapshot).length) throw new Error('Candidate no longer matches its quoted snapshot.')
-      const [before, selected] = await Promise.all([requestWorkspaceValuation(current, controller.signal), requestWorkspaceValuation(next, controller.signal)])
+      const includedNext = { ...structuredClone(candidate.state), id: current.id, version: current.version + 1 }
+      const next = mergeAnalysisProposal(current, includedNext), includedBefore = projectAnalysisPosition(current)!
+      if (validateMarketConstruction(next, snapshot).length) throw new Error('Candidate no longer matches its quoted snapshot.')
+      const [before, selected] = await Promise.all([requestWorkspaceValuation(includedBefore, controller.signal), requestWorkspaceValuation(includedNext, controller.signal)])
       if (reviewRequest.current !== controller || strategyRef.current !== current) return
       if (JSON.stringify(selected.metrics) !== JSON.stringify(candidate.metrics)) throw new Error('Candidate metrics could not be reconciled. Position unchanged.')
       setView('curve')
       setProposal({ request_id: `candidate:${id}`, base_state_version: current.version, next_state: next, metrics: selected.metrics, before: before.metrics, calculated: analysis.calculated, market_context: analysis.market_context, reply: {
         text: 'Selected quoted alternative', operations: [], evidence_ids: [], suggested_prompts: [], risk_classification: selected.metrics.maxLoss === null ? 'unbounded' : 'bounded',
-        assumptions: ['Replace the workspace with this new position, not a roll or executed trade. Held entries and any shares are replaced by the displayed quoted option legs.', `Candidate entry basis: ${search.request.basis}; total fee allowance ${money(search.request.feeAllowance)}. Current and candidate scenarios may differ; their P/L difference is not a like-for-like improvement.`],
+        assumptions: ['Replace included holdings with this new position, not a roll or executed trade. Included entries and any shares are replaced by the displayed quoted option legs; excluded holdings and their costs are retained.', `Candidate entry basis: ${search.request.basis}; total fee allowance ${money(search.request.feeAllowance)}. Current and candidate scenarios may differ; their P/L difference is not a like-for-like improvement.`],
         objections: ['Dated quote estimates are not fills. No assignment, margin or realized closing costs are modeled. This selection is locally recalculated, not a new AI review.'],
       } })
     } catch (error) {
@@ -1414,7 +1418,7 @@ export function App() {
   const valuation = Date.parse(strategy.valuationTimestamp)
   const profitValue = !metrics ? '—' : mixedExpiry ? money(metrics.modeledHigh) : metrics.maxProfit == null ? 'Unbounded' : money(metrics.maxProfit)
   const lossValue = !metrics ? '—' : mixedExpiry ? money(metrics.modeledLow) : metrics.maxLoss == null ? 'Unbounded' : money(-Math.abs(metrics.maxLoss))
-  const comparedPosition = proposal?.next_state ?? manualBaseline
+  const comparedPosition = useMemo(() => proposal ? projectAnalysisPosition(proposal.next_state) ?? undefined : manualBaseline, [proposal, manualBaseline])
   const comparisonCompatible = analysisState && comparedPosition && strategy.underlying === comparedPosition.underlying && strategy.valuationTimestamp === comparedPosition.valuationTimestamp && (strategy.valuationModel ?? 'european-bsm-v1') === (comparedPosition.valuationModel ?? 'european-bsm-v1') && Date.parse(strategy.scenarioDate) === Date.parse(comparedPosition.scenarioDate) && (!analysisState.legs.length || !comparedPosition.legs.length || firstExpiry === Math.min(...comparedPosition.legs.map((leg) => Date.parse(leg.expiry))))
   const brief = !metrics ? '' : stockOnly ? 'Stock-only mark P/L: no option expiry, time decay or IV sensitivity. Dividends, financing and borrow are excluded.' : metrics.breakevens.length === 2
     ? `At expiration, the position breaks even at $${metrics.breakevens[0].toFixed(2)} and $${metrics.breakevens[1].toFixed(2)}.`
@@ -1619,7 +1623,8 @@ export function App() {
             {pending && <article className="message argus thinking"><header>ARGUS <time>checking</time></header><p><i /><i /><i /></p><small>Calculations remain deterministic</small></article>}
           </div>
           <div className="prompt-chips" aria-disabled={analysisUnavailable}><button disabled={analysisUnavailable} onClick={() => spar('What breaks this trade?')}>Break the thesis</button><button disabled={analysisUnavailable} onClick={() => spar('Compare this with a calendar spread.')}>Compare structure</button><button disabled={analysisUnavailable} onClick={() => spar('Reduce downside without adding a fifth leg.')}>Reduce downside</button></div>
-          {analysisUnavailable && <p role="note">AI review requires all legs included and at least one holding. Exclusion-aware proposals are not available yet.</p>}
+          {analysisUnavailable && <p role="note">AI review requires at least one included holding.</p>}
+          {hasExclusions && !analysisUnavailable && <p role="note">AI reviews included holdings only. Proposals retain excluded legs and entry costs; exclusion does not close a holding.</p>}
           <form className="composer" onSubmit={(event) => { event.preventDefault(); void spar() }}><textarea id="workspace-question" aria-label="Ask ARGUS" placeholder="Challenge, compare, or reshape this trade…" value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void spar() } }} /><div><span>Ctrl / ⌘ + Enter</span><button disabled={!composer.trim() || pending || analysisUnavailable} aria-label="Send message">↑</button></div></form>
           <footer><span><i /> OpenRouter conversation</span><button onClick={() => { reviewGeneration.current++; reviewRequest.current?.abort(); reviewRequest.current = null; setPending(false); setMessages([]); setProposal(null) }}>Clear</button></footer>
         </aside>

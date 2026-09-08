@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Enabled AI review and quantity/scenario proposals for nonempty included
+  selections. Facts, tools, comparison pricing and verification use included
+  holdings; canonical validation preserves excluded legs, costs and expiry shifts.
+  Apply and Undo preserve the selection; malformed retained-inventory edits fail.
+  Versioned the analysis contract and scope prompts. Verified602 offline tests,
+  24 desktop and24 mobile browser checks, TypeScript/build, independent review
+  and one real OpenRouter synthetic quantity proposal. Fixed-entry template and
+  candidate replacement with exclusions still rejects pricing-context changes;
+  that transfer workflow and broader live-data/model-quality proof remain open.
+
 - Added visible reversible leg inclusion, Include all, and empty construction.
   Charts, quotes, probability and Greeks use included holdings; save/load, Undo
   and refresh retain canonical costs and legs. Empty selections stop pricing

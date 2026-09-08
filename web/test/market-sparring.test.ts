@@ -110,6 +110,67 @@ const provider = (answer: SparringReply, ...verdict: unknown[]) => vi.fn<typeof 
   return Response.json({ choices: [{ message: { content: JSON.stringify(body.response_format?.json_schema.name === "analysis_verification" ? verdict.length ? verdict[0] : defaultVerdict(body) : answer) } }] });
 });
 const scenarioCall = (scenarios: unknown = [{ scenarioDate: "2026-09-07T12:00:00.000Z", scenarioSpot: 655, ivShift: 0.03 }]) => ({ id: "tool-1", type: "function", function: { name: "evaluate_scenarios", arguments: JSON.stringify({ scenarios }) } });
+it("keeps excluded holdings canonical while generation and verification price only included holdings", async () => {
+  const input = request();
+  const excluded = marketLeg(snapshot.contracts.find(c => c.type === "put")!, "short", 3, "excluded", "natural");
+  input.state.legs.unshift(excluded); input.state.excludedLegIds = [excluded.id];
+  input.state.pricing!.entryMode = "fixed"; excluded.entryPrice = 8;
+  const original = structuredClone(input.state), included = { ...input.state, legs: input.state.legs.slice(1), excludedLegIds: undefined };
+  expect(parseSparringRequest(input)?.state).toEqual(original);
+  const fetcher = provider(reply([{ kind: "set_contracts", leg_id: included.legs[0].id, contracts: 2 }]));
+  const result = await spar(input, "test", fetcher, context, snapshot);
+  expect(input.state).toEqual(original);
+  expect(result.next_state.legs[0]).toEqual(excluded);
+  expect(result.next_state.excludedLegIds).toEqual([excluded.id]);
+  expect(result.next_state.legs[1].contracts).toBe(2);
+  expect(result.calculated.metrics).toEqual(calculateStrategy(included));
+  expect(result.metrics).toEqual(calculateStrategy({ ...included, legs: [{ ...included.legs[0], contracts: 2 }] }));
+  const payloads = fetcher.mock.calls.map(([, init]) => JSON.parse(JSON.parse(String(init!.body)).messages[1].content));
+  for (const payload of payloads) {
+    expect(payload.strategy.legs).toEqual(included.legs);
+    expect(payload.strategy).not.toHaveProperty("excludedLegIds");
+    expect(payload.analysis_scope).toMatchObject({ includedOptionLegs: 1, excludedOptionLegs: 1, stockIncluded: false });
+  }
+  expect(payloads[1].proposed_state.legs).toHaveLength(1);
+});
+it("rejects empty included analysis before provider use but permits shares with all options excluded", async () => {
+  const input = request(); input.state.excludedLegIds = input.state.legs.map(leg => leg.id);
+  const fetcher = provider(reply());
+  expect(parseSparringRequest(input)).toBeNull();
+  await expect(spar(input, "test", fetcher, context, snapshot)).rejects.toThrow();
+  expect(fetcher).not.toHaveBeenCalled();
+  input.state.stock = { shares: 100, entryPrice: 640 };
+  expect(parseSparringRequest(input)).not.toBeNull();
+  const result = await spar(input, "test", fetcher, context, snapshot);
+  expect(result.metrics.mode).toBe("spot");
+  expect(result.next_state.legs).toEqual(input.state.legs);
+});
+it("rejects excluded-leg operations and collisions without returning a canonical proposal", async () => {
+  const input = request();
+  const excluded = marketLeg(snapshot.contracts.find(c => c.type === "put")!, "short", 1, "excluded", "natural");
+  input.state.legs.push(excluded); input.state.excludedLegIds = [excluded.id];
+  for (const operation of [{ kind: "set_contracts", leg_id: excluded.id, contracts: 2 }, { kind: "add_leg", leg: { ...excluded, id: "new-id" } }] as SparringReply["operations"]) {
+    const fetcher = provider(reply([operation]));
+    await expect(spar(input, "test", fetcher, context, snapshot)).rejects.toBeInstanceOf(InvalidProposalError);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  }
+});
+it("uses included holdings for tool scenarios and rejects proposals exceeding retained capacity", async () => {
+  const input = request();
+  const retained = snapshot.contracts.filter(c => c.type === "put").map((c, i) => marketLeg(c, "short", 1, `excluded-${i}`, "natural"));
+  input.state.legs.push(...retained); input.state.excludedLegIds = retained.map(leg => leg.id);
+  const included = { ...input.state, legs: input.state.legs.slice(0, 1), excludedLegIds: undefined };
+  const target = { scenarioDate: "2026-09-07T12:00:00.000Z", scenarioSpot: 655, ivShift: 0.03 };
+  const normal = provider(reply());
+  const fetcher = vi.fn<typeof fetch>(async (url, init): Promise<Response> => fetcher.mock.calls.length === 1 ? Response.json({ choices: [{ message: { tool_calls: [scenarioCall([target])] } }] }) : normal(url, init));
+  const result = await spar(input, "test", fetcher, context, snapshot);
+  expect(result.calculated.requestedScenarios[0].metrics).toEqual(evaluateScenario({ ...included, ...target }));
+  expect(result.next_state.legs).toEqual(input.state.legs);
+  const extra = marketLeg(snapshot.contracts.find(c => c.type === "call" && c.strike === 645)!, "long", 1, "extra", "natural");
+  const invalid = provider(reply([{ kind: "add_leg", leg: extra }]));
+  await expect(spar(input, "test", invalid, context, snapshot)).rejects.toBeInstanceOf(InvalidProposalError);
+  expect(invalid).toHaveBeenCalledTimes(1);
+});
 it("separates verified contract terms from the selected valuation model", async () => {
   const terms = { exerciseStyle: "American", settlement: "physical-shares", sharesPerContract: 100, settlementSession: "PM" } as const;
   for (const valuationModel of ["european-bsm-v1", "american-crr-1024-v1"] as const) {

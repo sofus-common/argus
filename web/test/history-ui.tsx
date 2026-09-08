@@ -251,6 +251,51 @@ async function run() {
         assert(!empty() && selection()[0].checked, 'Empty calendar cannot recover its scenario date');
       } finally { await unmount(); window.fetch = priorFetch; window.Worker = priorWorker }
     });
+    await test('AI proposals price included holdings and preserve excluded costs through Apply and Undo', async () => {
+      await unmount(); const priorFetch = window.fetch, priorWorker = window.Worker;
+      const sentStates: ReturnType<typeof createStrategy>[] = [];
+      window.Worker = class extends priorWorker {
+        postMessage(message: any, options?: any) { if (message?.state?.legs) sentStates.push(structuredClone(message.state)); super.postMessage(message, options) }
+      };
+      let requested: ReturnType<typeof createStrategy> | undefined, malicious = false;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'AI exclusion test', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies') return Response.json({ strategies: [] });
+        if (url === '/api/sparring') {
+          const body = JSON.parse(String(init?.body)); requested = body.state;
+          const next = structuredClone(body.state) as ReturnType<typeof createStrategy>;
+          const active = next.legs.find(leg => !next.excludedLegIds?.includes(leg.id))!;
+          active.contracts = 2; next.version++;
+          if (malicious) next.legs.find(leg => next.excludedLegIds?.includes(leg.id))!.entryPrice += 1;
+          return Response.json({ request_id: body.request_id, base_state_version: body.base_state_version, next_state: next,
+            reply: { text: 'Increase the included quantity.', operations: [{ kind: 'set_contracts', leg_id: active.id, contracts: 2 }], assumptions: [], objections: [], suggested_prompts: [], evidence_ids: [], risk_classification: 'bounded' },
+            calculated: { riskSummary: 'Included holdings only', dataMode: 'sample' }, market_context: { sources: [], retrievedAt: new Date(fixedNow).toISOString() } });
+        }
+        throw new Error('Unexpected AI exclusion request');
+      }) as typeof fetch;
+      const selection = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input[type="checkbox"]')];
+      const held = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), 'AI exclusion response did not settle') };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await act(async () => selection()[0].click());
+        const original = held(), count = selection().length;
+        await click('Break the thesis');
+        await waitFor(() => !!fixture.querySelector('.proposal-card'));
+        assert(requested?.legs.length === count && requested.excludedLegIds?.length === 1, 'AI request lost canonical exclusion scope');
+        const excluded = requested.legs.find(leg => requested!.excludedLegIds!.includes(leg.id))!;
+        assert(sentStates.every(position => !position.excludedLegIds?.length) && sentStates.slice(-2).every(position => !position.legs.some(leg => leg.id === excluded.id)), 'Proposal pricing leaked excluded holdings');
+        await click('Apply proposal');
+        const quantities = [...fixture.querySelectorAll<HTMLInputElement>('.leg-list [aria-label="Contracts"]')];
+        assert(!selection()[0].checked && selection().length === count && quantities[0].value === String(excluded.contracts) && quantities[1].value === '2', 'Apply changed excluded holdings or missed included quantity');
+        assert(fixture.querySelector<HTMLInputElement>('.leg-list [aria-label="Entry premium"]')!.value === String(excluded.entryPrice), 'Apply changed excluded entry cost');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(held() === original && !selection()[0].checked, 'AI Undo lost canonical holdings or exclusion');
+        malicious = true; await click('Break the thesis');
+        await waitFor(() => !fixture.querySelector('.thinking'));
+        assert(!fixture.querySelector('.proposal-card') && held() === original && fixture.textContent?.includes('REVIEW FAILED'), 'Untrusted excluded-cost mutation was accepted');
+      } finally { await unmount(); window.fetch = priorFetch; window.Worker = priorWorker }
+    });
     await test('Workspace captures preserve holdings and scenarios, group automatic Undo and reject late edits', async () => {
       await unmount(); const priorFetch = window.fetch, originalSocket = window.WebSocket, originalWorker = window.Worker;
       let socket: { onmessage?: (event: { data: string }) => void } | undefined, captures = 0;

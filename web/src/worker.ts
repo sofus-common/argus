@@ -543,7 +543,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     if (!request) return c.json({ error: { code: "invalid_request" } }, 400);
     const snapshot = request.state.pricing?.mode === "market" ? await chains.get(request.state.pricing.snapshotId, c.env, c.get("session").owner) : undefined;
     if (request.state.pricing?.mode === "market" && !snapshot) return c.json({ error: { code: "snapshot_expired", message: "Refresh option prices before asking for analysis." } }, 409);
-    if (snapshot && validateMarketStrategy(request.state, snapshot).length) return c.json({ error: { code: "invalid_market_state", message: "Position inputs do not match the quote snapshot." } }, 422);
+    if (snapshot && validateMarketConstruction(request.state, snapshot).length) return c.json({ error: { code: "invalid_market_state", message: "Position inputs do not match the quote snapshot." } }, 422);
 
     const limited = await c.env.SPARRING_RATE_LIMITER?.limit({
       key: c.get("session").owner,

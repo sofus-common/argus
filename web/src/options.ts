@@ -545,6 +545,28 @@ export function projectAnalysisPosition(state: StrategyState): StrategyState | n
   return projected;
 }
 
+export function mergeAnalysisProposal(state: StrategyState, proposal: StrategyState): StrategyState {
+  const included = projectAnalysisPosition(state);
+  if (!included) throw new Error("Include holdings before proposing changes");
+  assertValid(proposal);
+  if (proposal.id !== state.id || proposal.version !== state.version + 1) throw new Error("Proposal identity or version mismatch");
+  const excluded = state.legs.filter(leg => state.excludedLegIds?.includes(leg.id));
+  if (!excluded.length) return structuredClone(proposal);
+  if (proposal.underlying !== state.underlying || proposal.valuationTimestamp !== state.valuationTimestamp || proposal.spot !== state.spot || JSON.stringify(proposal.pricing) !== JSON.stringify(state.pricing)) throw new Error("Proposal cannot change retained inventory pricing context");
+  if (proposal.legs.some(leg => excluded.some(retained => retained.id === leg.id))) throw new Error("Proposal cannot reuse excluded leg IDs");
+  const next = structuredClone(proposal);
+  next.excludedLegIds = [...state.excludedLegIds!];
+  next.legs = state.legs.flatMap(leg => {
+    const retained = excluded.find(item => item.id === leg.id) ?? next.legs.find(item => item.id === leg.id);
+    return retained ? [structuredClone(retained)] : [];
+  }).concat(next.legs.filter(leg => !state.legs.some(item => item.id === leg.id)));
+  const retainedShifts = state.expiryIvShifts?.filter(shift => excluded.some(leg => leg.expiry === shift.expiry) && !proposal.legs.some(leg => leg.expiry === shift.expiry)) ?? [];
+  if (retainedShifts.length) next.expiryIvShifts = [...(next.expiryIvShifts ?? []), ...structuredClone(retainedShifts)];
+  const errors = validateConstruction(next);
+  if (errors.length) throw new Error(errors.join("; "));
+  return next;
+}
+
 function validatePosition(state: StrategyState, construction: boolean): string[] {
   const errors: string[] = [];
   if (!state || typeof state !== "object") return ["strategy must be an object"];

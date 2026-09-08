@@ -9,6 +9,18 @@ import previousBundle from "../prompts/analysis-v2.json";
 import ivCandidate from "../prompts/analysis-v3.json";
 import conciseCandidate from "../prompts/analysis-v4.json";
 import factualCandidate from "../prompts/analysis-v5.json";
+import selectionCandidate from "../prompts/analysis-v9.json";
+
+it('versions selection scope without changing unrelated discussion prompts', () => {
+  const candidate = readAnalysisPrompts(selectionCandidate), previous = readAnalysisPrompts(factualCandidate);
+  expect(candidate.version).toBe('analysis-v9');
+  for (const key of Object.keys(previous.prompts) as Array<keyof typeof previous.prompts>) {
+    if (key === 'SYSTEM_PROMPT' || key === 'VERIFICATION_PROMPT') {
+      expect(candidate.prompts[key]).toContain(previous.prompts[key]);
+      expect(candidate.prompts[key]).toContain('analysis_scope');
+    } else expect(candidate.prompts[key]).toBe(previous.prompts[key]);
+  }
+});
 
 it('changes only factual verification while preserving the mixed-expiry projection contract', () => {
   const candidate = readAnalysisPrompts(factualCandidate), previous = readAnalysisPrompts(conciseCandidate);

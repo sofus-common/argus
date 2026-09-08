@@ -25,6 +25,10 @@ import {
   createMarketStrategy,
   marketLeg,
   validateMarketStrategy,
+  validateMarketConstruction,
+  validateConstruction,
+  projectAnalysisPosition,
+  mergeAnalysisProposal,
   payoffSeries,
   validateStrategy,
   type OptionLeg,
@@ -745,15 +749,17 @@ export function parseSparringRequest(value: unknown): SparringRequest | null {
     return null;
   }
   const state = item.state as unknown as StrategyState;
-  if (state.version !== item.base_state_version || validateStrategy(state).length > 0) {
+  if (state.version !== item.base_state_version || validateConstruction(state).length > 0) {
     return null;
   }
+  const included = projectAnalysisPosition(state);
+  if (!included) return null;
   const chartContext = record(item.chart_context);
   const probabilityRange = record(item.probability_range);
   const firstExpiryBounds = readFirstExpiryBounds(item.first_expiry_range);
   if (item.first_expiry_range !== undefined && (!firstExpiryBounds || isAmericanPreview(state, item.chart_context as SparringRequest["chart_context"]))) return null;
   if (item.probability_range !== undefined && (!probabilityRange || Object.keys(probabilityRange).length !== 2 || typeof probabilityRange.lower !== "number" || typeof probabilityRange.upper !== "number" || !Number.isFinite(probabilityRange.lower) || !Number.isFinite(probabilityRange.upper) || probabilityRange.lower <= 0 || probabilityRange.upper <= probabilityRange.lower)) return null;
-  if (item.chart_context !== undefined && (!chartContext || Object.keys(chartContext).some(key => !["view", "metric", "valuationModel", "pnlDisplay", "range"].includes(key)) || (chartContext.range !== undefined && !isChartRange(chartContext.range)) || !["curve", "heatmap", "table"].includes(chartContext.view as string) || !["pnl", "delta", "gamma", "theta", "vega", "rho"].includes(chartContext.metric as string) || (chartContext.view !== "curve" && chartContext.metric !== "pnl") || (chartContext.valuationModel !== undefined && (chartContext.valuationModel !== "american-crr-1024-v1" || chartContext.view !== "heatmap")) || (chartContext.pnlDisplay !== undefined && (!["pnl", "position-value", "risk-percent"].includes(chartContext.pnlDisplay as string) || chartContext.metric !== "pnl" || !pnlDisplayBasis(state, chartContext.pnlDisplay as PnlDisplayMode))))) return null;
+  if (item.chart_context !== undefined && (!chartContext || Object.keys(chartContext).some(key => !["view", "metric", "valuationModel", "pnlDisplay", "range"].includes(key)) || (chartContext.range !== undefined && !isChartRange(chartContext.range)) || !["curve", "heatmap", "table"].includes(chartContext.view as string) || !["pnl", "delta", "gamma", "theta", "vega", "rho"].includes(chartContext.metric as string) || (chartContext.view !== "curve" && chartContext.metric !== "pnl") || (chartContext.valuationModel !== undefined && (chartContext.valuationModel !== "american-crr-1024-v1" || chartContext.view !== "heatmap")) || (chartContext.pnlDisplay !== undefined && (!["pnl", "position-value", "risk-percent"].includes(chartContext.pnlDisplay as string) || chartContext.metric !== "pnl" || !pnlDisplayBasis(included, chartContext.pnlDisplay as PnlDisplayMode))))) return null;
   return {
     request_id: item.request_id,
     base_state_version: item.base_state_version as number,
@@ -950,6 +956,17 @@ export async function spar(
   observer?: AnalysisObserver,
 ): Promise<SparringSuccess> {
   const { prompts } = readAnalysisPrompts(bundle);
+  const canonical = structuredClone(request.state);
+  const included = projectAnalysisPosition(canonical);
+  if (!included) throw new Error("Include an option or shares before requesting analysis");
+  if (canonical.pricing && (!snapshot || validateMarketConstruction(canonical, snapshot).length)) throw new Error("A verified market snapshot is required");
+  const analysisScope = {
+    includedOptionLegs: included.legs.length,
+    excludedOptionLegs: canonical.excludedLegIds?.length ?? 0,
+    stockIncluded: !!included.stock,
+    basis: "Hypothetical included selection only, not full-inventory risk or accounting. Excluded holdings remain unchanged. The option snapshot lists available quotes, not held inventory.",
+  };
+  request = { ...request, state: included };
   const startedAt = Date.now();
   const preview = isAmericanPreview(request.state, request.chart_context);
   const firstExpiryBounds = readFirstExpiryBounds(request.first_expiry_range);
@@ -957,7 +974,7 @@ export async function spar(
   if (request.state.pricing && (!snapshot || validateMarketStrategy(request.state, snapshot).length)) throw new Error("A verified market snapshot is required");
   const calculated = strategyFacts(request.state, snapshot, request.chart_context, request.probability_range);
   if (firstExpiryBounds) calculated.firstExpiryRange = firstExpiryRange(request.state, { ...firstExpiryBounds, tolerance: 1, maxEvaluations: 256 });
-  observeAnalysis(observer, { stage: "facts", reason: "validated-position", input: { state: request.state, chart_context: request.chart_context, probability_range: request.probability_range, first_expiry_range: request.first_expiry_range }, output: calculated });
+  observeAnalysis(observer, { stage: "facts", reason: "validated-position", input: { state: canonical, analysis_scope: analysisScope, chart_context: request.chart_context, probability_range: request.probability_range, first_expiry_range: request.first_expiry_range }, output: calculated });
   const candidateAvailable = () => !!snapshot && !snapshot.historical && [snapshot.retrievedAt, snapshot.spotAsOf, ...snapshot.contracts.map(c => c.quoteAsOf)].every(value => { const time = Date.parse(value); return Number.isFinite(time) && time <= Date.now() && Date.now() - time <= 300_000; });
   const controller = new AbortController();
   let verificationReason: AnalysisVerificationError["reason"] = "provider_error";
@@ -993,6 +1010,7 @@ export async function spar(
             role: "user",
             content: JSON.stringify({
               strategy: request.state,
+              analysis_scope: analysisScope,
               ...(selectingTool ? { reply_schema: RESPONSE_SCHEMA.schema } : {}),
               calculated,
               available_templates: TEMPLATES.map(({ id, name }) => ({ id, name })),
@@ -1107,19 +1125,25 @@ export async function spar(
     }
     reply.evidence_ids = inlineCitations;
     let next: StrategyState;
+    let canonicalNext: StrategyState;
     try {
       next = applyOperations(request.state, reply.operations, snapshot);
+      canonicalNext = mergeAnalysisProposal(canonical, next);
+      if (snapshot) {
+        const errors = validateMarketConstruction(canonicalNext, snapshot);
+        if (errors.length) throw new Error(errors.join("; "));
+      }
     } catch (error) {
       observeAnalysis(observer, { stage: "proposal-check", reason: "operations-rejected" });
       throw new InvalidProposalError(error instanceof Error ? error.message : "Invalid proposal");
     }
-    observeAnalysis(observer, { stage: "proposal-check", reason: "deterministic-constraints-accepted", output: { operations: reply.operations, next_state: next } });
+    observeAnalysis(observer, { stage: "proposal-check", reason: "deterministic-constraints-accepted", output: { operations: reply.operations, next_state: canonicalNext } });
     try {
       if (calculated.lossClassification === "not-exact" && !reply.operations.length && !calculated.positionComparison && !calculated.candidateSearch && !preview) {
         const segmenter = new Intl.Segmenter("en", { granularity: "sentence" });
         boundPassages = [reply.text, ...reply.assumptions, ...reply.objections, ...reply.suggested_prompts].flatMap(text => text.split("\n").flatMap(line => [...segmenter.segment(line)].map(part => part.segment)).filter(text => text.trim())).map((text, index) => ({ id: `p${index}`, text }));
       }
-      const verified = await complete({ strategy: request.state, conversation: request.conversation, calculated, proposed_state: next, proposed: preview ? calculated : strategyFacts(next, snapshot, request.chart_context, request.probability_range), reply, market_context: marketContext, option_snapshot: snapshot ?? null, ...(boundPassages ? { bound_passages: boundPassages } : {}) });
+      const verified = await complete({ strategy: request.state, analysis_scope: analysisScope, conversation: request.conversation, calculated, proposed_state: next, proposed: preview ? calculated : strategyFacts(next, snapshot, request.chart_context, request.probability_range), reply, market_context: marketContext, option_snapshot: snapshot ?? null, ...(boundPassages ? { bound_passages: boundPassages } : {}) });
       verificationReason = "invalid_output";
       if (hasToolCalls(verified.choices?.[0]?.message?.tool_calls)) throw new Error("Unexpected verification tool call");
       const content = verified.choices?.[0]?.message?.content;
@@ -1134,7 +1158,7 @@ export async function spar(
       request_id: request.request_id,
       base_state_version: request.base_state_version,
       reply,
-      next_state: next,
+      next_state: canonicalNext,
       metrics: calculateStrategy(next),
       calculated,
       market_context: marketContext,

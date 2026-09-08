@@ -245,6 +245,16 @@ function post(app: ReturnType<typeof createApp>, body: unknown, env: Bindings = 
 }
 
 describe("sparring API", () => {
+  it("admits included analysis but rejects an empty selection before inference", async () => {
+    const provider = vi.fn<typeof fetch>(async () => providerReply());
+    const app = createApp(provider), body = input();
+    body.state.excludedLegIds = body.state.legs.map(leg => leg.id);
+    expect((await post(app, body, { OPENROUTER_API_KEY: "test" })).status).toBe(400);
+    expect(provider).not.toHaveBeenCalled();
+    body.state.excludedLegIds = [body.state.legs[1].id];
+    expect((await post(app, body)).status).toBe(503);
+    expect(provider).not.toHaveBeenCalled();
+  });
   it("returns a safe candidate search limit refusal without continuation inference", async () => {
     await traceDB.batch(snapshotMigration.split(";").filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
     const now = Date.now(), retrievedAt = new Date(now).toISOString(), expiry = new Date(now + 30 * 86_400_000).toISOString();

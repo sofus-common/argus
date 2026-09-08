@@ -806,9 +806,9 @@ if (process.argv.includes('--leg-iv-baseline')) {
     return args;
   };
   if (process.argv.includes('--self-check')) {
-    const raw = JSON.parse(readFileSync(new URL('../prompts/analysis-v1.json', import.meta.url), 'utf8'));
-    assert.equal(defaultAnalysisPrompts.version, 'analysis-v1');
-    assert.equal(Object.keys(defaultAnalysisPrompts.prompts).length, 9);
+    const raw = JSON.parse(readFileSync(new URL('../prompts/analysis-v9.json', import.meta.url), 'utf8'));
+    assert.equal(defaultAnalysisPrompts.version, 'analysis-v9');
+    assert.equal(Object.keys(defaultAnalysisPrompts.prompts).length, 11);
     assert.deepEqual(defaultAnalysisPrompts, readAnalysisPrompts(raw));
     if (prompts) assert.ok(Object.isFrozen(prompts) && Object.isFrozen(prompts.prompts));
     for (const negative of [false, true, 'unrelated-rejection']) {

@@ -26,6 +26,7 @@ import {
   validateStrategy,
   validateConstruction,
   projectAnalysisPosition,
+  mergeAnalysisProposal,
   effectiveIv,
   pruneExpiryIvShifts,
   type OptionLeg,
@@ -35,6 +36,47 @@ import {
 
 const IDS = TEMPLATES.map((template) => template.id);
 describe('construction analysis selection', () => {
+  it('merges included proposals without changing retained inventory, ordering or expiry shifts', () => {
+    const state = createStrategy('call-calendar');
+    state.excludedLegIds = [state.legs[0].id];
+    state.expiryIvShifts = [{ expiry: state.legs[0].expiry, ivShift: .01 }];
+    const original = structuredClone(state);
+    const proposal = projectAnalysisPosition(state)!;
+    proposal.version++;
+    proposal.legs[0].contracts = 2;
+    const next = mergeAnalysisProposal(state, proposal);
+    expect(next.legs[0]).toEqual(state.legs[0]);
+    expect(next.legs[1].contracts).toBe(2);
+    expect(next.excludedLegIds).toEqual(state.excludedLegIds);
+    expect(next.expiryIvShifts).toEqual(state.expiryIvShifts);
+    expect(projectAnalysisPosition(next)).toEqual(proposal);
+    next.legs[0].entryPrice++;
+    expect(state).toEqual(original);
+  });
+  it('rejects excluded identity reuse, overflow and stale or incompatible proposals', () => {
+    const state = createStrategy('iron-condor');
+    state.excludedLegIds = [state.legs[0].id];
+    const proposal = projectAnalysisPosition(state)!;
+    proposal.version++;
+    expect(() => mergeAnalysisProposal(state, { ...proposal, version: state.version })).toThrow();
+    expect(() => mergeAnalysisProposal(state, { ...proposal, id: 'other' })).toThrow();
+    expect(() => mergeAnalysisProposal(state, { ...proposal, legs: [...proposal.legs, state.legs[0]] })).toThrow();
+    const extra = { ...state.legs[0], id: 'new-leg', strike: state.legs[0].strike - 5 };
+    extra.contractId = sampleContractId(extra.type, extra.strike, extra.expiry);
+    expect(validateStrategy({ ...proposal, legs: [...proposal.legs, extra] })).toEqual([]);
+    expect(() => mergeAnalysisProposal(state, { ...proposal, legs: [...proposal.legs, extra] })).toThrow();
+    expect(() => mergeAnalysisProposal({ ...state, excludedLegIds: state.legs.map(leg => leg.id) }, proposal)).toThrow();
+  });
+  it('retains an excluded expiry shift when the last included option becomes shares', () => {
+    const state = createStrategy('bull-call');
+    state.excludedLegIds = [state.legs[1].id];
+    state.expiryIvShifts = [{ expiry: state.legs[0].expiry, ivShift: .03 }];
+    const proposal = pruneExpiryIvShifts({ ...projectAnalysisPosition(state)!, version: state.version + 1, legs: [], stock: { shares: 100, entryPrice: 95 } });
+    const next = mergeAnalysisProposal(state, proposal);
+    expect(next.expiryIvShifts).toEqual(state.expiryIvShifts);
+    expect(next.legs).toEqual([state.legs[1]]);
+    expect(projectAnalysisPosition(next)).toEqual(proposal);
+  });
   it('preserves canonical inventory and costs while projecting only included legs', () => {
     const state = createStrategy('bull-call');
     state.excludedLegIds = [state.legs[1].id];
