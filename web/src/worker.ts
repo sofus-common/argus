@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { withAnalysisTrace, readAnalysisTrace, AnalysisTraceError } from "./analysis-trace";
+import { loadAnalysisPrompts } from "./analysis-config";
 import { calculateLotScenarioComparison, type LotScenario } from "./lot-scenarios";
 import { AuthError, checkRequestOrigin, createAuthenticator, type AuthBindings, type Session } from "./auth";
 import { createSavedStore, savedPosition, SavedStoreError } from "./saved-strategies";
@@ -582,8 +583,10 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     const session = c.get("session");
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(["argus-tab-draft-v1", session.local, session.owner])));
     const recoveryKey = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    const discovery = await loadAnalysisPrompts(c.env.DB).then(bundle => Boolean(bundle.prompts.DISCOVERY_INTENT_PROMPT), () => false);
     return c.json({
       chat_available: Boolean(c.env.OPENROUTER_API_KEY),
+      analysis: { discovery },
       model: MODEL,
       templates: TEMPLATES,
       session: { label: session.label, local: session.local, recoveryKey },
@@ -671,7 +674,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
 
     try {
       return c.json(await withAnalysisTrace(c.env.DB, traceContext(c, "sparring", request.request_id), async (prompts, observe) => {
-        const context = request.candidate_selection ? { retrievedAt: snapshot?.retrievedAt ?? request.state.valuationTimestamp, sources: [] } : await loadContext(c.env, request.state.underlying);
+        const context = request.candidate_selection || request.discovery ? { retrievedAt: snapshot?.retrievedAt ?? request.state.valuationTimestamp, sources: [] } : await loadContext(c.env, request.state.underlying);
         return spar(request, c.env.OPENROUTER_API_KEY!, providerFetch, context, snapshot, prompts, observe);
       }));
     } catch (error) {

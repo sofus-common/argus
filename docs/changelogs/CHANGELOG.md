@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Added a gated strategy-discovery conversation workflow: one structured
+  evidence-extraction call followed by deterministic clarification, bounded search
+  and numerical rendering. Explicit mode selection isolates conversation context;
+  switching modes cancels pending replies. User evidence is checked for schema,
+  source, target symbol, supported units and conflicting constraints. The client
+  revalidates evidence, search results and rendered wording before display.
+  Candidate Inspect/Apply/Undo preserves excluded fixed costs across different
+  candidate-entry and held-quote bases without relaxing the general proposal
+  guard. No orders, new dependencies or autonomous loop were added.
+  V18 is an inactive qualification candidate; V16 remains selected. Ordinary
+  discussion under V18 retains the V16 provider request. Live complete-task
+  qualification is still required; literal validation does not prove arbitrary
+  natural-language intent alignment or general trading judgment.
+  Verified: 762 tests, TypeScript/build, independent integration review and 45/45
+  synthetic browser workflows on desktop and 390px mobile. Checks include
+  clarification/follow-up, correct candidate arithmetic, fixed-cost preservation,
+  Inspect/Apply/save/Undo, forged-response rejection and mode-switch cancellation.
+
 - Added two-candidate optimizer comparison before applying either alternative.
   Select two results from one validated search to compare target P/L, outlay,
   scoped loss measures, maximum profit, probability and Greeks. Read-only charts

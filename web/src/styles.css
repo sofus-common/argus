@@ -457,6 +457,9 @@ input, select, textarea { accent-color: var(--cobalt); }
 @keyframes pulse { to { opacity: .2; } }
 .prompt-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 18px; }
 .prompt-chips button { border: 1px solid var(--line-strong); border-radius: 5px; background: #182332; color: #bccbdd; padding: 7px 9px; font-size: 11px; }
+.discovery-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 18px 12px; font-size: 12px; }
+.discovery-mode select { min-height: 44px; min-width: 0; max-width: 100%; padding: 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--ink-2); color: inherit; }
+.discovery-help { margin: 0 18px 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .composer { margin: 0 18px 12px; background: var(--ink-0); border: 1px solid #4a5b76; border-radius: 9px; overflow: hidden; }
 .composer:focus-within { border-color: var(--cobalt); }
 .composer textarea { width: 100%; border: 0; background: transparent; outline: none; min-height: 74px; padding: 13px; font-size: 13px; line-height: 1.5; resize: vertical; }

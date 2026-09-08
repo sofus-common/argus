@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from 're
 import { SymbolSearch } from './SymbolSearch'
 import { OptionChainTable } from './OptionChainTable'
 import { CandidateSearch, checkSearch, type CandidateSearchResult } from './CandidateSearch'
+import { parseDiscoveryIntent, renderDiscovery } from './discovery'
 import { PriceHistory } from './PriceHistory'
 import { streamFreshness } from './stream-freshness'
 import { DraftRecovery } from './DraftRecovery'
@@ -898,7 +899,7 @@ function LegRow({ leg, snapshot, fixedEntry, included, onInclude, onChange, onRe
   )
 }
 
-type ChatMessage = { role: 'guide' | 'user' | 'argus'; text: string; note?: string; analysis?: Pick<SparringSuccess, 'reply' | 'calculated' | 'market_context'> & { positionVersion: number; positionName: string; positionUnderlying: string; position: StrategyState; positionSnapshot?: MarketSnapshot } }
+type ChatMessage = { role: 'guide' | 'user' | 'argus'; text: string; discovery?: boolean; note?: string; analysis?: Pick<SparringSuccess, 'reply' | 'calculated' | 'market_context'> & { positionVersion: number; positionName: string; positionUnderlying: string; position: StrategyState; positionSnapshot?: MarketSnapshot } }
 type PendingProposal = Omit<SparringSuccess, 'calculated' | 'market_context'> & Partial<Pick<SparringSuccess, 'calculated' | 'market_context'>> & { before: SparringSuccess['metrics']; comparisonBaseline?: StrategyState; comparisonUnavailable?: string; lossBound?: ReturnType<typeof firstExpirySpreadLossBound>; candidateSelection?: CandidateSelection }
 type SavedSummary = { id: string; title: string; revision: number; updatedAt: string; tracking?: SavedTracking }
 type SavedRecord = SavedSummary & { state: StrategyState; snapshot: MarketSnapshot | null }
@@ -1003,6 +1004,9 @@ export function App() {
   const activePnlDisplay = view === 'curve' && chartMetric !== 'pnl' ? 'pnl' : pnlDisplay
   const displayBasis = analysisState ? pnlDisplayBasis(analysisState, activePnlDisplay) : null
   const [composer, setComposer] = useState('')
+  const [discoveryAvailable, setDiscoveryAvailable] = useState(false)
+  const [discoveryMode, setDiscoveryMode] = useState(false)
+  const discoveryStart = useRef(0)
   const [pending, setPending] = useState(false)
   const reviewRequest = useRef<AbortController | null>(null)
   const reviewGeneration = useRef(0)
@@ -1075,10 +1079,11 @@ export function App() {
   useEffect(() => {
     let active = true
     void fetch('/api/bootstrap').then(async response => {
-      const body = await response.json() as { session: { label: string; local: boolean; recoveryKey: string }; error?: { message?: string } }
+      const body = await response.json() as { session: { label: string; local: boolean; recoveryKey: string }; analysis?: { discovery?: boolean }; error?: { message?: string } }
       if (!active) return
       if (!response.ok) throw new Error(body.error?.message ?? 'Private session unavailable.')
       setSession(body.session)
+      setDiscoveryAvailable(body.analysis?.discovery === true)
       await refreshSaved()
     }).catch(error => { if (active) setWorkspaceError(error instanceof Error ? error.message : 'Private workspace unavailable.') })
     return () => { active = false; savedListRequest.current++; savedListController.current?.abort() }
@@ -1122,6 +1127,7 @@ export function App() {
     }
     if (!automaticUpdate) stopAutomatic()
     if (remember) setHistory((items) => [...items.slice(-19), current])
+    if (candidate.underlying !== current.underlying) { setDiscoveryMode(false); discoveryStart.current = messages.length }
     strategyRef.current = candidate
     setStrategy(candidate)
     if (candidate.underlyingKind === 'cash-index') setAmericanPreview(false)
@@ -1141,7 +1147,7 @@ export function App() {
     chainRequest.current++; setChainPending(false)
     workspaceRequest.current++
     reviewGeneration.current++; reviewRequest.current?.abort(); reviewRequest.current = null
-    setPending(false); setMessages([]); setProposal(null)
+    setPending(false); setMessages([]); setDiscoveryMode(false); discoveryStart.current = 0; setProposal(null)
     setHistoryOpen(false); setLifecycleSaved(''); setLotSaved('')
     setSavedIdentity(null); setSavedContent(null); setSelectedSaved('')
     setSavedTitle(draft.title); titleRef.current = draft.title
@@ -1403,32 +1409,41 @@ export function App() {
     await spar('Review this freshly captured position snapshot. Challenge its risk and thesis using the supplied dated quotes and selected scenario. Distinguish quote marks from modeled P/L; do not change the position or imply an executable fill.', undefined, captured)
   }
 
-  const spar = async (prompt = composer, probabilityRange?: { lower: number; upper: number }, source?: { position: StrategyState; snapshot: MarketSnapshot }, firstExpiryRange?: { min: number; max: number }) => {
+  const spar = async (prompt = composer, probabilityRange?: { lower: number; upper: number }, source?: { position: StrategyState; snapshot: MarketSnapshot }, firstExpiryRange?: { min: number; max: number }, discovery = false) => {
     if (analysisUnavailable) return setEditError('AI analysis requires at least one included holding; your holdings are unchanged.')
     if (!prompt.trim() || reviewRequest.current) return
+    if (discovery && (!discoveryAvailable || source || probabilityRange || firstExpiryRange)) return
+    if (!discovery) setDiscoveryMode(false)
     stopAutomatic()
     const american = americanPreviewActive.current
     const reviewedPosition = structuredClone(source?.position ?? strategy)
     const reviewedSnapshot = source ? structuredClone(source.snapshot) : marketSnapshot ? structuredClone(marketSnapshot) : undefined
-    const candidateSelection = !source && !probabilityRange && !firstExpiryRange ? proposal?.candidateSelection : undefined
+    const candidateSelection = !discovery && !source && !probabilityRange && !firstExpiryRange ? proposal?.candidateSelection : undefined
     reviewGeneration.current++
     const controller = new AbortController()
     reviewRequest.current = controller
-    setMessages((items) => [...items, { role: 'user', text: prompt }])
+    setMessages((items) => [...items, { role: 'user', text: prompt, discovery }])
     if (!source) setComposer('')
     setPending(true)
     if (!candidateSelection) setProposal(null)
     try {
-      const conversation = [...messages, { role: 'user' as const, text: prompt }]
+      const conversation = [...messages.filter((message, index) => discovery ? message.discovery && index >= discoveryStart.current : !message.discovery), { role: 'user' as const, text: prompt }]
         .filter((message) => message.role !== 'guide')
         .slice(-12)
         .map((message) => ({ role: message.role === 'user' ? 'user' : 'assistant', content: message.analysis ? `[Review of ${message.analysis.positionName}, workspace version ${message.analysis.positionVersion}; ${message.analysis.positionVersion === reviewedPosition.version ? 'same workspace version' : 'earlier workspace version, not the current position'}; underlying ${message.analysis.positionUnderlying}]\n${message.text}` : message.text }))
-      if (thesis.trim()) conversation[conversation.length - 1].content += `\nMy thesis: ${thesis.trim()}`
+      if (!discovery && thesis.trim()) conversation[conversation.length - 1].content += `\nMy thesis: ${thesis.trim()}`
       const requestId = crypto.randomUUID()
       const baseVersion = reviewedPosition.version
-      const response = await fetch('/api/sparring', { method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json', 'X-ARGUS-Request': '1' }, body: JSON.stringify({ request_id: requestId, base_state_version: baseVersion, state: reviewedPosition, conversation, ...(candidateSelection ? { candidate_selection: candidateSelection } : { ...(probabilityRange ? { probability_range: probabilityRange } : {}), ...(firstExpiryRange ? { first_expiry_range: firstExpiryRange } : {}), chart_context: { ...(american ? { view: 'heatmap', metric: 'pnl', valuationModel: 'american-crr-1024-v1' } : { view, metric: view === 'curve' ? chartMetric : 'pnl' }), ...(chartRange ? { range: chartRange } : {}), ...(activePnlDisplay !== 'pnl' && displayBasis ? { pnlDisplay: activePnlDisplay } : {}) } }) }) })
+      const response = await fetch('/api/sparring', { method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json', 'X-ARGUS-Request': '1' }, body: JSON.stringify({ request_id: requestId, base_state_version: baseVersion, state: reviewedPosition, conversation, ...(discovery ? { discovery: true } : candidateSelection ? { candidate_selection: candidateSelection } : { ...(probabilityRange ? { probability_range: probabilityRange } : {}), ...(firstExpiryRange ? { first_expiry_range: firstExpiryRange } : {}), chart_context: { ...(american ? { view: 'heatmap', metric: 'pnl', valuationModel: 'american-crr-1024-v1' } : { view, metric: view === 'curve' ? chartMetric : 'pnl' }), ...(chartRange ? { range: chartRange } : {}), ...(activePnlDisplay !== 'pnl' && displayBasis ? { pnlDisplay: activePnlDisplay } : {}) } }) }) })
       const data = await response.json() as Partial<SparringSuccess> & { error?: { code: string; message?: string } }
       if (reviewRequest.current !== controller) return
+      if (discovery) {
+        if (!response.ok || data.error) throw new Error(data.error?.message ?? 'Discovery is unavailable. Your position is unchanged.')
+        const intent = parseDiscoveryIntent(data.calculated?.discoveryIntent?.evidence, conversation, reviewedPosition.underlying)
+        if (!intent || JSON.stringify(intent) !== JSON.stringify(data.calculated?.discoveryIntent) || !data.reply || data.request_id !== requestId || data.base_state_version !== baseVersion || !Array.isArray(data.reply.operations) || data.reply.operations.length || JSON.stringify(data.reply.evidence_ids) !== '[]' || JSON.stringify(data.next_state) !== JSON.stringify({ ...reviewedPosition, version: baseVersion + 1 })) throw new Error('Discovery failed evidence validation. Your position is unchanged.')
+        const complete = intent.scope === 'search' && [intent.families, intent.targetSpot, intent.targetDate, intent.maxLoss, intent.feeAllowance, intent.basis, intent.objective, intent.maxEntryOutlay].every(value => value !== null)
+        if (complete !== !!data.calculated?.candidateSearch) throw new Error('Discovery results do not match the supplied constraints.')
+      }
       if (candidateSelection) {
         if (!response.ok || !reviewedSnapshot || !data.reply || data.error || data.request_id !== requestId || data.base_state_version !== baseVersion || !Array.isArray(data.reply.operations) || data.reply.operations.length || JSON.stringify(data.next_state) !== JSON.stringify({ ...reviewedPosition, version: baseVersion + 1 }) || !data.calculated?.positionComparison) throw new Error('Candidate discussion failed deterministic comparison validation. Your held position and selected candidate are unchanged.')
         const comparison = await requestWorkspaceValuation(projectAnalysisPosition(reviewedPosition)!, controller.signal, { kind: 'candidate-comparison', snapshot: reviewedSnapshot, selection: candidateSelection })
@@ -1444,6 +1459,10 @@ export function App() {
         const search = data.calculated.candidateSearch
         data.calculated.candidateSearch = await checkSearch(search, projectAnalysisPosition(reviewedPosition)!, reviewedSnapshot, search.request, search.domain, controller.signal)
         if (reviewRequest.current !== controller || strategyRef.current.version !== baseVersion) return
+      }
+      if (discovery) {
+        const rendered = renderDiscovery(data.calculated!.discoveryIntent!, data.calculated!.candidateSearch)
+        if (data.reply!.text !== rendered.text || JSON.stringify(data.reply!.assumptions) !== JSON.stringify(rendered.assumptions) || JSON.stringify(data.reply!.objections) !== JSON.stringify(rendered.objections) || JSON.stringify(data.reply!.suggested_prompts) !== JSON.stringify(rendered.suggested_prompts)) throw new Error('Discovery wording failed deterministic validation. Your position is unchanged.')
       }
       if (data.next_state && data.reply) {
         if (data.request_id !== requestId || data.base_state_version !== baseVersion) throw new Error('Mismatched proposal identity')
@@ -1469,10 +1488,10 @@ export function App() {
           setView('curve')
         }
       }
-      setMessages((items) => [...items, { role: 'argus', text: data.reply?.text ?? data.error?.message ?? 'Live sparring is unavailable until an OpenRouter key is configured.', analysis: data.reply ? { reply: data.reply, calculated: data.calculated!, market_context: data.market_context!, positionVersion: baseVersion, positionName: reviewedPosition.name, positionUnderlying: reviewedPosition.underlying, position: projectAnalysisPosition(reviewedPosition)!, positionSnapshot: reviewedSnapshot } : undefined, note: data.error ? `${data.error.code.replaceAll('_', ' ')} · position unchanged` : data.reply?.operations.length ? 'PROPOSAL READY · review the comparison' : 'ARGUS · analysis' }])
+      setMessages((items) => [...items, { role: 'argus', discovery, text: data.reply?.text ?? data.error?.message ?? 'Live sparring is unavailable until an OpenRouter key is configured.', analysis: data.reply ? { reply: data.reply, calculated: data.calculated!, market_context: data.market_context!, positionVersion: baseVersion, positionName: reviewedPosition.name, positionUnderlying: reviewedPosition.underlying, position: projectAnalysisPosition(reviewedPosition)!, positionSnapshot: reviewedSnapshot } : undefined, note: data.error ? `${data.error.code.replaceAll('_', ' ')} · position unchanged` : data.reply?.operations.length ? 'PROPOSAL READY · review the comparison' : discovery ? 'ARGUS · discovery' : 'ARGUS · analysis' }])
     } catch (error) {
       if (reviewRequest.current !== controller) return
-      setMessages((items) => [...items, { role: 'argus', text: error instanceof Error ? error.message : 'Unable to complete this review. Try again.', note: 'REVIEW FAILED · position unchanged' }])
+      setMessages((items) => [...items, { role: 'argus', discovery, text: error instanceof Error ? error.message : 'Unable to complete this review. Try again.', note: 'REVIEW FAILED · position unchanged' }])
     } finally {
       controller.abort()
       if (reviewRequest.current === controller) { reviewRequest.current = null; setPending(false) }
@@ -1488,6 +1507,7 @@ export function App() {
 
   const inspectCandidate = async (search: CandidateSearchResult | null | undefined, snapshot: MarketSnapshot | undefined, id: string, analysis?: NonNullable<ChatMessage['analysis']>) => {
     if (reviewRequest.current || analysisUnavailable) return
+    setDiscoveryMode(false)
     const current = strategyRef.current
     const candidate = search?.candidates.find(item => item.id === id)
     if (!search || !candidate || !snapshot || search.baseVersion !== current.version || analysis && analysis.positionVersion !== current.version || search.snapshotId !== current.pricing?.snapshotId || search.model !== (current.valuationModel ?? 'european-bsm-v1')) return setEditError('This candidate search is stale. Search again using the current position and quotes.')
@@ -1498,6 +1518,7 @@ export function App() {
     try {
       const includedNext = { ...structuredClone(candidate.state), id: current.id, version: current.version + 1 }
       if (includedNext.pricing?.entryMode !== undefined || validateMarketStrategy(includedNext, snapshot).length) throw new Error('Candidate entry estimates do not match its quoted snapshot.')
+      if (current.excludedLegIds?.length && current.pricing?.entryMode === 'fixed' && current.pricing.snapshotId === includedNext.pricing?.snapshotId) includedNext.pricing = { ...current.pricing }
       const next = mergeAnalysisProposal(current, includedNext), includedBefore = projectAnalysisPosition(current)!
       if (validateMarketConstruction(next, snapshot).length) throw new Error('Candidate no longer matches its quoted snapshot.')
       const baselineInRange = !includedBefore.legs.length || Date.parse(includedNext.scenarioDate) <= Math.min(...includedBefore.legs.map(leg => Date.parse(leg.expiry)))
@@ -1706,8 +1727,8 @@ export function App() {
 
         <aside className="sparring-rail">
           <div className="sparring-head"><div><span className="argus-orb"><i /></span><div><strong>ARGUS</strong><small><i /> SPARRING PARTNER</small></div></div></div>
-          <WorkspaceContext key={strategy.underlying} symbol={strategy.underlying} sample={!strategy.pricing} />
-          <details className="thesis-card" hidden={!!proposal}><summary>Your thesis <small>{thesis.trim() ? 'Included in review' : 'optional'}</small></summary><label className="sr-only" htmlFor="trade-thesis">Your thesis</label><textarea id="trade-thesis" value={thesis} maxLength={1000} onChange={(event) => setThesis(event.target.value)} placeholder="What do you expect to happen, and by when?" /></details>
+          {!discoveryMode && <WorkspaceContext key={strategy.underlying} symbol={strategy.underlying} sample={!strategy.pricing} />}
+          <details className="thesis-card" hidden={!!proposal || discoveryMode}><summary>Your thesis <small>{thesis.trim() ? 'Included in review' : 'optional'}</small></summary><label className="sr-only" htmlFor="trade-thesis">Your thesis</label><textarea id="trade-thesis" value={thesis} maxLength={1000} onChange={(event) => setThesis(event.target.value)} placeholder="What do you expect to happen, and by when?" /></details>
           <div className="conversation" ref={conversationPane}>
             {!messages.length && metrics && <article className="position-brief"><div className="brief-heading"><span>POSITION BRIEF</span><small>Calculated locally</small></div><h3>{metrics.maxLoss == null && !mixedExpiry ? 'Your downside is uncapped.' : mixedExpiry ? 'Time changes this trade.' : `Know the ${money(metrics.maxLoss)} at risk.`}</h3><p>{brief}</p><div className="brief-facts"><span>Theta · local sensitivity<strong>{signed(Number(metrics.theta.toFixed(2)), 2)} USD / day</strong></span><span>Vega · local sensitivity<strong>{signed(briefVega, 2)} USD / IV point</strong></span></div><p className="brief-question">{briefQuestion}</p></article>}
             <div className="session-divider"><span>STRATEGY REVIEW</span></div>
@@ -1752,12 +1773,14 @@ export function App() {
             {proposal && <article className="proposal-card"><header>PROPOSED CHANGE <small>review before applying</small></header><div className="comparison-metrics"><span>Metric</span><span>{proposal.comparisonBaseline ? 'Held at target' : 'Current'}</span><span>Proposed</span><span>Entry</span><b>{proposal.before.entryLabel} {money(proposal.before.entryAmount)}</b><b>{proposal.metrics.entryLabel} {money(proposal.metrics.entryAmount)}</b><span>Max loss</span><b>{proposal.before.mode === 'first-expiry' ? 'Not exact' : money(proposal.before.maxLoss, 'Unbounded')}</b><b>{proposal.metrics.mode === 'first-expiry' ? 'Not exact' : money(proposal.metrics.maxLoss, 'Unbounded')}</b><span>Max profit</span><b>{proposal.before.mode === 'first-expiry' ? 'Not exact' : money(proposal.before.maxProfit, 'Unbounded')}</b><b>{proposal.metrics.mode === 'first-expiry' ? 'Not exact' : money(proposal.metrics.maxProfit, 'Unbounded')}</b><span>Cost allowance</span><b>{money(strategy.feeAllowance ?? 0, '—', 2)}</b><b>{money(proposal.next_state.feeAllowance ?? 0, '—', 2)}</b><span>Scenario P/L</span><b>{money(proposal.before.scenarioPnl)}</b><b>{money(proposal.metrics.scenarioPnl)}</b></div><div className="comparison-leg-list">{(strategy.stock || proposal.next_state.stock) && <section aria-label="Share holding comparison"><p><small>CURRENT</small>{holdingDescription(strategy.stock, strategy.underlying)}</p><p><small>PROPOSED</small>{holdingDescription(proposal.next_state.stock, proposal.next_state.underlying)}</p><p>Held per-share costs are assumptions, not confirmed trades or fills.</p></section>}{strategy.legs.filter((leg) => !proposal.next_state.legs.some((next) => legDescription(next) === legDescription(leg))).map((leg) => <p key={`before-${leg.id}`}><small>REMOVE</small>{legDescription(leg)}</p>)}{proposal.next_state.legs.filter((leg) => !strategy.legs.some((before) => legDescription(before) === legDescription(leg))).map((leg) => <p key={`after-${leg.id}`}><small>ADD</small>{legDescription(leg)}</p>)}</div>{proposal.reply.assumptions.length > 0 && <p><b>Assumes:</b> {proposal.reply.assumptions.join(' · ')}</p>}{proposal.reply.objections.length > 0 && <p><b>Objections:</b> {proposal.reply.objections.join(' · ')}</p>}<footer><button onClick={() => { reviewGeneration.current++; reviewRequest.current?.abort(); reviewRequest.current = null; setPending(false); setProposal(null); setMessages((items) => [...items, { role: 'argus', text: 'Proposal dismissed. Your current position is unchanged.' }]) }}>Keep current</button><button className="accept" onClick={acceptProposal}>Apply proposal</button></footer></article>}
             {pending && <article className="message argus thinking"><header>ARGUS <time>checking</time></header><p><i /><i /><i /></p><small>Calculations remain deterministic</small></article>}
           </div>
-          <div className="prompt-chips" aria-disabled={analysisUnavailable}><button disabled={analysisUnavailable} onClick={() => spar('What breaks this trade?')}>Break the thesis</button><button disabled={analysisUnavailable} onClick={() => spar('Compare this with a calendar spread.')}>Compare structure</button><button disabled={analysisUnavailable} onClick={() => spar('Reduce downside without adding a fifth leg.')}>Reduce downside</button></div>
+          {!discoveryMode && <div className="prompt-chips" aria-disabled={analysisUnavailable}><button disabled={analysisUnavailable} onClick={() => spar('What breaks this trade?')}>Break the thesis</button><button disabled={analysisUnavailable} onClick={() => spar('Compare this with a calendar spread.')}>Compare structure</button><button disabled={analysisUnavailable} onClick={() => spar('Reduce downside without adding a fifth leg.')}>Reduce downside</button></div>}
           {analysisUnavailable && <p role="note">AI review requires at least one included holding.</p>}
-          {hasExclusions && !analysisUnavailable && <p role="note">AI reviews included holdings only. Proposals retain excluded legs and entry costs; exclusion does not close a holding.</p>}
+          {hasExclusions && !analysisUnavailable && !discoveryMode && <p role="note">AI reviews included holdings only. Proposals retain excluded legs and entry costs; exclusion does not close a holding.</p>}
           {proposal?.candidateSelection && <p aria-label="Candidate discussion context">Discussing held position versus selected quoted candidate. Read-only; Apply remains a separate choice. <button disabled={pending} onClick={() => void spar('Compare this selected candidate against my held position at the search target. Challenge the tradeoffs, quoted entry assumptions and conservative risk bound. Do not change either position.')}>Discuss candidate</button></p>}
-          <form className="composer" onSubmit={(event) => { event.preventDefault(); void spar() }}><textarea id="workspace-question" aria-label="Ask ARGUS" placeholder="Challenge, compare, or reshape this trade…" value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void spar() } }} /><div><span>Ctrl / ⌘ + Enter</span><button disabled={!composer.trim() || pending || analysisUnavailable} aria-label="Send message">↑</button></div></form>
-          <footer><span><i /> OpenRouter conversation</span><button onClick={() => { reviewGeneration.current++; reviewRequest.current?.abort(); reviewRequest.current = null; setPending(false); setMessages([]); setProposal(null) }}>Clear</button></footer>
+          {discoveryAvailable && <label className="discovery-mode">Conversation mode<select aria-label="Conversation mode" value={discoveryMode ? 'discovery' : 'discussion'} onChange={event => { reviewGeneration.current++; reviewRequest.current?.abort(); reviewRequest.current = null; setPending(false); setProposal(null); discoveryStart.current = messages.length; setDiscoveryMode(event.target.value === 'discovery') }}><option value="discussion">Discuss position</option><option value="discovery">Discover strategies</option></select></label>}
+          {discoveryMode && <p className="discovery-help" role="note">New {strategy.underlying} strategies; holdings stay unchanged. Include family, target price/UTC date, USD loss/fees/outlay, quote basis and ranking. Re-entering this mode starts a fresh search.</p>}
+          <form className="composer" onSubmit={(event) => { event.preventDefault(); void spar(composer, undefined, undefined, undefined, discoveryMode) }}><textarea id="workspace-question" aria-label="Ask ARGUS" placeholder={discoveryMode ? 'Find a strategy within my target, risk and cost constraints…' : 'Challenge, compare, or reshape this trade…'} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void spar(composer, undefined, undefined, undefined, discoveryMode) } }} /><div><span>Ctrl / ⌘ + Enter</span><button disabled={!composer.trim() || pending || analysisUnavailable} aria-label="Send message">↑</button></div></form>
+          <footer><span><i /> OpenRouter conversation</span><button onClick={() => { reviewGeneration.current++; reviewRequest.current?.abort(); reviewRequest.current = null; setPending(false); setMessages([]); discoveryStart.current = 0; setProposal(null) }}>Clear</button></footer>
         </aside>
       </div>
     </main>

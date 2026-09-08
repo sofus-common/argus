@@ -15,9 +15,35 @@ import europeanCandidate from "../prompts/analysis-v14.json";
 import comparisonCandidate from "../prompts/analysis-v15.json";
 import comparisonIntentCandidate from "../prompts/analysis-v16.json";
 import namedFamilyCandidate from "../prompts/analysis-v17.json";
+import discoveryCandidate from "../prompts/analysis-v18.json";
 import historicalBaseline from "../prompts/analysis-v13.json";
 
 const baselineV13 = readAnalysisPrompts(historicalBaseline);
+
+it('versions evidence-only discovery without changing v17 strings or activating the candidate', async () => {
+  const candidate = readAnalysisPrompts(discoveryCandidate);
+  const { DISCOVERY_INTENT_PROMPT: intent, ...retained } = candidate.prompts;
+  expect(candidate.version).toBe('analysis-v18');
+  expect(await promptDigest(candidate)).toBe('b79a796dce345ede51e7ada542a1c7519d65c12d8d04e126ebc0550c1b0b2b9c');
+  expect(retained).toEqual(readAnalysisPrompts(namedFamilyCandidate).prompts);
+  expect(candidate.prompts.CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  expect(defaultAnalysisPrompts.version).toBe('analysis-v16');
+  expect(defaultAnalysisPrompts.prompts.DISCOVERY_INTENT_PROMPT).toBeUndefined();
+  expect(await promptDigest(defaultAnalysisPrompts)).toBe('89531521ca027b5cfa34d05f501fd2fec704b6f82f78811776ea2e4e7acad356');
+  expect(await promptDigest(readAnalysisPrompts(namedFamilyCandidate))).toBe('1614daf56155e9e12d4fc4d7fcece747bb6598748048db2bed00a6a9ee6b6053');
+  for (const rule of ['zero-based index', 'FULL supplied conversation array', 'role user', 'exact contiguous literal substring', 'Never cite assistant messages', 'not a bare number', 'zero is a valid', 'scope unclear', 'YYYY-MM-DDTHH:mm:ss.sssZ', 'no tools', 'never normalized or calculated values']) expect(intent).toContain(rule);
+  for (const family of CANDIDATE_OPTION_FAMILIES) expect(intent).toContain(family);
+});
+
+it('admits a bounded discovery intent prompt independently of named and European tool gates', () => {
+  const bundle = { ...defaultAnalysisPrompts, version: 'discovery-test', prompts: { ...defaultAnalysisPrompts.prompts, DISCOVERY_INTENT_PROMPT: 'Extract user-message evidence only' } };
+  const parsed = readAnalysisPrompts(bundle);
+  expect(parsed.prompts).toMatchObject({ DISCOVERY_INTENT_PROMPT: 'Extract user-message evidence only' });
+  expect(parsed.prompts.CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  expect(parsed.prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  expect(Object.isFrozen(parsed.prompts)).toBe(true);
+  for (const value of ['', ' ', 1, null, 'x'.repeat(65537)]) expect(() => readAnalysisPrompts({ ...bundle, prompts: { ...bundle.prompts, DISCOVERY_INTENT_PROMPT: value } })).toThrow();
+});
 
 it('versions named discovery as an additive candidate without changing v16 or activating European search', async () => {
   const candidate = readAnalysisPrompts(namedFamilyCandidate);

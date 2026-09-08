@@ -13,6 +13,7 @@ import { projectPositionLots, recordLotTransaction, upgradePositionLots, recordE
 import { calculateStrategy, compareSearchCandidate, parseComparisonIntent, renderCandidateComparison, createMarketStrategy, createStrategy, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, scenarioFacts, type MarketSnapshot } from '../src/options'
 import { buildIntradayHistory, buildIvHistory } from '../src/intraday-history'
 import { buildPriceHistory } from '../src/price-history'
+import { parseDiscoveryIntent, renderDiscovery } from '../src/discovery'
 import '../src/styles.css'
 
 const button = document.querySelector<HTMLButtonElement>('#run')!, output = document.querySelector('#results')!, fixture = document.querySelector<HTMLDivElement>('#fixture')!
@@ -849,6 +850,78 @@ async function run() {
         await waitFor(() => !fixture.querySelector('.thinking'));
         assert(!fixture.querySelector('.proposal-card') && held() === original && fixture.textContent?.includes('REVIEW FAILED'), 'Untrusted excluded-cost mutation was accepted');
       } finally { await unmount(); window.fetch = priorFetch; window.Worker = priorWorker }
+    });
+    await test('Explicit discovery clarifies missing outlay, transfers candidates and rejects forged or cancelled replies', async () => {
+      await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
+      const stamp = new Date(fixedNow - 120000).toISOString(), expiry = '2027-10-09T20:00:00.000Z';
+      const snapshot: MarketSnapshot = { id: 'scoped-discovery-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: [expiry.slice(0, 10)], contracts: [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp }))) };
+      const held = createMarketStrategy('bull-call', snapshot); held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.excludedLegIds = [held.legs[0].id];
+      const seed = { id: 'scoped-discovery-seed', title: 'Synthetic scoped discovery', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
+      const question = `Find new bear put spreads only. Target SPY at $103 on ${expiry}. Rank by target P/L, with a maximum loss of $2000, total fee allowance $5 and natural quote pricing.`;
+      let attack = false, delay = false, saved: typeof seed | undefined, offered: ReturnType<typeof searchCandidates> | undefined;
+      const bodies: any[] = []; let late: { signal?: AbortSignal | null; finish: () => void } | undefined;
+      window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Scoped discovery test', local: true, recoveryKey: 'disabled-in-test' }, analysis: { discovery: true } });
+        if (url === '/api/strategies' && init?.method === 'POST') { saved = { ...seed, id: 'scoped-discovery-copy', state: JSON.parse(String(init.body)).state }; return Response.json({ record: saved }, { status: 201 }); }
+        if (url === '/api/strategies') return Response.json({ strategies: [seed] });
+        if (url === '/api/strategies/scoped-discovery-seed') return Response.json({ record: seed });
+        if (url === '/api/sparring') {
+          const body = JSON.parse(String(init?.body)); bodies.push(body);
+          assert(body.discovery === true && !body.chart_context && !body.candidate_selection && !body.probability_range && !body.first_expiry_range, 'Discovery request mixed conversation scopes');
+          const evidence = (quote: string) => { const message = body.conversation.findIndex((item: any) => item.role === 'user' && item.content.includes(quote)); return message < 0 ? null : { message, quote } };
+          const intent = parseDiscoveryIntent({ scope: 'search', families: [evidence('bear put spreads')], targetSpot: evidence('Target SPY at $103'), targetDate: evidence(`on ${expiry}`), maxLoss: evidence('maximum loss of $2000'), feeAllowance: evidence('total fee allowance $5'), basis: evidence('natural quote pricing'), objective: evidence('Rank by target P/L'), maxEntryOutlay: evidence('net entry outlay is $1500') }, body.conversation, body.state.underlying)!;
+          assert(intent, 'Scoped discovery fixture failed evidence parsing');
+          const candidateSearch = intent.maxEntryOutlay === null ? null : searchCandidates(projectAnalysisPosition(body.state)!, snapshot, { targetSpot: 103, targetDate: expiry, maxLoss: 2000, feeAllowance: 5, basis: 'natural', objective: 'target-pnl' }, { families: ['bear-put'], maxEntryOutlay: 1500 });
+          if (candidateSearch) { assert(candidateSearch.candidates.length > 0, 'Scoped discovery fixture has no candidate'); offered = candidateSearch }
+          const reply = { ...renderDiscovery(intent, candidateSearch), operations: [], evidence_ids: [], risk_classification: 'bounded' };
+          if (attack) intent.maxLoss = 1;
+          const response = { request_id: body.request_id, base_state_version: body.base_state_version, next_state: { ...body.state, version: body.state.version + 1 }, reply, calculated: { riskSummary: 'Synthetic test only', dataMode: 'market-snapshot', discoveryIntent: intent, candidateSearch }, market_context: { sources: [], retrievedAt: stamp } };
+          if (delay) return new Promise<Response>(resolve => { late = { signal: init?.signal, finish: () => resolve(Response.json(response)) } });
+          return Response.json(response);
+        }
+        throw new Error(`Unexpected scoped discovery request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean, stage: string) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), `Scoped discovery ${stage}: ${[...fixture.querySelectorAll('[role="alert"]')].map(item => item.textContent).join(' | ')} ${fixture.textContent?.slice(-1500)}`) };
+      const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input, .leg-list select, [aria-label="Scenario spot"], [aria-label="Scenario date UTC"]')].map(field => field.value).join();
+      const mode = async (label: string) => { const select = fixture.querySelector('[aria-label="Conversation mode"]') as unknown as HTMLSelectElement; const option = [...(select?.options ?? [])].find(item => item.text === label); assert(option, `Missing ${label} conversation mode`); await change('Conversation mode', option.value) };
+      const send = async (text: string) => { await change('Ask ARGUS', text); await act(async () => { const button = fixture.querySelector<HTMLButtonElement>('[aria-label="Send message"]'); assert(button && !button.disabled, 'Scoped discovery send disabled'); button.click() }) };
+      const count = () => fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length;
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !!fixture.querySelector('option[value="scoped-discovery-seed"]'), 'seed'); await change('Saved positions', seed.id); await click('Load');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Conversation mode"]'), 'mode');
+        const before = inputs(); await mode('Discover strategies');
+        await send(question); await waitFor(() => bodies.length === 1 && !fixture.querySelector('.thinking'), 'clarification');
+        assert(fixture.textContent?.includes('What maximum net entry outlay should I use?') && count() === 0 && inputs() === before && !saved, 'Missing outlay guessed a search or changed holdings');
+        await send('net entry outlay is $1500'); await waitFor(() => count() === 1, 'follow-up candidates');
+        assert(bodies[1].conversation.filter((item: any) => item.role === 'user').map((item: any) => item.content).join('|') === `${question}|net entry outlay is $1500`, 'Discovery follow-up lost explicit prior constraints or included another mode');
+        const first = offered!.candidates[0].state, long = first.legs.find(leg => leg.side === 'long')!, short = first.legs.find(leg => leg.side === 'short')!;
+        const expectedProfit = ((long.strike - short.strike) - (long.entryPrice - short.entryPrice)) * 100 - 5;
+        assert(fixture.textContent?.includes(`maximum profit USD ${expectedProfit.toFixed(2)}`), 'Deterministic bear-put maximum profit is missing');
+        const card = [...fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]')].at(-1)!;
+        assert(fixture.querySelector('.conversation')!.getBoundingClientRect().height >= 160, 'Discovery controls collapsed the conversation');
+        if (new URLSearchParams(location.search).has('inspect-discovery')) await new Promise<void>(resolve => { const resume = document.createElement('button'); resume.textContent = 'Continue checks'; resume.onclick = () => { resume.remove(); resolve() }; document.querySelector('#results')!.appendChild(resume) });
+        const inspect = [...card.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === 'Inspect candidate');
+        assert(inspect && !inspect.disabled, 'Scoped discovery Inspect candidate is unavailable');
+        await act(async () => inspect.click()); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspect');
+        assert(inputs() === before && !saved, 'Discovery inspection changed holdings');
+        await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, 'save');
+        assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.pricing.basis === 'mid' && JSON.stringify(saved!.state.legs[0]) === JSON.stringify(held.legs[0]) && saved!.state.excludedLegIds?.join() === held.excludedLegIds!.join(), 'Discovery Apply lost excluded held cost or pricing context');
+        assert(projectAnalysisPosition(saved!.state)!.legs.map(leg => JSON.stringify(leg)).sort().join() === offered!.candidates[0].state.legs.map(leg => JSON.stringify(leg)).sort().join(), 'Discovery Apply did not use inspected candidate');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Discovery Undo changed original holdings');
+        await mode('Discuss position'); await mode('Discover strategies'); attack = true;
+        await send(`${question} net entry outlay is $1500`); await waitFor(() => bodies.length === 3 && !fixture.querySelector('.thinking'), 'forged intent');
+        assert(count() === 1 && !fixture.querySelector('.proposal-card') && inputs() === before && fixture.textContent?.includes('REVIEW FAILED'), 'Forged discovery intent reached display or holdings');
+        assert(bodies[2].conversation.length === 1, 'Re-entering discovery retained previous session context');
+        attack = false; delay = true; await send(`${question} net entry outlay is $1500`); await waitFor(() => !!late, 'pending');
+        await mode('Discuss position'); assert(late!.signal?.aborted, 'Mode switch did not abort pending discovery');
+        await act(async () => late!.finish()); await settleTimers();
+        assert(count() === 1 && !fixture.querySelector('.proposal-card') && inputs() === before && !fixture.querySelector('.thinking'), 'Cancelled discovery reply survived mode change');
+        const select = fixture.querySelector('[aria-label="Conversation mode"]')!;
+        const bounds = fixture.getBoundingClientRect(), modeBounds = select.getBoundingClientRect();
+        assert(modeBounds.width > 0 && modeBounds.left >= bounds.left && modeBounds.right <= bounds.right && fixture.scrollWidth <= fixture.clientWidth + 1, 'Conversation mode is hidden or the application overflows its viewport');
+      } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('Mocked AI named, stock and calendar discovery validates before rendering and requires explicit Apply', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;

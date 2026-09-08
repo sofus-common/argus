@@ -1,4 +1,5 @@
 import { defaultAnalysisPrompts, readAnalysisPrompts, type AnalysisPrompts } from "./analysis-prompts";
+import { DISCOVERY_INTENT_SCHEMA, parseDiscoveryIntent, renderDiscovery, type DiscoveryIntent } from './discovery';
 import operationalReference from "../knowledge/options-operations-v1.json" with { type: "json" };
 import type { AnalysisObserver } from "./analysis-trace";
 import {
@@ -96,6 +97,7 @@ export type SparringRequest = {
   probability_range?: { lower: number; upper: number };
   first_expiry_range?: { min: number; max: number };
   candidate_selection?: CandidateSelection;
+  discovery?: true;
   chart_context?: { view: "curve" | "heatmap" | "table"; metric: "pnl" | "delta" | "gamma" | "theta" | "vega" | "rho"; valuationModel?: "american-crr-1024-v1"; pnlDisplay?: PnlDisplayMode; range?: ChartRange };
 };
 
@@ -130,7 +132,7 @@ export type SparringSuccess = {
   reply: SparringReply;
   next_state: StrategyState;
   metrics: StrategyMetrics;
-  calculated: ReturnType<typeof strategyFacts> & { comparisonIntent?: ComparisonIntent };
+  calculated: ReturnType<typeof strategyFacts> & { comparisonIntent?: ComparisonIntent; discoveryIntent?: DiscoveryIntent };
   market_context: MarketContext;
 };
 
@@ -799,6 +801,7 @@ export function parseSparringRequest(value: unknown): SparringRequest | null {
   const chartContext = record(item.chart_context);
   const probabilityRange = record(item.probability_range);
   const firstExpiryBounds = readFirstExpiryBounds(item.first_expiry_range);
+  if (item.discovery !== undefined && (item.discovery !== true || item.candidate_selection !== undefined || item.chart_context !== undefined || item.probability_range !== undefined || item.first_expiry_range !== undefined)) return null;
   if (item.candidate_selection !== undefined && (!isCandidateSelection(item.candidate_selection) || item.chart_context !== undefined || item.probability_range !== undefined || item.first_expiry_range !== undefined)) return null;
   if (item.first_expiry_range !== undefined && (!firstExpiryBounds || isAmericanPreview(state, item.chart_context as SparringRequest["chart_context"]))) return null;
   if (item.probability_range !== undefined && (!probabilityRange || Object.keys(probabilityRange).length !== 2 || typeof probabilityRange.lower !== "number" || typeof probabilityRange.upper !== "number" || !Number.isFinite(probabilityRange.lower) || !Number.isFinite(probabilityRange.upper) || probabilityRange.lower <= 0 || probabilityRange.upper <= probabilityRange.lower)) return null;
@@ -808,6 +811,7 @@ export function parseSparringRequest(value: unknown): SparringRequest | null {
     base_state_version: item.base_state_version as number,
     state,
     conversation,
+    ...(item.discovery === true ? { discovery: true as const } : {}),
     ...(item.candidate_selection !== undefined ? { candidate_selection: structuredClone(item.candidate_selection) as CandidateSelection } : {}),
     ...(chartContext ? { chart_context: { view: chartContext.view, metric: chartContext.metric, ...(chartContext.valuationModel ? { valuationModel: chartContext.valuationModel } : {}), ...(chartContext.pnlDisplay ? { pnlDisplay: chartContext.pnlDisplay } : {}), ...(isChartRange(chartContext.range) ? { range: { min: chartContext.range.min, max: chartContext.range.max } } : {}) } as SparringRequest["chart_context"] } : {}),
     ...(probabilityRange ? { probability_range: { lower: probabilityRange.lower as number, upper: probabilityRange.upper as number } } : {}),
@@ -1001,12 +1005,14 @@ export async function spar(
 ): Promise<SparringSuccess> {
   const { prompts } = readAnalysisPrompts(bundle);
   const candidateParameters = structuredClone(CANDIDATE_TOOL.function.parameters);
+  if (request.discovery !== undefined && (request.discovery !== true || !prompts.DISCOVERY_INTENT_PROMPT || request.candidate_selection !== undefined || request.chart_context !== undefined || request.probability_range !== undefined || request.first_expiry_range !== undefined)) throw new InvalidProposalError('Discovery requires its configured prompt and an exclusive explicit scope');
   const candidateFamilies = candidateParameters.properties.domain.properties.families;
-  if (prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION) {
+  const namedCandidateDescription = request.discovery || !prompts.DISCOVERY_INTENT_PROMPT ? prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION : undefined;
+  if (namedCandidateDescription) {
     candidateFamilies.items.enum.push(...CANDIDATE_OPTION_FAMILIES);
     candidateFamilies.maxItems = candidateFamilies.items.enum.length;
   }
-  const candidateTool = { ...CANDIDATE_TOOL, function: { ...CANDIDATE_TOOL.function, parameters: candidateParameters, description: (prompts.CANDIDATE_TOOL_DESCRIPTION ?? CANDIDATE_TOOL.function.description) + (prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION ? `\n${prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION}` : '') } };
+  const candidateTool = { ...CANDIDATE_TOOL, function: { ...CANDIDATE_TOOL.function, parameters: candidateParameters, description: (prompts.CANDIDATE_TOOL_DESCRIPTION ?? CANDIDATE_TOOL.function.description) + (namedCandidateDescription ? `\n${namedCandidateDescription}` : '') } };
   const canonical = structuredClone(request.state);
   const included = projectAnalysisPosition(canonical);
   if (!included) throw new Error("Include an option or shares before requesting analysis");
@@ -1052,7 +1058,7 @@ export async function spar(
   let boundPassages: Array<{ id: string; text: string }> | undefined;
   const complete = async (verification?: unknown, resumed = false): Promise<ProviderResponse> => {
     if (Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
-    const selectingTool = !verification && !preview && !firstExpiryBounds && !request.candidate_selection && !toolMessages.length;
+    const selectingTool = !verification && !preview && !firstExpiryBounds && !request.candidate_selection && !request.discovery && !toolMessages.length;
     const response = await Promise.race([deadline, providerFetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -1065,8 +1071,8 @@ export async function spar(
         model: MODEL,
         stream: false,
         max_tokens: MAX_OUTPUT_TOKENS,
-        reasoning: { effort: verification || inspectedComparison ? "low" : "medium", exclude: true },
-        messages: inspectedComparison ? [{ role: 'system', content: prompts.INSPECTED_COMPARISON_INTENT_PROMPT }, { role: 'user', content: JSON.stringify({ comparison: inspectedComparison, conversation: request.conversation }) }] : verification ? [{ role: "system", content: prompts.VERIFICATION_PROMPT + (boundPassages ? `\n${prompts.BOUND_VERIFICATION_PROMPT}` : "") }, { role: "user", content: JSON.stringify(verification) }] : [
+        reasoning: { effort: verification || inspectedComparison || request.discovery ? "low" : "medium", exclude: true },
+        messages: request.discovery ? [{ role: 'system', content: prompts.DISCOVERY_INTENT_PROMPT }, { role: 'user', content: JSON.stringify({ underlying: request.state.underlying, permitted_families: candidateFamilies.items.enum, conversation: request.conversation }) }] : inspectedComparison ? [{ role: 'system', content: prompts.INSPECTED_COMPARISON_INTENT_PROMPT }, { role: 'user', content: JSON.stringify({ comparison: inspectedComparison, conversation: request.conversation }) }] : verification ? [{ role: "system", content: prompts.VERIFICATION_PROMPT + (boundPassages ? `\n${prompts.BOUND_VERIFICATION_PROMPT}` : "") }, { role: "user", content: JSON.stringify(verification) }] : [
           ...(draftMessages ??= [
           { role: "system", content: prompts.SYSTEM_PROMPT },
           {
@@ -1089,7 +1095,7 @@ export async function spar(
           ]),
           ...toolMessages,
         ],
-        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [candidateTool] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: inspectedComparison ? COMPARISON_INTENT_SCHEMA : verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
+        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [candidateTool] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: request.discovery ? DISCOVERY_INTENT_SCHEMA : inspectedComparison ? COMPARISON_INTENT_SCHEMA : verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
         provider: {
           allow_fallbacks: false,
           data_collection: "deny",
@@ -1136,6 +1142,7 @@ export async function spar(
     const message = provider.choices?.[0]?.message;
     if (message && hasToolCalls(message.tool_calls)) {
       observeAnalysis(observer, { stage: "tool-request", reason: "model-requested-tool", input: message.tool_calls });
+      if (request.discovery) { observeAnalysis(observer, { stage: 'tool-rejection', reason: 'explicit-discovery-tools-disabled' }); throw new InvalidProposalError('Discovery extraction does not allow tool selection'); }
       if (request.candidate_selection) { observeAnalysis(observer, { stage: "tool-rejection", reason: "explicit-analysis-tools-disabled" }); throw new InvalidProposalError('Selected candidate discussion does not allow tool selection'); }
       if (firstExpiryBounds) { observeAnalysis(observer, { stage: "tool-rejection", reason: "explicit-analysis-tools-disabled" }); throw new Error("Explicit first-expiry analysis does not allow tool selection"); }
       if (preview) { observeAnalysis(observer, { stage: "tool-rejection", reason: "preview-tools-disabled" }); throw new Error("American preview does not support additional scenario tools"); }
@@ -1180,6 +1187,26 @@ export async function spar(
     }
     const content = provider.choices?.[0]?.message?.content;
     if (typeof content !== "string") throw new Error("Provider response is missing content");
+    if (request.discovery) {
+      const intent = parseDiscoveryIntent(parseDraftJson(content), request.conversation, request.state.underlying);
+      if (!intent) throw new InvalidProposalError('Discovery evidence failed validation');
+      calculated.discoveryIntent = intent;
+      const { families, targetSpot, targetDate, maxLoss, feeAllowance, basis, objective, maxEntryOutlay } = intent;
+      if (intent.scope === 'search' && families !== null && targetSpot !== null && targetDate !== null && maxLoss !== null && feeAllowance !== null && basis !== null && objective !== null && maxEntryOutlay !== null) {
+        if (!snapshot || !candidateAvailable()) throw new InvalidProposalError('Fresh candidate quotes required');
+        if (families.some(family => !candidateFamilies.items.enum.includes(family))) throw new InvalidProposalError('Candidate family is outside the active tool schema');
+        if (!prompts.CANDIDATE_TOOL_DESCRIPTION && request.state.valuationModel !== 'american-crr-1024-v1' && families.some(family => /-(calendar|diagonal)$/.test(family))) throw new InvalidProposalError('European discovery prompts are not configured');
+        const search = { targetSpot, targetDate, maxLoss, feeAllowance, basis, objective }, domain = { families, maxEntryOutlay };
+        observeAnalysis(observer, { stage: 'tool-admission', reason: 'validated-discovery-evidence', input: { evidence: intent.evidence, search, domain } });
+        calculated.candidateSearch = searchCandidates(request.state, snapshot, search, domain);
+        observeAnalysis(observer, { stage: 'tool-result', reason: 'deterministic-discovery-search', output: calculated.candidateSearch });
+      }
+      const reply: SparringReply = { ...renderDiscovery(intent, calculated.candidateSearch), operations: [], evidence_ids: [], risk_classification: calculated.lossClassification };
+      const next = { ...canonical, version: canonical.version + 1 };
+      observeAnalysis(observer, { stage: 'proposal-check', reason: calculated.candidateSearch ? 'deterministic-discovery-rendered' : 'discovery-clarification-required', input: intent, output: { reply, next_state: next } });
+      observeAnalysis(observer, { stage: 'completion', reason: 'deterministic-discovery-accepted' });
+      return { request_id: request.request_id, base_state_version: request.base_state_version, reply, next_state: next, metrics: calculateStrategy(request.state), calculated, market_context: marketContext };
+    }
     if (inspectedComparison) {
       const intent = parseComparisonIntent(parseDraftJson(content));
       if (!intent) throw new InvalidProposalError('Candidate discussion intent failed validation');

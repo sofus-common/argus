@@ -10,8 +10,22 @@ import { spar } from "../src/sparring";
 import previous from "../prompts/analysis-v12.json";
 import performanceBaseline from "../prompts/analysis-v13.json";
 import namedFamilyCandidate from "../prompts/analysis-v17.json";
+import discoveryCandidate from "../prompts/analysis-v18.json";
 
 const db = (env as { DB: D1Database }).DB;
+it('round-trips discovery intent under an isolated version without changing baseline capabilities', async () => {
+  const bundle = readAnalysisPrompts({ ...discoveryCandidate, version: 'discovery-intent-storage-test' });
+  await insert(bundle); await select(bundle.version);
+  try {
+    const captured = await loadAnalysisPrompts(db);
+    expect(captured).toEqual(bundle);
+    expect(captured.prompts).toEqual(discoveryCandidate.prompts);
+    expect(captured.prompts.CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+    expect(Object.isFrozen(captured.prompts)).toBe(true);
+    expect(defaultAnalysisPrompts.version).toBe('analysis-v16');
+    expect(defaultAnalysisPrompts.prompts.DISCOVERY_INTENT_PROMPT).toBeUndefined();
+  } finally { await db.prepare('DELETE FROM analysis_prompt_active WHERE singleton = 1').run(); }
+});
 it('round-trips named-family prompt strings under an isolated test version', async () => {
   expect(await promptDigest(readAnalysisPrompts(namedFamilyCandidate))).toBe('1614daf56155e9e12d4fc4d7fcece747bb6598748048db2bed00a6a9ee6b6053');
   const bundle = readAnalysisPrompts({ ...namedFamilyCandidate, version: 'named-family-storage-test' });

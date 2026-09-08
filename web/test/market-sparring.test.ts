@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import europeanPrompts from '../prompts/analysis-v14.json';
 import { defaultAnalysisPrompts } from '../src/analysis-prompts';
 
+it('admits only an explicit mutually exclusive discovery request', () => {
+  const input = { ...request(), discovery: true };
+  expect(parseSparringRequest(input)).toMatchObject({ discovery: true });
+  for (const discovery of [false, null, 'true', {}]) expect(parseSparringRequest({ ...input, discovery })).toBeNull();
+  for (const scope of [{ chart_context: { view: 'curve', metric: 'pnl' } }, { probability_range: { lower: 90, upper: 110 } }, { first_expiry_range: { min: 90, max: 110 } }, { candidate_selection: { id: 'candidate', request: {} } }]) expect(parseSparringRequest({ ...input, ...scope })).toBeNull();
+});
+
 it('pins European discovery to its opt-in bundle and rejects unsupported carry or ranking before continuation', async () => {
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
   try {

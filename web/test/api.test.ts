@@ -14,11 +14,67 @@ import { createPosition } from "../src/position-lifecycle";
 import { projectPositionLots, upgradePositionLots } from "../src/position-lots";
 import { createSavedStore } from "../src/saved-strategies";
 import comparisonBundle from '../prompts/analysis-v16.json';
+import discoveryBundle from '../prompts/analysis-v18.json';
 import { readAnalysisPrompts } from '../src/analysis-prompts';
 import { promptDigest, ANALYSIS_ENGINE_VERSION } from '../src/analysis-config';
 
 const local = { ARGUS_LOCAL_DEV: "true" };
 const traceDB = (env as { DB: D1Database }).DB;
+it('advertises only validated discovery capability while retaining bootstrap access after prompt failure', async () => {
+  const provider = vi.fn<typeof fetch>(), app = createApp(provider);
+  const bootstrap = (DB?: D1Database) => app.request('http://localhost/api/bootstrap', {}, { ...local, DB, OPENROUTER_API_KEY: 'synthetic-secret' });
+  expect((await (await bootstrap()).json() as any).analysis).toEqual({ discovery: false });
+  for (const [version, source, invalid, expected] of [['bootstrap-v16', comparisonBundle, false, false], ['bootstrap-v18', discoveryBundle, false, true], ['bootstrap-invalid', discoveryBundle, true, false]] as const) {
+    const bundle = readAnalysisPrompts({ ...source, version });
+    await traceDB.prepare('INSERT INTO analysis_prompt_bundles (version,digest,engine_version,bundle_json,evaluated_at) VALUES (?,?,?,?,?)').bind(version, invalid ? '0'.repeat(64) : await promptDigest(bundle), ANALYSIS_ENGINE_VERSION, JSON.stringify(bundle), new Date().toISOString()).run();
+    await traceDB.prepare('INSERT INTO analysis_prompt_active (singleton,version) VALUES (1,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version').bind(version).run();
+    try {
+      const response = await bootstrap(traceDB), body = await response.json() as any;
+      expect(response.status).toBe(200); expect(body.analysis).toEqual({ discovery: expected });
+      expect(body.session).toMatchObject({ local: true }); expect(body.session.recoveryKey).toMatch(/^[a-f0-9]{64}$/);
+      expect(body.chat_available).toBe(true); expect(JSON.stringify(body)).not.toContain('synthetic-secret');
+      expect((await app.request('http://localhost/api/strategies', {}, { ...local, DB: traceDB })).status).toBe(200);
+    } finally { await traceDB.prepare('DELETE FROM analysis_prompt_active WHERE singleton=1').run(); }
+  }
+  expect(provider).not.toHaveBeenCalled();
+});
+it('routes explicit discovery through one scoped call without external context and preserves request guards', async () => {
+  await traceDB.batch(snapshotMigration.split(';').filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
+  const now = Date.now(), at = new Date(now).toISOString(), expiry = new Date(now + 30 * 86400000).toISOString();
+  const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, availableExpiries: [expiry.slice(0, 10)], contracts: [90, 100].map(strike => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}P${String(strike * 1000).padStart(8, '0')}`, type: 'put', strike, expiry, multiplier: 100, bid: 1.9, ask: 2.1, iv: .25, quoteAsOf: at })) };
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([undefined, undefined, undefined])));
+  const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  await traceDB.prepare('INSERT INTO quote_snapshots (id, owner, credential_fingerprint, expires_at, snapshot_json) VALUES (?, ?, ?, ?, ?)').bind(snapshot.id, 'local-development', fingerprint, now + 600000, JSON.stringify(snapshot)).run();
+  const evidence = (quote: string) => ({ message: 0, quote });
+  const extracted = { scope: 'search', families: [evidence('bear put spreads')], targetSpot: evidence('Target SPY at $103'), targetDate: evidence(`on ${expiry}`), maxLoss: evidence('maximum loss of $2000'), feeAllowance: evidence('total fee allowance $5'), basis: evidence('natural quote pricing'), objective: evidence('Rank by target P/L'), maxEntryOutlay: evidence('Maximum net entry outlay is $1500') };
+  const provider = vi.fn<typeof fetch>(async (url, init) => {
+    expect(String(url)).toBe('https://openrouter.ai/api/v1/chat/completions');
+    const sent = JSON.parse(String(init?.body));
+    expect(sent.messages[0].content).toBe(discoveryBundle.prompts.DISCOVERY_INTENT_PROMPT);
+    expect(sent.response_format.json_schema.name).toBe('discovery_intent'); expect(sent.tools).toBeUndefined();
+    return Response.json({ choices: [{ message: { content: JSON.stringify(extracted) } }] });
+  });
+  const app = createApp(provider), bindings = { OPENROUTER_API_KEY: 'synthetic', FRED_API_KEY: 'must-not-be-used' };
+  const state = createMarketStrategy('long-put', snapshot, 'natural'); state.pricing!.entryMode = 'fixed'; state.legs[0].entryPrice = 8;
+  const body = { request_id: crypto.randomUUID(), base_state_version: state.version, state, discovery: true, conversation: [{ role: 'user', content: `Find bear put spreads. Target SPY at $103 on ${expiry}. Rank by target P/L, maximum loss of $2000, total fee allowance $5 and natural quote pricing. Maximum net entry outlay is $1500.` }] };
+  const before = structuredClone(body);
+  expect((await post(app, body, bindings)).status).toBeGreaterThanOrEqual(400); expect(provider).not.toHaveBeenCalled();
+  const bundle = readAnalysisPrompts({ ...discoveryBundle, version: 'discovery-api-test' });
+  await traceDB.prepare('INSERT INTO analysis_prompt_bundles (version,digest,engine_version,bundle_json,evaluated_at) VALUES (?,?,?,?,?)').bind(bundle.version, await promptDigest(bundle), ANALYSIS_ENGINE_VERSION, JSON.stringify(bundle), at).run();
+  await traceDB.prepare('INSERT INTO analysis_prompt_active (singleton,version) VALUES (1,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version').bind(bundle.version).run();
+  try {
+    const response = await post(app, body, bindings), output = await response.json() as any;
+    expect(response.status, JSON.stringify(output)).toBe(200); expect(response.headers.get('X-ARGUS-Trace-Status')).toBe('complete');
+    expect(output.calculated.candidateSearch.domain).toEqual({ families: ['bear-put'], maxEntryOutlay: 1500 });
+    expect(output.reply.text).toContain('USD 975.00'); expect(output.reply.operations).toEqual([]);
+    expect(output.next_state).toEqual({ ...state, version: state.version + 1 }); expect(body).toEqual(before); expect(provider).toHaveBeenCalledOnce();
+    provider.mockClear();
+    for (const change of [{ discovery: false }, { chart_context: { view: 'curve', metric: 'pnl' } }, { first_expiry_range: { min: 90, max: 110 } }]) expect((await post(app, { ...body, ...change }, bindings)).status).toBe(400);
+    expect((await post(app, body, { ...bindings, SPARRING_RATE_LIMITER: { limit: async () => ({ success: false }) } })).status).toBe(429);
+    await traceDB.prepare('UPDATE quote_snapshots SET owner=? WHERE id=?').bind('foreign-owner', snapshot.id).run();
+    expect((await post(app, body, bindings)).status).toBe(409); expect(provider).not.toHaveBeenCalled();
+  } finally { await traceDB.prepare('DELETE FROM analysis_prompt_active WHERE singleton=1').run(); }
+});
 it('preserves index identity through actual save, reopen and revision update routes', async () => {
   await traceDB.batch(snapshotMigration.split(';').filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
   const now = Date.now(), at = new Date(now).toISOString(), expiry = new Date(now + 30 * 86400000).toISOString();
