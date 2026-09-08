@@ -9,6 +9,7 @@
 // --leg-iv-baseline: at most three paid calls; --replay-observed only one verifier call; --self-check stays offline.
 // --candidate-coverage: at most three paid calls with --run; --self-check stays offline. Legacy --candidate-search modes are unchanged.
 // --european-discovery: five frozen synthetic cases, at most three calls each / fifteen total; --self-check stays offline.
+// --named-family-discovery: six frozen synthetic tasks, at most sixteen calls with --run; explicit candidate required; --self-check stays offline.
 // --inspected-comparison without --comparison-intent and --comparison-controls are archived offline-only protocols; paid execution is refused.
 // Add --inspected-comparison --comparison-intent for ten v16 intent tasks, one call each; old freeform comparison modes are archived protocols.
 // Archived --comparison-controls retains twelve frozen claim/correction fixtures; current runtime guards are not bypassed for replay.
@@ -544,6 +545,105 @@ if (process.argv.includes('--long-call-loss-control') || process.argv.includes('
     assert.ok(passed, 'Long-call loss control failed; offline mocks check wiring, not semantic quality');
   }
   assert.equal(paidCalls, offline ? 0 : 1);
+  process.exit(0);
+}
+
+if (process.argv.includes('--named-family-discovery')) {
+  const flags = process.argv.slice(2), live = flags.includes('--run');
+  assert.ok(flags.every(flag => ['--named-family-discovery', '--self-check', '--run'].includes(flag)) && new Set(flags).size === flags.length);
+  assert.notEqual(live, flags.includes('--self-check'), 'Choose exactly one offline self-check or paid run');
+  assert.ok(process.env.ARGUS_PROMPT_CANDIDATE, 'Named-family qualification requires an explicit candidate bundle');
+  registerHooks({ resolve(specifier, context, next) { return next(specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier) ? new URL(`${specifier}.ts`, context.parentURL).href : specifier, context); } });
+  const { createMarketStrategy, searchCandidates, validateMarketStrategy } = await import('../src/options.ts');
+  const { spar, MODEL } = await import('../src/sparring.ts');
+  const { readAnalysisPrompts } = await import('../src/analysis-prompts.ts');
+  const prompts = readAnalysisPrompts(JSON.parse(readFileSync(resolve(process.env.ARGUS_PROMPT_CANDIDATE), 'utf8')));
+  assert.equal(prompts.version, 'analysis-v17'); assert.ok(prompts.prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION);
+  const promptDigest = createHash('sha256').update(JSON.stringify(prompts)).digest('hex');
+  const retrievedAt = new Date().toISOString(), expiry = '2027-10-09T20:00:00.000Z';
+  const snapshot = { id: 'synthetic-named-family-discovery', underlying: 'SPY', source: 'Synthetic evaluation', retrievedAt, spot: 100, spotAsOf: retrievedAt, availableExpiries: [expiry.slice(0, 10)],
+    contracts: [90, 95, 100, 105, 110].flatMap(strike => ['call', 'put'].map(type => {
+      const mid = Math.max(0, type === 'call' ? 100 - strike : strike - 100) + 2;
+      return { contractId: `SPY   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100, bid: mid - .1, ask: mid + .1, iv: .25, quoteAsOf: retrievedAt };
+    })) };
+  const args = family => ({ targetSpot: 103, targetDate: expiry, maxLoss: 2000, feeAllowance: 5, basis: 'natural', objective: 'target-pnl', domain: { families: [family], maxEntryOutlay: 1500 } });
+  const constraints = `Target SPY at $103 on ${expiry}. Rank by target P/L, with a maximum loss of $2000, total fee allowance $5 and natural quote pricing.`;
+  const cases = [
+    ...[['iron-condor', 'standard iron condors'], ['inverse-iron-condor', 'inverse iron condors'], ['bull-put', 'bull put spreads'], ['bear-put', 'bear put spreads']].map(([id, family]) => ({ id, expected: args(id), content: `Find new ${family} only. ${constraints} Maximum net entry outlay is $1500.` })),
+    { id: 'missing-outlay', content: `Find new standard iron condors only. ${constraints}`, clarification: /(?:outlay|entry (?:cost|budget)|debit)/i },
+    { id: 'ambiguous-butterfly', content: `Find a butterfly. ${constraints} Maximum net entry outlay is $1500.`, clarification: /(?:which|what|clarif|specify|prefer|choose|call|put|long|short|iron)/i },
+  ];
+  let key = 'offline-not-a-key', paidCalls = 0, failures = 0;
+  if (live) {
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim();
+    key = parseEnv(readFileSync(resolve(dirname(resolve(common)), '.env'), 'utf8')).OPENROUTER_API_KEY;
+    assert.ok(key, 'OpenRouter configuration missing');
+  }
+  assert.equal(cases.length, 6);
+  console.log(JSON.stringify({ mode: 'named-family-discovery', promptVersion: prompts.version, promptDigest, requestedModel: MODEL, maxPaidCalls: 16, retries: 0, snapshot, cases, rubric: 'Four complete natural-language discovery tasks with exact tool arguments and deterministic oracle; two clarification controls without tools. Immutable holdings, no automatic Apply. Replies require independent semantic review; mocked self-check proves wiring only.' }));
+  for (const item of cases) {
+    const state = createMarketStrategy('long-call', snapshot, 'natural'), original = structuredClone(state), originalSnapshot = structuredClone(snapshot);
+    assert.deepEqual(validateMarketStrategy(state, snapshot), []);
+    const oracle = item.expected ? searchCandidates(state, snapshot, (({ domain, ...search }) => search)(item.expected), item.expected.domain) : null;
+    if (oracle) assert.ok(oracle.candidates.length > 0, 'Frozen search must yield candidates');
+    const request = { request_id: `named-${item.id}`, base_state_version: state.version, state, conversation: [{ role: 'user', content: `${item.content} These are synthetic evaluation quotes, not live data or fills. Do not modify my position; I will inspect and Apply separately.` }] };
+    const stages = [], started = performance.now(); let passed = false, reply, failure, failureReason, fencedDraft;
+    const validate = result => {
+      assert.deepEqual(stages.map(stage => stage.phase), item.expected ? ['draft', 'continuation', 'verification'] : ['draft', 'verification']);
+      const toolCalls = stages.flatMap(stage => stage.output?.tool_calls ?? []);
+      if (item.expected) {
+        assert.equal(toolCalls.length, 1); assert.equal(toolCalls[0].function.name, 'search_candidates');
+        assert.deepEqual(JSON.parse(toolCalls[0].function.arguments), item.expected, 'Frozen family or constraints changed');
+      } else {
+        assert.deepEqual(toolCalls, [], 'Clarification must not search');
+        assert.match(result.reply.text, item.clarification, 'Reply did not address the missing choice');
+        assert.match(result.reply.text, /\?|(?:please|clarif|specify|need|provide|choose|which)/i, 'Clarification was not requested');
+      }
+      assert.deepEqual(result.calculated.candidateSearch, oracle, 'Candidate search differs from deterministic oracle');
+      assert.deepEqual(result.reply.operations, []);
+      assert.deepEqual(result.next_state, { ...original, version: original.version + 1 });
+      assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
+    };
+    try {
+      const result = await spar(request, key, async (url, init) => {
+        assert.ok(stages.length < (item.expected ? 3 : 2), 'Per-task call ceiling exceeded');
+        const body = JSON.parse(init.body), index = stages.length;
+        assert.equal(body.model, MODEL);
+        const phase = body.response_format?.json_schema?.name === 'analysis_verification' ? 'verification' : index ? 'continuation' : 'draft';
+        const stage = { phase, requestedModel: body.model, mocked: !live }; stages.push(stage);
+        if (!index) assert.ok(body.tools.find(tool => tool.function.name === 'search_candidates').function.description.endsWith(`\n${prompts.prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION}`), 'Named-family candidate description was not offered');
+        let response;
+        if (live) {
+          assert.ok(++paidCalls <= 16, 'Total paid call ceiling exceeded'); response = await fetch(url, init);
+        } else {
+          const text = item.expected ? 'These synthetic quoted candidates are conditional estimates, not forecasts or fills. Inspect a candidate and explicitly Apply it to change the builder; your holdings are unchanged.' : item.id === 'missing-outlay' ? 'What maximum net entry outlay should I use? Please provide it before I search.' : 'Which butterfly do you want: call, put or iron, and long or short? Please choose before I search.';
+          const message = !index && item.expected ? { content: null, tool_calls: [{ id: 'named-search', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify(item.expected) } }] } : { content: JSON.stringify(phase === 'verification' ? { valid: true } : { text, assumptions: [], objections: [], operations: [], suggested_prompts: [], risk_classification: 'bounded', evidence_ids: [] }) };
+          if (!index && item.id === 'missing-outlay') { fencedDraft = `\`\`\`json\n${message.content}\n\`\`\``; message.content = fencedDraft; }
+          response = Response.json({ choices: [{ message }] });
+        }
+        const metadata = await response.clone().json().catch(() => null), content = metadata?.choices?.[0]?.message?.content;
+        if (live) { stage.resolvedModel = metadata?.model ?? 'unknown'; stage.provider = metadata?.provider ?? 'unknown'; stage.finishReason = metadata?.choices?.[0]?.finish_reason ?? 'unknown'; }
+        if (typeof content === 'string') {
+          stage.rawContentCapture = Buffer.byteLength(content, 'utf8') <= 65536 ? 'complete' : 'oversized';
+          if (stage.rawContentCapture === 'complete') stage.rawModelContent = content;
+        }
+        stage.status = response.status;
+        return traceResponse(response, stage, started, true);
+      }, undefined, snapshot, prompts);
+      reply = result.reply; validate(result);
+      if (!live && item.id === 'missing-outlay') { assert.equal(stages[0].rawModelContent, fencedDraft); assert.equal(stages[0].rawContentCapture, 'complete'); assert.equal(stages[0].capture, 'invalid_output'); assert.equal(JSON.parse(fencedDraft.slice(8, -4)).text, reply.text); }
+      if (!live && item.expected) {
+        const altered = structuredClone(result); altered.calculated.candidateSearch.domain.families = ['options'];
+        assert.throws(() => validate(altered), /Candidate search differs/);
+      }
+      passed = true;
+    } catch (error) { failures++; failure = error instanceof Error ? error.message : 'Unknown failure'; if (typeof error?.reason === 'string') failureReason = error.reason; }
+    assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
+    console.log(JSON.stringify({ case: item.id, request, expected: item.expected ?? 'clarification-without-search', oracle, stages, reply, passed, failure, failureReason, paidCalls, elapsedMs: Math.round(performance.now() - started) }).split(key).join('[REDACTED]'));
+  }
+  assert.equal(failures, 0, 'Named-family qualification failed; inspect traces and replies');
+  assert.equal(paidCalls, live ? 16 : 0);
+  console.log(JSON.stringify({ mode: 'named-family-discovery', passedCases: cases.length, paidCalls, semanticQualityVerified: false }));
   process.exit(0);
 }
 

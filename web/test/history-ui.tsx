@@ -821,13 +821,14 @@ async function run() {
         assert(!fixture.querySelector('.proposal-card') && held() === original && fixture.textContent?.includes('REVIEW FAILED'), 'Untrusted excluded-cost mutation was accepted');
       } finally { await unmount(); window.fetch = priorFetch; window.Worker = priorWorker }
     });
-    await test('Mocked AI stock and calendar discovery validates before rendering and requires explicit Apply', async () => {
+    await test('Mocked AI named, stock and calendar discovery validates before rendering and requires explicit Apply', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
       const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];
-      const snapshot: MarketSnapshot = { id: 'ai-domain-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [95, 100, 105].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp })))) };
-      const held = createMarketStrategy('long-call', snapshot); held.valuationModel = 'american-crr-1024-v1';
+      const snapshot: MarketSnapshot = { id: 'ai-domain-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp })))) };
+      const held = createMarketStrategy('bull-call', snapshot); held.valuationModel = 'american-crr-1024-v1'; held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.excludedLegIds = [held.legs[0].id];
       const seed = { id: 'ai-domain-seed', title: 'Synthetic AI domains', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
-      let family: 'protective-put' | 'call-calendar' = 'protective-put', attack: 'bound' | 'domain' | 'outlay' | undefined, saved: typeof seed | undefined, calls = 0;
+      let family: 'protective-put' | 'call-calendar' | 'iron-condor' | 'bull-put' = 'protective-put', attack: 'bound' | 'domain' | 'outlay' | 'wrong-family' | undefined, saved: typeof seed | undefined, calls = 0;
+      let offered: ReturnType<typeof searchCandidates> | undefined;
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
       window.fetch = (async (url, init) => {
         if (url === '/api/bootstrap') return Response.json({ session: { label: 'Mocked AI domains', local: true, recoveryKey: 'disabled-in-test' } });
@@ -836,11 +837,13 @@ async function run() {
         if (url === '/api/strategies/ai-domain-seed') return Response.json({ record: seed });
         if (url === '/api/sparring') {
           calls++; const body = JSON.parse(String(init?.body));
-          const candidateSearch = searchCandidates(projectAnalysisPosition(body.state)!, snapshot, { targetSpot: 100, targetDate: dates[0], maxLoss: 20000, feeAllowance: 5, basis: 'mid', objective: 'target-pnl' }, { families: [family], maxEntryOutlay: 20000 });
+          const candidateSearch = searchCandidates(projectAnalysisPosition(body.state)!, snapshot, { targetSpot: 100, targetDate: dates[0], maxLoss: 20000, feeAllowance: 5, basis: 'mid', objective: 'target-pnl' }, { families: [attack === 'wrong-family' ? 'long-call' : family], maxEntryOutlay: 20000 });
+          offered = structuredClone(candidateSearch);
           assert(candidateSearch.candidates.length > 0, 'AI domain fixture has no candidate');
           if (attack === 'bound') candidateSearch.candidates[0].lossBound!.amount += 1;
           if (attack === 'domain') candidateSearch.domain!.families = ['options'];
           if (attack === 'outlay') candidateSearch.domain!.maxEntryOutlay = 0;
+          if (attack === 'wrong-family') candidateSearch.domain!.families = [family];
           return Response.json({ request_id: body.request_id, base_state_version: body.base_state_version, next_state: { ...body.state, version: body.state.version + 1 }, reply: { text: 'Synthetic mocked AI discovery.', operations: [], assumptions: [], objections: [], suggested_prompts: [], evidence_ids: [], risk_classification: 'bounded' }, calculated: { riskSummary: 'Synthetic test only', dataMode: 'market-snapshot', candidateSearch }, market_context: { sources: [], retrievedAt: stamp } });
         }
         throw new Error(`Unexpected mocked AI domain request: ${String(url)}`);
@@ -852,24 +855,27 @@ async function run() {
         await waitFor(() => !!fixture.querySelector('option[value="ai-domain-seed"]'), 'seed'); await change('Saved positions', seed.id); await click('Load');
         await waitFor(() => !fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call calendar"]')?.disabled, 'model');
         const before = inputs();
-        for (family of ['protective-put', 'call-calendar'] as const) {
+        for (family of ['protective-put', 'call-calendar', 'iron-condor', 'bull-put'] as const) {
           const displayed = fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length;
-          await click('Break the thesis'); await waitFor(() => fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed + 1, `${family} render`);
+          await change('Ask ARGUS', `Find ${family} only at SPY 100 on ${dates[0]}, target P/L, maximum loss and net entry outlay $20000 each, fee allowance $5, midpoint pricing. Do not Apply it.`);
+          await act(async () => { const send = fixture.querySelector<HTMLButtonElement>('[aria-label="Send message"]'); assert(send && !send.disabled, 'Named discovery send is unavailable'); send.click() }); await waitFor(() => fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed + 1, `${family} render`);
           const card = [...fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]')].at(-1)!;
-          assert(family === 'protective-put' ? /100 shares/i.test(card.textContent ?? '') : /conservative.*first.expiry/i.test(card.textContent ?? '') && !card.textContent?.includes('Unbounded'), 'AI candidate omitted stock or conservative risk scope');
+          assert(family === 'protective-put' ? /100 shares/i.test(card.textContent ?? '') : family === 'call-calendar' ? /conservative.*first.expiry/i.test(card.textContent ?? '') && !card.textContent?.includes('Unbounded') : offered!.domain!.families.join() === family, 'AI candidate omitted selected family or risk scope');
           await act(async () => card.querySelector<HTMLButtonElement>('button')!.click()); await waitFor(() => !!fixture.querySelector('.proposal-card'), `${family} inspect`);
           await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), `${family} target comparison`);
           assert(inputs() === before && !saved, 'AI search or inspection changed holdings before Apply');
           await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, `${family} save`);
-          assert(family === 'protective-put' ? saved!.state.stock?.shares === 100 && saved!.state.stock.entryPrice === snapshot.spot : new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && !saved!.state.stock, 'AI candidate Apply lost stock or mixed expiries');
+          assert(family === 'protective-put' ? saved!.state.stock?.shares === 100 && saved!.state.stock.entryPrice === snapshot.spot : family === 'call-calendar' ? new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && !saved!.state.stock : !saved!.state.stock && projectAnalysisPosition(saved!.state)!.legs.map(leg => JSON.stringify(leg)).sort().join() === offered!.candidates[0].state.legs.map(leg => JSON.stringify(leg)).sort().join(), 'AI candidate Apply lost selected holdings');
+          assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.excludedLegIds?.join() === held.excludedLegIds!.join() && JSON.stringify(saved!.state.legs[0]) === JSON.stringify(held.legs[0]), 'AI discovery changed excluded holdings or fixed entry cost');
           await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); saved = undefined; assert(inputs() === before, 'AI candidate Undo changed original holdings');
         }
-        for (attack of ['bound', 'domain', 'outlay'] as const) {
+        for (attack of ['bound', 'domain', 'outlay', 'wrong-family'] as const) {
+          family = attack === 'wrong-family' ? 'bull-put' : 'call-calendar';
           const displayed = fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length;
           await click('Break the thesis'); await waitFor(() => !fixture.querySelector('.thinking'), `${attack} rejection`);
           assert(fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed && inputs() === before && !fixture.querySelector('.proposal-card') && fixture.textContent?.includes('REVIEW FAILED'), `Forged ${attack} was displayed or changed holdings`);
         }
-        assert(calls === 5, 'Mocked AI acceptance path was skipped');
+        assert(calls === 8, 'Mocked AI acceptance path was skipped');
       } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('Quoted candidate transfer preserves excluded fixed-entry holdings and Undo', async () => {

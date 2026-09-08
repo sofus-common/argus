@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Added opt-in named-family conversation support and an inactive v17 prompt
+  candidate. The same captured family enum governs offered tools and deterministic
+  admission; old prompt bundles keep their eight-family schema and the separate
+  European mixed-discovery gate. V16 remains the shipped and locally selected
+  baseline. No new agent loop, automatic Apply or provider fallback was added.
+  Candidate regression verification: 721 tests and TypeScript/build passed.
+  Six synthetic live tasks attempted 16 inference calls: four exact-family searches
+  and ambiguous-butterfly clarification passed; missing-outlay clarification did
+  not complete verification. V17 is therefore not qualified or activated. Financial
+  review found matching figures in completed replies, with two equal-score rank
+  order presentation inconsistencies. Failed evidence is retained privately.
+  Desktop and 390px mobile workflow checks both passed 44/44, including named
+  conversational handoff, explicit Apply/Undo and excluded fixed-cost preservation.
+  Synthetic evaluator diagnostics now retain bounded raw content and typed failure
+  reasons; an offline fenced-response check passes. No paid retry was performed.
+
 - Added direct optimizer selection for 16 named same-expiry option strategies,
   including directional verticals and standard versus inverse iron structures.
   Family constraints apply before search counting and top-five ranking; the

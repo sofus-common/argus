@@ -11,6 +11,7 @@ import {
   pnlDisplayBasis,
   type PnlDisplayMode,
   searchCandidates,
+  CANDIDATE_OPTION_FAMILIES,
   compareSearchCandidate,
   COMPARISON_TOPICS,
   parseComparisonIntent,
@@ -999,6 +1000,13 @@ export async function spar(
   observer?: AnalysisObserver,
 ): Promise<SparringSuccess> {
   const { prompts } = readAnalysisPrompts(bundle);
+  const candidateParameters = structuredClone(CANDIDATE_TOOL.function.parameters);
+  const candidateFamilies = candidateParameters.properties.domain.properties.families;
+  if (prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION) {
+    candidateFamilies.items.enum.push(...CANDIDATE_OPTION_FAMILIES);
+    candidateFamilies.maxItems = candidateFamilies.items.enum.length;
+  }
+  const candidateTool = { ...CANDIDATE_TOOL, function: { ...CANDIDATE_TOOL.function, parameters: candidateParameters, description: (prompts.CANDIDATE_TOOL_DESCRIPTION ?? CANDIDATE_TOOL.function.description) + (prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION ? `\n${prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION}` : '') } };
   const canonical = structuredClone(request.state);
   const included = projectAnalysisPosition(canonical);
   if (!included) throw new Error("Include an option or shares before requesting analysis");
@@ -1081,7 +1089,7 @@ export async function spar(
           ]),
           ...toolMessages,
         ],
-        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [{ ...CANDIDATE_TOOL, function: { ...CANDIDATE_TOOL.function, description: prompts.CANDIDATE_TOOL_DESCRIPTION ?? CANDIDATE_TOOL.function.description } }] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: inspectedComparison ? COMPARISON_INTENT_SCHEMA : verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
+        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [candidateTool] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: inspectedComparison ? COMPARISON_INTENT_SCHEMA : verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
         provider: {
           allow_fallbacks: false,
           data_collection: "deny",
@@ -1144,7 +1152,7 @@ export async function spar(
           if (!args) throw new Error("Invalid candidate search request");
           const { domain, ...search } = args;
           const families = record(domain)?.families;
-          if (Array.isArray(families) && families.some(family => !CANDIDATE_TOOL.function.parameters.properties.domain.properties.families.items.enum.includes(family))) throw new Error('Candidate family is outside the active tool schema');
+          if (Array.isArray(families) && families.some(family => !candidateFamilies.items.enum.includes(family))) throw new Error('Candidate family is outside the active tool schema');
           if (!prompts.CANDIDATE_TOOL_DESCRIPTION && request.state.valuationModel !== 'american-crr-1024-v1' && Array.isArray(families) && families.some(family => typeof family === 'string' && /-(calendar|diagonal)$/.test(family))) throw new Error('European discovery prompts are not configured');
           calculated.candidateSearch = searchCandidates(request.state, snapshot, search as Parameters<typeof searchCandidates>[2], domain as Parameters<typeof searchCandidates>[3]);
         } else if (fn.name === "analyze_first_expiry") {

@@ -9,8 +9,23 @@ import { createMarketStrategy, createStrategy, type MarketSnapshot } from "../sr
 import { spar } from "../src/sparring";
 import previous from "../prompts/analysis-v12.json";
 import performanceBaseline from "../prompts/analysis-v13.json";
+import namedFamilyCandidate from "../prompts/analysis-v17.json";
 
 const db = (env as { DB: D1Database }).DB;
+it('round-trips named-family prompt strings under an isolated test version', async () => {
+  expect(await promptDigest(readAnalysisPrompts(namedFamilyCandidate))).toBe('1614daf56155e9e12d4fc4d7fcece747bb6598748048db2bed00a6a9ee6b6053');
+  const bundle = readAnalysisPrompts({ ...namedFamilyCandidate, version: 'named-family-storage-test' });
+  expect(bundle.prompts).toEqual(namedFamilyCandidate.prompts);
+  await insert(bundle); await select(bundle.version);
+  try {
+    const captured = await loadAnalysisPrompts(db);
+    expect(captured).toEqual(bundle);
+    expect(captured.prompts.CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+    expect(Object.isFrozen(captured.prompts)).toBe(true);
+    expect(defaultAnalysisPrompts.version).toBe('analysis-v16');
+    expect(defaultAnalysisPrompts.prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  } finally { await db.prepare('DELETE FROM analysis_prompt_active WHERE singleton = 1').run(); }
+});
 it("ships qualified comparison intent while preserving historical performance prompt ancestry", async () => {
   expect(defaultAnalysisPrompts.version).toBe("analysis-v16");
   expect(await promptDigest(defaultAnalysisPrompts)).toBe("89531521ca027b5cfa34d05f501fd2fec704b6f82f78811776ea2e4e7acad356");

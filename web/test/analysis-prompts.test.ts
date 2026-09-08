@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { defaultAnalysisPrompts, readAnalysisPrompts } from "../src/analysis-prompts";
-import { createStrategy } from "../src/options";
+import { createStrategy, CANDIDATE_OPTION_FAMILIES } from "../src/options";
 import { spar, discussLotComparison, discussPriceHistory, discussIntradayHistory } from "../src/sparring";
 import { buildPriceHistory } from "../src/price-history";
 import { buildIntradayHistory } from "../src/intraday-history";
@@ -14,9 +14,30 @@ import transferCandidate from "../prompts/analysis-v10.json";
 import europeanCandidate from "../prompts/analysis-v14.json";
 import comparisonCandidate from "../prompts/analysis-v15.json";
 import comparisonIntentCandidate from "../prompts/analysis-v16.json";
+import namedFamilyCandidate from "../prompts/analysis-v17.json";
 import historicalBaseline from "../prompts/analysis-v13.json";
 
 const baselineV13 = readAnalysisPrompts(historicalBaseline);
+
+it('versions named discovery as an additive candidate without changing v16 or activating European search', async () => {
+  const candidate = readAnalysisPrompts(namedFamilyCandidate);
+  expect(candidate.version).toBe('analysis-v17');
+  const { NAMED_CANDIDATE_TOOL_DESCRIPTION: description, ...retained } = candidate.prompts;
+  expect(retained).toEqual(readAnalysisPrompts(comparisonIntentCandidate).prompts);
+  expect(candidate.prompts.CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  expect(defaultAnalysisPrompts.version).toBe('analysis-v16');
+  expect(defaultAnalysisPrompts.prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  expect(await promptDigest(defaultAnalysisPrompts)).toBe('89531521ca027b5cfa34d05f501fd2fec704b6f82f78811776ea2e4e7acad356');
+  for (const family of CANDIDATE_OPTION_FAMILIES) expect(description).toContain(family);
+  for (const rule of ['supersedes only that older list', 'Never replace a requested named family', 'bull-put buys the lower-strike put and sells the higher-strike put', 'bear-put reverses those sides', 'ask which supported structure', 'without a tool call', 'explicit zero allowance', 'does not enable European mixed-expiry', 'Return zero operations', 'separately Apply proposal']) expect(description).toContain(rule);
+});
+
+it('admits a separately bounded named-family description without enabling European discovery', () => {
+  const bundle = { ...defaultAnalysisPrompts, version: 'named-test', prompts: { ...defaultAnalysisPrompts.prompts, NAMED_CANDIDATE_TOOL_DESCRIPTION: 'Synthetic named-family description' } };
+  expect(readAnalysisPrompts(bundle).prompts).toMatchObject({ NAMED_CANDIDATE_TOOL_DESCRIPTION: 'Synthetic named-family description' });
+  expect(readAnalysisPrompts(bundle).prompts.CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  for (const value of ['', ' ', 1, null, 'x'.repeat(65537)]) expect(() => readAnalysisPrompts({ ...bundle, prompts: { ...bundle.prompts, NAMED_CANDIDATE_TOOL_DESCRIPTION: value } })).toThrow();
+});
 
 it('ships the qualified intent bundle while preserving all v13 prompt strings', async () => {
   const candidate = readAnalysisPrompts(comparisonIntentCandidate);

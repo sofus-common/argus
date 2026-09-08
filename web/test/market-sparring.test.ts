@@ -843,6 +843,36 @@ it('passes explicitly scoped stock and American mixed discovery through the unch
     }
   } finally { vi.useRealTimers(); }
 }, 30000);
+it('opts named strategy families into the captured tool schema without enabling European mixed discovery', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
+  try {
+    const fresh = { ...snapshot, spotAsOf: snapshot.retrievedAt, contracts: snapshot.contracts.map(c => ({ ...c, quoteAsOf: snapshot.retrievedAt })) };
+    const bundle = { ...defaultAnalysisPrompts, version: 'named-test', prompts: { ...defaultAnalysisPrompts.prompts, NAMED_CANDIDATE_TOOL_DESCRIPTION: 'Use exact named families and explicit budgets.' } };
+    const search = { targetSpot: 655, targetDate: snapshot.retrievedAt, maxLoss: 100000, feeAllowance: 5, basis: 'natural' as const, objective: 'target-pnl' as const };
+    for (const family of ['bull-put', 'bear-put', 'iron-butterfly', 'inverse-iron-butterfly'] as const) {
+      const input = request(), before = structuredClone(input), domain = { families: [family], maxEntryOutlay: 100000 };
+      const normal = provider(reply()), events: any[] = [];
+      const call = { id: 'named-search', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify({ ...search, domain }) } };
+      const fetcher = vi.fn<typeof fetch>(async (url, init): Promise<Response> => fetcher.mock.calls.length === 1 ? Response.json({ choices: [{ message: { tool_calls: [call] } }] }) : normal(url, init));
+      const result = await spar(input, 'key', fetcher, context, fresh, bundle, event => events.push(event));
+      const tool = JSON.parse(String(fetcher.mock.calls[0][1]?.body)).tools.find((value: any) => value.function.name === 'search_candidates').function;
+      expect(tool.description).toContain(bundle.prompts.NAMED_CANDIDATE_TOOL_DESCRIPTION);
+      expect(tool.parameters.properties.domain.properties.families.maxItems).toBe(24);
+      expect(tool.parameters.properties.domain.properties.families.items.enum).toContain(family);
+      expect(result.calculated.candidateSearch).toEqual(searchCandidates(input.state, fresh, search, domain));
+      expect(result.calculated.candidateSearch!.candidates.length).toBeGreaterThan(0);
+      expect(events.find(event => event.stage === 'tool-result').output).toEqual(result.calculated.candidateSearch);
+      expect(fetcher).toHaveBeenCalledTimes(3); expect(input).toEqual(before);
+      expect(result.next_state).toEqual({ ...before.state, version: before.state.version + 1 });
+    }
+    for (const family of ['put-calendar', 'unsupported-ratio']) {
+      const input = request(); input.state.valuationModel = 'european-bsm-v1';
+      const fetcher = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { tool_calls: [{ id: 'invalid-named', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify({ ...search, domain: { families: [family], maxEntryOutlay: 1000 } }) } }] } }] }));
+      await expect(spar(input, 'key', fetcher, context, fresh, bundle)).rejects.toThrow('Invalid scenario tool request');
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    }
+  } finally { vi.useRealTimers(); }
+}, 30000);
 it('rejects malformed discovery domains and unsupported model or objective before continuation', async () => {
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
   try {
