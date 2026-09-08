@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Connected conversational ranked results to the same two-alternative comparison
+  used by the manual optimizer. Compare metrics and charts without changing
+  holdings, then Inspect and explicitly Apply or Undo. Selection resets with
+  result/snapshot identity; stale conversational comparisons are removed.
+  Existing validation, calculations and fixed-entry transfer guards are reused;
+  no inference call, dependency or automatic action was added.
+  Verified: 764 tests, TypeScript/build, independent review and 45/45 desktop
+  and 390px mobile workflows, including excluded costs and source invalidation.
+  Separate real-SPY checks verified held-cost refresh, frozen comparison and
+  save/reopen/Undo; these are short-path evidence, not sustained feed reliability.
+
 - Added bounded transport milestones to sparring and read-only discussions:
   response status, completed body byte count, and failure phase/deadline state
   with fixed error categories. No private headers, raw bodies or exception text

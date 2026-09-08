@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from 'react'
 import { SymbolSearch } from './SymbolSearch'
 import { OptionChainTable } from './OptionChainTable'
-import { CandidateSearch, checkSearch, type CandidateSearchResult } from './CandidateSearch'
+import { CandidateSearch, CandidateComparison, checkSearch, type CandidateSearchResult } from './CandidateSearch'
 import { parseDiscoveryIntent, renderDiscovery } from './discovery'
 import { PriceHistory } from './PriceHistory'
 import { streamFreshness } from './stream-freshness'
@@ -1567,6 +1567,12 @@ export function App() {
       : `${briefVega > 0 ? 'Positive' : 'Negative'} local vega: modeled value ${briefVega > 0 ? 'increases' : 'decreases'} for a small IV rise, other inputs fixed. Reprice a finite move to test your view.`
   const legDescription = (leg: OptionLeg) => `${leg.side === 'long' ? 'Buy' : 'Sell'} ${leg.contracts} × $${leg.strike} ${leg.type} · ${shortDate(leg.expiry)} · $${leg.entryPrice.toFixed(2)} · IV ${(leg.iv * 100).toFixed(0)}%`
 
+  const renderCandidateComparisonCharts = (states: StrategyState[]) => {
+    const spots = states.flatMap(state => [state.spot, state.scenarioSpot, ...state.legs.map(leg => leg.strike)])
+    const low = Math.min(...spots), high = Math.max(...spots), margin = Math.max(5, (high - low) * .35)
+    const range = { min: Math.max(.001, low - margin), max: Math.min(1_000_000, high + margin) }
+    return <><p>Charts share the same underlying range; vertical scales are independent. Solid lines use the shared target date. Each dashed expiry reference is separately dated below.</p><div className="candidate-charts">{states.map((state, index) => <figure key={index}><figcaption>{index === 0 ? 'Left' : 'Right'} table alternative · expiry reference {new Date(Math.min(...state.legs.map(leg => Date.parse(leg.expiry)))).toISOString()}</figcaption><PayoffChart state={state} range={range} metric="pnl" readOnly /></figure>)}</div></>
+  }
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -1656,12 +1662,7 @@ export function App() {
 
 
           {analysisState && (cashIndex ? <p className="history-basis">Cash-index options settle in cash; there is no share delivery or early exercise. Settlement amounts and resulting cashflows are not recorded automatically.</p> : <AssignmentOutcomes state={analysisState} snapshot={marketSnapshot ?? undefined} />)}
-          {analysisState && marketSnapshot && !marketSnapshot.historical && <CandidateSearch key={`${strategy.version}:${marketSnapshot.id}`} state={analysisState} snapshot={marketSnapshot} disabled={pending || chainPending || workspaceBusy || !!proposal} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} renderComparison={states => {
-            const spots = states.flatMap(state => [state.spot, state.scenarioSpot, ...state.legs.map(leg => leg.strike)])
-            const low = Math.min(...spots), high = Math.max(...spots), margin = Math.max(5, (high - low) * .35)
-            const range = { min: Math.max(.001, low - margin), max: Math.min(1_000_000, high + margin) }
-            return <><p>Charts share the same underlying range; vertical scales are independent. Solid lines use the shared target date. Each dashed expiry reference is separately dated below.</p><div className="candidate-charts">{states.map((state, index) => <figure key={index}><figcaption>{index === 0 ? 'Left' : 'Right'} table alternative · expiry reference {new Date(Math.min(...state.legs.map(leg => Date.parse(leg.expiry)))).toISOString()}</figcaption><PayoffChart state={state} range={range} metric="pnl" readOnly /></figure>)}</div></>
-          }} />}
+          {analysisState && marketSnapshot && !marketSnapshot.historical && <CandidateSearch key={`${strategy.version}:${marketSnapshot.id}`} state={analysisState} snapshot={marketSnapshot} disabled={pending || chainPending || workspaceBusy || !!proposal} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} renderComparison={renderCandidateComparisonCharts} />}
           {hasExclusions && <p className="workspace-notice" role="note">Analysis includes {analysisState?.legs.length ?? 0} of {strategy.legs.length} option legs{strategy.stock ? " plus shares" : ""}. Exclusion is hypothetical: saved holdings, entry costs and full-inventory ledger totals are unchanged.{analysisState && <button onClick={() => commit({ ...strategyRef.current, excludedLegIds: undefined })}>Include all legs</button>}</p>}
           <div className="metric-ribbon">
             {metrics ? <>
@@ -1747,6 +1748,7 @@ export function App() {
                   <details><summary>Search probability assumptions</summary><p>{message.analysis.calculated.candidateSearch.probabilityBasis}</p><p>Workspace probability after Apply uses your selected scenario and nearest strategy-leg IV; it can differ from these search figures.</p></details>
                   <p>{message.analysis.calculated.candidateSearch.evaluated} evaluated · {message.analysis.calculated.candidateSearch.eligible} within constraints · showing {message.analysis.calculated.candidateSearch.candidates.length}. Ranked by {message.analysis.calculated.candidateSearch.request.objective}.</p>
                   <p>Target ${message.analysis.calculated.candidateSearch.request.targetSpot} at {message.analysis.calculated.candidateSearch.request.targetDate} · {message.analysis.calculated.candidateSearch.model}. Not expected returns.</p>
+                  {message.analysis.positionSnapshot && message.analysis.positionVersion === strategy.version && message.analysis.calculated.candidateSearch.snapshotId === strategy.pricing?.snapshotId && <CandidateComparison result={message.analysis.calculated.candidateSearch} snapshot={message.analysis.positionSnapshot} disabled={pending || chainPending || workspaceBusy || analysisUnavailable || !!proposal} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id, message.analysis!)} renderComparison={renderCandidateComparisonCharts} />}
                   {message.analysis.calculated.candidateSearch.candidates.map((candidate, rank) => <div key={candidate.id}>
                     <p><strong>{rank + 1}. {candidate.state.stock && `${candidate.state.stock.shares} shares at ${money(candidate.state.stock.entryPrice)} dated mark / `}{candidate.state.legs.map(legDescription).join(' / ')}</strong></p>
                     <p>Max profit at expiry {candidate.lossBound ? 'Not exact' : candidate.metrics.maxProfit === null ? 'Unbounded' : money(candidate.metrics.maxProfit)} · {candidate.lossBound ? `Conservative first-expiry loss bound ${money(candidate.lossBound.amount)} at ${candidate.lossBound.date}` : `max loss at expiry ${money(candidate.metrics.maxLoss)}`}</p>

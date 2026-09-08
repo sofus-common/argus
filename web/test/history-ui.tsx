@@ -963,13 +963,20 @@ async function run() {
           await act(async () => { const send = fixture.querySelector<HTMLButtonElement>('[aria-label="Send message"]'); assert(send && !send.disabled, 'Named discovery send is unavailable'); send.click() }); await waitFor(() => fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed + 1, `${family} render`);
           const card = [...fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]')].at(-1)!;
           assert(family === 'protective-put' ? /100 shares/i.test(card.textContent ?? '') : family === 'call-calendar' ? /conservative.*first.expiry/i.test(card.textContent ?? '') && !card.textContent?.includes('Unbounded') : offered!.domain!.families.join() === family, 'AI candidate omitted selected family or risk scope');
-          await act(async () => card.querySelector<HTMLButtonElement>('button')!.click()); await waitFor(() => !!fixture.querySelector('.proposal-card'), `${family} inspect`);
+          const callCount = calls;
+          for (const rank of [1, 2]) await act(async () => { const checkbox = card.querySelector<HTMLInputElement>(`[aria-label="Compare candidate ${rank}"]`); assert(checkbox && !checkbox.disabled, 'Conversational pair selection unavailable'); checkbox.click() });
+          await waitFor(pairChartsReady, `${family} conversation pair charts`); checkPair(offered!, [0, 1]);
+          assert(fixture.scrollWidth <= fixture.clientWidth + 1, 'Conversational pair overflowed the fixture horizontally');
+          if (family === 'protective-put' && new URLSearchParams(location.search).has('inspect-conversation-pair')) await new Promise<void>(resolve => { const resume = document.createElement('button'); resume.textContent = 'Continue checks'; resume.onclick = () => { resume.remove(); resolve() }; document.querySelector('#results')!.appendChild(resume) });
+          assert(inputs() === before && !saved && !fixture.querySelector('.proposal-card') && calls === callCount, 'Conversational pair changed holdings or made another request');
+          await act(async () => card.querySelector<HTMLButtonElement>('[aria-label="Candidate comparison"] tbody button')!.click()); await waitFor(() => !!fixture.querySelector('.proposal-card'), `${family} inspect`);
           await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), `${family} target comparison`);
           assert(inputs() === before && !saved, 'AI search or inspection changed holdings before Apply');
           await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, `${family} save`);
           assert(family === 'protective-put' ? saved!.state.stock?.shares === 100 && saved!.state.stock.entryPrice === snapshot.spot : family === 'call-calendar' ? new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && !saved!.state.stock : !saved!.state.stock && projectAnalysisPosition(saved!.state)!.legs.map(leg => JSON.stringify(leg)).sort().join() === offered!.candidates[0].state.legs.map(leg => JSON.stringify(leg)).sort().join(), 'AI candidate Apply lost selected holdings');
           assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.excludedLegIds?.join() === held.excludedLegIds!.join() && JSON.stringify(saved!.state.legs[0]) === JSON.stringify(held.legs[0]), 'AI discovery changed excluded holdings or fixed entry cost');
           await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); saved = undefined; assert(inputs() === before, 'AI candidate Undo changed original holdings');
+          assert(!card.querySelector('[aria-label="Candidate comparison"]') && !card.querySelector('[aria-label="Compare candidate 1"]'), 'Stale conversational search retained actionable comparison after Apply and Undo');
         }
         for (attack of ['bound', 'domain', 'outlay', 'wrong-family'] as const) {
           family = attack === 'wrong-family' ? 'bull-put' : 'call-calendar';
@@ -978,6 +985,12 @@ async function run() {
           assert(fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed && inputs() === before && !fixture.querySelector('.proposal-card') && fixture.textContent?.includes('REVIEW FAILED'), `Forged ${attack} was displayed or changed holdings`);
         }
         assert(calls === 8, 'Mocked AI acceptance path was skipped');
+        attack = undefined; const displayed = fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length;
+        await click('Break the thesis'); await waitFor(() => fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed + 1, 'source-change search');
+        const latest = [...fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]')].at(-1)!;
+        for (const rank of [1, 2]) await act(async () => latest.querySelector<HTMLInputElement>(`[aria-label="Compare candidate ${rank}"]`)!.click());
+        await waitFor(pairChartsReady, 'source-change pair'); await click('Sample mode');
+        assert(!fixture.querySelector('[aria-label="Candidate comparison"]') && !fixture.querySelector('[aria-label="Compare candidate 1"]') && Number(calls) === 9, 'Source change retained a conversational comparison or made another AI request');
       } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('Quoted candidate transfer preserves excluded fixed-entry holdings and Undo', async () => {
