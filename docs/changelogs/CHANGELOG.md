@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added two-candidate optimizer comparison before applying either alternative.
+  Select two results from one validated search to compare target P/L, outlay,
+  scoped loss measures, maximum profit, probability and Greeks. Read-only charts
+  share their horizontal range and retain separately dated expiry references;
+  independent vertical scales are disclosed. Inspect either candidate, then use
+  existing explicit Apply/Undo; held and excluded entry costs remain unchanged
+  until application. Input/source changes clear the pair. No new inference,
+  provider request, storage or dependency was added.
+  Verified: 723 tests, TypeScript/build, independent review, and 44/44 browser
+  workflows on desktop and 390px mobile, including distinct first expiries,
+  reconciled financial columns and completed chart calculations.
+
 - Repeated the unchanged v17 synthetic qualification with bounded raw-response
   diagnostics: 3/6 tasks passed, with 15 attempted inference calls and no retries.
   A bear-put reply understated maximum profit ($475 instead of $975) and was

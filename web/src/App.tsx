@@ -1635,7 +1635,12 @@ export function App() {
 
 
           {analysisState && (cashIndex ? <p className="history-basis">Cash-index options settle in cash; there is no share delivery or early exercise. Settlement amounts and resulting cashflows are not recorded automatically.</p> : <AssignmentOutcomes state={analysisState} snapshot={marketSnapshot ?? undefined} />)}
-          {analysisState && marketSnapshot && !marketSnapshot.historical && <CandidateSearch key={`${strategy.version}:${marketSnapshot.id}`} state={analysisState} snapshot={marketSnapshot} disabled={pending || chainPending || workspaceBusy || !!proposal} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} />}
+          {analysisState && marketSnapshot && !marketSnapshot.historical && <CandidateSearch key={`${strategy.version}:${marketSnapshot.id}`} state={analysisState} snapshot={marketSnapshot} disabled={pending || chainPending || workspaceBusy || !!proposal} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} renderComparison={states => {
+            const spots = states.flatMap(state => [state.spot, state.scenarioSpot, ...state.legs.map(leg => leg.strike)])
+            const low = Math.min(...spots), high = Math.max(...spots), margin = Math.max(5, (high - low) * .35)
+            const range = { min: Math.max(.001, low - margin), max: Math.min(1_000_000, high + margin) }
+            return <><p>Charts share the same underlying range; vertical scales are independent. Solid lines use the shared target date. Each dashed expiry reference is separately dated below.</p><div className="candidate-charts">{states.map((state, index) => <figure key={index}><figcaption>{index === 0 ? 'Left' : 'Right'} table alternative · expiry reference {new Date(Math.min(...state.legs.map(leg => Date.parse(leg.expiry)))).toISOString()}</figcaption><PayoffChart state={state} range={range} metric="pnl" readOnly /></figure>)}</div></>
+          }} />}
           {hasExclusions && <p className="workspace-notice" role="note">Analysis includes {analysisState?.legs.length ?? 0} of {strategy.legs.length} option legs{strategy.stock ? " plus shares" : ""}. Exclusion is hypothetical: saved holdings, entry costs and full-inventory ledger totals are unchanged.{analysisState && <button onClick={() => commit({ ...strategyRef.current, excludedLegIds: undefined })}>Include all legs</button>}</p>}
           <div className="metric-ribbon">
             {metrics ? <>

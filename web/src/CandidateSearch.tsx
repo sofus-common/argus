@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CANDIDATE_OPTION_FAMILIES, candidateOptionFamily, expirationProbability, firstExpirySpreadLossBound, validateMarketStrategy, type MarketSnapshot, type StrategyState, type searchCandidates } from './options'
 import { requestWorkspaceValuation } from './workspace-valuation-client'
 
@@ -49,16 +49,18 @@ export async function checkSearch(raw: unknown, state: StrategyState, snapshot: 
   return result
 }
 
-export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect }: { state: StrategyState; snapshot: MarketSnapshot; disabled: boolean; onSearch: () => void; onInspect: (search: CandidateSearchResult, snapshot: MarketSnapshot, id: string) => void }) {
+export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect, renderComparison }: { state: StrategyState; snapshot: MarketSnapshot; disabled: boolean; onSearch: () => void; onInspect: (search: CandidateSearchResult, snapshot: MarketSnapshot, id: string) => void; renderComparison: (states: StrategyState[]) => ReactNode }) {
   const [target, setTarget] = useState(String(state.scenarioSpot)), [date, setDate] = useState(new Date(Math.ceil(Date.parse(state.scenarioDate) / 1000) * 1000).toISOString().slice(0, 19))
   const [loss, setLoss] = useState('1000'), [fee, setFee] = useState(String(state.feeAllowance ?? 0))
   const [families, setFamilies] = useState<Domain['families']>(['options']), [outlay, setOutlay] = useState('10000')
   const [basis, setBasis] = useState<Search['basis']>(state.pricing?.basis ?? 'mid'), [objective, setObjective] = useState<Search['objective']>('target-pnl')
   const [result, setResult] = useState<CandidateSearchResult | null>(null), [pending, setPending] = useState(false), [error, setError] = useState('')
+  const [selected, setSelected] = useState<string[]>([])
+  const pair = result?.candidates.filter(candidate => selected.includes(candidate.id)) ?? []
   const request = useRef<AbortController | null>(null)
-  useEffect(() => () => request.current?.abort(), [state, snapshot])
+  useEffect(() => { setResult(null); setSelected([]); setPending(false); return () => request.current?.abort() }, [state, snapshot])
   useEffect(() => { if (disabled) { request.current?.abort(); setPending(false) } }, [disabled])
-  const invalidate = () => { request.current?.abort(); setPending(false); setResult(null); setError('') }
+  const invalidate = () => { request.current?.abort(); setPending(false); setResult(null); setSelected([]); setError('') }
   const validDate = Number.isFinite(Date.parse(`${date}Z`)) && Date.parse(`${date}Z`) >= Date.parse(snapshot.retrievedAt)
   const hasMixed = families.some(mixedFamily), supported = families.every(family => supportedFamily(family, state))
   const availableFamilies = (Object.keys(familyLabels) as Domain['families']).filter(family => state.underlyingKind !== 'cash-index' || !['covered-call', 'protective-put', 'collar'].includes(family))
@@ -101,6 +103,30 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
       <p>{result.evaluated} evaluated · {result.eligible} within constraints · {result.excludedRisk} without bounded positive risk · {result.excludedBudget} above loss budget · {result.excludedCost} above entry outlay · {result.excludedBeforeTarget} contracts before target · showing {result.candidates.length}. Ranked only within this search, not globally optimal.</p>
       <details><summary>Probability assumptions</summary><p>{result.probabilityBasis}</p></details>
       {!result.candidates.length && <p>No quoted strategies satisfy these constraints.</p>}
+      {result.candidates.length > 1 && <p>Select two alternatives to compare before changing your position.</p>}
+      {result.candidates.map((candidate, index) => <label className="candidate-select" key={candidate.id}><input type="checkbox" aria-label={`Compare candidate ${index + 1}`} checked={selected.includes(candidate.id)} disabled={disabled || pending || selected.length === 2 && !selected.includes(candidate.id)} onChange={event => setSelected(event.target.checked ? [...selected, candidate.id] : selected.filter(id => id !== candidate.id))} />Compare candidate {index + 1} · {candidate.state.legs.map(leg => `${leg.side} ${leg.strike}${leg.type === 'call' ? 'C' : 'P'}`).join(' / ')}</label>)}
+      {pair.length === 2 && <section className="candidate-comparison" role="region" aria-label="Candidate comparison">
+        <header><h3>Compare alternatives</h3><button disabled={disabled || pending} onClick={() => setSelected([])}>Clear comparison</button></header>
+        <p>New-position estimates · {result.request.targetDate} · target {state.underlyingKind === 'cash-index' ? `${result.request.targetSpot} index points` : money(result.request.targetSpot)} · {result.request.basis} quotes · {result.model}. Same snapshot and search constraints; your holdings are unchanged.</p>
+        <div className="candidate-table" tabIndex={0} role="region" aria-label="Candidate metrics"><table><thead><tr><th scope="col">Metric</th>{pair.map(candidate => <th scope="col" key={candidate.id}>Candidate {result.candidates.indexOf(candidate) + 1}</th>)}</tr></thead><tbody>
+          {([
+            ['Target P/L', (candidate) => money(candidate.metrics.scenarioPnl)],
+            ['Net entry outlay', (candidate) => money(entryOutlay(candidate.state))],
+            ['Loss measure', (candidate) => candidate.lossBound ? `${money(candidate.lossBound.amount)} conservative first-expiry bound` : `${money(candidate.metrics.maxLoss)} exact expiry max loss`],
+            ['Maximum profit', (candidate) => candidate.lossBound ? 'Not exact' : money(candidate.metrics.maxProfit)],
+            ['Modeled expiry profit probability', (candidate) => candidate.probability.probability === null ? 'Unavailable' : `${(candidate.probability.probability * 100).toFixed(1)}%`],
+            ['Delta · USD per underlying unit', (candidate) => candidate.metrics.delta.toFixed(3)],
+            ['Gamma · delta change per underlying unit', (candidate) => candidate.metrics.gamma.toFixed(3)],
+            ['Theta · USD per day', (candidate) => money(candidate.metrics.theta)],
+            ['Vega · USD per IV percentage point', (candidate) => money(candidate.metrics.vega)],
+            ['Rho · USD per rate percentage point', (candidate) => money(candidate.metrics.rho)],
+          ] satisfies Array<[string, (candidate: CandidateSearchResult['candidates'][number]) => string]>).map(([label, value]) => <tr key={label}><th scope="row">{label}</th>{pair.map(candidate => <td key={candidate.id}>{value(candidate)}</td>)}</tr>)}
+          <tr><th scope="row">Next step</th>{pair.map(candidate => <td key={candidate.id}><button disabled={disabled || pending} onClick={() => onInspect(result, snapshot, candidate.id)}>Inspect strategy</button></td>)}</tr>
+        </tbody></table></div>
+        <p>Greeks are local sensitivities at the target, not finite-move forecasts. Probability is a model estimate, not a forecast. Outlay is not margin or total capital at risk.</p>
+        {pair.map(candidate => <p key={candidate.id}><strong>Candidate {result.candidates.indexOf(candidate) + 1}:</strong> {candidate.state.stock && '100 shares / '}{candidate.state.legs.map(leg => `${leg.side} ${leg.contracts} × ${leg.strike} ${leg.type} · ${leg.expiry.slice(0, 10)}`).join(' / ')}{candidate.lossBound && ` — ${candidate.lossBound.basis}`}</p>)}
+        {renderComparison(pair.map(candidate => candidate.state))}
+      </section>}
       {result.candidates.map((candidate, index) => <article key={candidate.id}><h4>{index + 1}. {candidate.state.stock && `100 shares @ ${money(candidate.state.stock.entryPrice)} dated mark / `}{candidate.state.legs.map(leg => `${leg.side} ${leg.contracts} × ${leg.strike} ${leg.type} · ${leg.expiry.slice(0, 10)}`).join(' / ')}</h4><p>Net entry outlay {money(entryOutlay(candidate.state))} · Target P/L {money(candidate.metrics.scenarioPnl)} · {candidate.lossBound ? `conservative first-expiry loss bound ${money(candidate.lossBound.amount)}` : `exact expiry max loss ${money(candidate.metrics.maxLoss)}`} · max profit {candidate.lossBound ? 'Not exact' : money(candidate.metrics.maxProfit)} · score {candidate.score.toFixed(3)}</p>{candidate.lossBound && <p>{candidate.lossBound.basis} Return-on-risk uses this conservative bound as denominator, not exact maximum loss.</p>}<p>Modeled expiry profit probability {candidate.probability.probability === null ? 'Unavailable' : `${(candidate.probability.probability * 100).toFixed(1)}%`} · not a forecast.</p><button disabled={disabled || pending} onClick={() => onInspect(result, snapshot, candidate.id)}>Inspect strategy</button></article>)}
     </section>}
   </details></section>

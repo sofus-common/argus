@@ -299,6 +299,20 @@ input, select, textarea { accent-color: var(--cobalt); }
 .analysis-evidence summary:focus-visible { outline: 2px solid var(--cobalt); outline-offset: 2px; }
 .verified-risk { border-left: 2px solid #79baa4; padding-left: 10px; margin: 12px 0; }
 .verified-risk p, .source-evidence p { font-size: 12px; line-height: 1.6; }
+.candidate-select { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 12px; }
+.candidate-comparison { margin: 16px 0; padding: 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--ink-2); }
+.candidate-comparison > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.candidate-comparison h3 { margin: 0; }
+.candidate-comparison button { min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--ink-2); color: inherit; font: inherit; cursor: pointer; }
+.candidate-table { overflow-x: auto; }
+.candidate-table table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.candidate-table th, .candidate-table td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.candidate-table th { font-weight: 500; color: var(--muted); }
+.candidate-table td { width: 31%; }
+.candidate-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.candidate-charts figure { margin: 0; min-width: 0; }
+.candidate-charts figcaption { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 700px) { .candidate-charts { grid-template-columns: 1fr; } .candidate-comparison { padding: 8px; } }
 .probability-context { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
 .probability-context summary { cursor: pointer; }
 .probability-context strong { margin-left: 8px; font-variant-numeric: tabular-nums; }

@@ -19,6 +19,23 @@ const button = document.querySelector<HTMLButtonElement>('#run')!, output = docu
 if (!import.meta.env.DEV) { button.disabled = true; output.textContent = 'Development only' }
 else button.onclick = () => void run()
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message) }
+const pairChartsReady = () => { const charts = [...fixture.querySelectorAll('[aria-label="Candidate comparison"] svg.payoff-chart')]; return charts.length === 2 && charts.every(chart => chart.getAttribute('aria-busy') === 'false' && chart.querySelector('.payoff-line.under')?.getAttribute('d') && chart.querySelector('.expiry-reference[data-as-of]')?.getAttribute('d')) };
+function checkPair(result: ReturnType<typeof searchCandidates>, indices: number[]) {
+  const panel = fixture.querySelector('[aria-label="Candidate comparison"]')!;
+  const money = (value: number | null) => value === null ? 'Unbounded' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+  for (const [column, index] of indices.entries()) {
+    const candidate = result.candidates[index], metrics = calculateStrategy(candidate.state);
+    const outlay = Math.max(0, candidate.state.legs.reduce((sum, leg) => sum + (leg.side === 'long' ? 1 : -1) * leg.entryPrice * leg.contracts * 100, 0) + (candidate.state.stock ? candidate.state.stock.shares * candidate.state.stock.entryPrice : 0) + (candidate.state.feeAllowance ?? 0));
+    for (const [label, expected] of [['Target P/L', money(metrics.scenarioPnl)], ['Net entry outlay', money(outlay)], ['Loss measure', candidate.lossBound ? `${money(candidate.lossBound.amount)} conservative first-expiry bound` : `${money(metrics.maxLoss)} exact expiry max loss`], ['Maximum profit', candidate.lossBound ? 'Not exact' : money(metrics.maxProfit)], ['Theta · USD per day', money(metrics.theta)], ['Vega · USD per IV percentage point', money(metrics.vega)], ['Rho · USD per rate percentage point', money(metrics.rho)]]) {
+      const row = [...panel.querySelectorAll('tbody tr')].find(row => row.querySelector('th')?.textContent === label);
+      assert(row?.querySelectorAll('td')[column]?.textContent === expected, `Candidate ${index + 1} ${label} differs from deterministic value`);
+    }
+  }
+  const charts = [...panel.querySelectorAll('svg.payoff-chart')];
+  assert(charts.length === 2, 'Pair does not render both charts');
+  const axes = charts.map(chart => [...chart.querySelectorAll('.grid.vertical')].map(line => line.parentElement!.querySelector('text')?.textContent).join('|'));
+  assert(axes[0].split('|').length === 5 && axes[0] === axes[1], 'Pair charts do not share the same spot axis');
+}
 
 async function run() {
   button.disabled = true; output.textContent = ''
@@ -356,12 +373,13 @@ async function run() {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
       const priorDate = Date, priorNow = Date.now;
       globalThis.Date = originalDate; Date.now = originalNow;
-      const stamp = new Date(Date.now() - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];
+      const stamp = new Date(Date.now() - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z', '2027-10-23T20:00:00.000Z'];
       const type = symbol === 'XSP' ? 'put' : 'call', model = symbol === 'XSP' ? 'european-bsm-v1' : 'american-crr-1024-v1';
       const snapshot: MarketSnapshot = { id: 'mixed-discovery', source: 'Tastytrade', underlying: symbol, ...(symbol === 'XSP' ? { underlyingKind: 'cash-index' as const, indexSourceTime: stamp, contractTerms: { exerciseStyle: 'European' as const, settlement: 'cash' as const, multiplier: 100 as const, settlementSession: 'PM' as const } } : {}), spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [95, 100, 105].map(strike => ({ contractId: `${symbol}   ${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp }))) };
       const held = createMarketStrategy(type === 'put' ? 'long-put' : 'long-call', snapshot); held.valuationModel = model; held.dividendYield = .02; held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.feeAllowance = 5;
       const seed = { id: 'mixed-seed', title: 'Mixed search fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
       let saved: typeof seed | undefined, mode: 'normal' | 'altered' | 'deferred' = 'normal', release: (() => void) | undefined, calls = 0;
+      let ranked: ReturnType<typeof searchCandidates> | undefined;
       let chatMode: 'normal' | 'altered' | 'prose' | 'intent' | 'assumptions' | 'objections' | 'suggested_prompts' | 'deferred' = 'normal', chatCalls = 0, releaseChat: (() => void) | undefined, chatSignal: AbortSignal | undefined;
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
       window.fetch = (async (url, init) => {
@@ -388,6 +406,7 @@ async function run() {
         if (url === '/api/candidates') {
           calls++; const body = JSON.parse(String(init?.body)), result = searchCandidates(body.state, snapshot, body.search, body.domain);
           assert(result.candidates.length > 0, 'No calendar candidates in fixture');
+          ranked = structuredClone(result);
           if (mode === 'altered') result.candidates[0].lossBound!.amount += 1;
           if (mode === 'deferred') return new Promise<Response>(resolve => { release = () => resolve(Response.json({ search: result })); });
           return Response.json({ search: result });
@@ -410,6 +429,16 @@ async function run() {
         const before = inputs(); await configure(); await click('Find strategies');
         await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'ranking');
         assert(fixture.querySelector('[aria-label="Deterministic quoted candidates"]')!.textContent!.toLowerCase().includes('conservative'), 'Calendar bound not labeled');
+        const firstExpiry = (index: number) => ranked!.candidates[index].state.legs.map(leg => leg.expiry).sort()[0];
+        const different = ranked!.candidates.findIndex((_, index) => firstExpiry(index) !== firstExpiry(0));
+        assert(different > 0, 'Calendar fixture lacks alternatives with different first expiries');
+        for (const rank of [1, different + 1]) await act(async () => { const checkbox = fixture.querySelector<HTMLInputElement>(`[aria-label="Compare candidate ${rank}"]`); assert(checkbox && !checkbox.disabled, 'Calendar pair selection unavailable'); checkbox.click() });
+        await waitFor(pairChartsReady, 'calendar pair charts');
+        const pair = fixture.querySelector('[role="region"][aria-label="Candidate comparison"]')!;
+        assert(pair.textContent?.toLowerCase().includes('conservative') && [...pair.querySelectorAll('.expiry-reference[data-as-of]')].map(path => path.getAttribute('data-as-of')).join() === [firstExpiry(0), firstExpiry(different)].join(), 'Calendar pair omitted independently dated first-expiry references or conservative scope');
+        checkPair(ranked!, [0, different]);
+        assert(inputs() === before && !saved && !fixture.querySelector('.proposal-card') && Number(calls) === 1 && Number(chatCalls) === 0, 'Calendar pair mutated holdings or made extra requests');
+        await click('Clear comparison'); assert(!fixture.querySelector('[aria-label="Candidate comparison"]'), 'Calendar comparison did not clear');
         await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspection');
         await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), 'target comparison');
         assert(inputs() === before, 'Calendar inspection changed held entries');
@@ -1010,8 +1039,33 @@ async function run() {
         await click('Find strategies');
         await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'ranking');
         assert(ranked!.domain?.families.join() === 'iron-condor' && ranked!.candidates.every(candidate => { const legs = [...candidate.state.legs].sort((a, b) => a.strike - b.strike); return legs.length === 4 && legs.map(leg => `${leg.side}:${leg.type}`).join() === 'long:put,short:put,short:call,long:call' && legs.every(leg => leg.contracts === 1) && legs.every((leg, i) => i === 0 || legs[i - 1].strike < leg.strike) }), 'Explicit iron condor request or ranked structure broadened to another family');
+        const pair = () => fixture.querySelector<HTMLElement>('[role="region"][aria-label="Candidate comparison"]');
+        const selection = (rank: number) => fixture.querySelector<HTMLInputElement>(`[aria-label="Compare candidate ${rank}"]`);
+        assert(ranked!.candidates.length >= 3, 'Pair comparison fixture requires three distinct alternatives');
+        await toggle('Compare candidate 1'); assert(!pair(), 'One candidate produced a pair comparison');
+        await toggle('Compare candidate 2'); await waitFor(() => !!pair(), 'pair comparison');
+        await waitFor(pairChartsReady, 'pair charts');
+        checkPair(ranked!, [0, 1]);
+        if (new URLSearchParams(location.search).has('inspect-pair')) await new Promise<void>(resolve => { const resume = document.createElement('button'); resume.textContent = 'Continue checks'; resume.onclick = () => { resume.remove(); resolve() }; document.querySelector('#results')!.appendChild(resume) });
+        assert(selection(1)?.checked && selection(2)?.checked && selection(3)?.disabled, 'Pair selection did not enforce exactly two distinct alternatives');
+        assert(pair()!.getBoundingClientRect().width > 0 && inputs() === original && scenario() === originalScenario && !saved && !fixture.querySelector('.proposal-card') && Number(searches) === 1 && aiCalls === 0, 'Pair comparison was hidden, fetched again or changed holdings');
+        selection(1)!.focus(); assert(document.activeElement === selection(1), 'Pair checkbox cannot receive keyboard focus');
+        await toggle('Compare candidate 1'); assert(!pair() && !selection(3)?.disabled, 'Deselect did not release comparison slot');
+        await toggle('Compare candidate 1'); await waitFor(() => !!pair(), 'reselected comparison');
+        await click('Clear comparison'); assert(!pair() && !selection(1)?.checked && !selection(2)?.checked && !selection(3)?.disabled, 'Clear comparison retained selected alternatives');
+        await toggle('Compare candidate 1'); await toggle('Compare candidate 2');
+        await change('Optimizer maximum loss', '1001');
+        assert(!pair() && !fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && inputs() === original, 'Changed search input retained an old pair or changed holdings');
+        await change('Optimizer maximum loss', '1000'); await click('Find strategies');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'pair replacement ranking');
+        assert(!selection(1)?.checked && !selection(2)?.checked && !pair(), 'New result set inherited pair selection');
+        await toggle('Compare candidate 1'); await toggle('Compare candidate 2');
+        const inspectPair = async (index: number) => act(async () => { const buttons = [...pair()!.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent === 'Inspect strategy'); assert(buttons.length === 2 && !buttons[index].disabled, 'Pair lacks explicit inspection for both alternatives'); buttons[index].click() });
+        await inspectPair(1); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'second alternative inspection');
+        assert(inputs() === original && scenario() === originalScenario && selection(1)?.disabled && selection(2)?.disabled, 'Inspecting second alternative changed holdings or left pair actions enabled');
+        await click('Keep current'); await waitFor(() => !!pair(), 'pair after dismissal');
         const chosen = ranked!.candidates[0];
-        await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspection');
+        await inspectPair(0); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspection');
         await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), 'comparison chart');
         const expectedBaseline = calculateStrategy({ ...projectAnalysisPosition(held)!, scenarioSpot: 120, scenarioDate: expiry });
         const pnlLabel = [...fixture.querySelectorAll('.comparison-metrics span')].find(element => element.textContent === 'Scenario P/L');
@@ -1075,7 +1129,7 @@ async function run() {
         mode = 'deferred'; await click('Find strategies'); await waitFor(() => !!release, 'domain deferred');
         await change('Optimizer maximum entry outlay', '19000'); await act(async () => release!()); release = undefined;
         await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'Changed outlay admitted stale domain result');
-        assert(searches === 10 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
+        assert(searches === 11 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
       } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('XSP builder keeps European cash-index identity through loading, templates, save, reopen and Undo', async () => {
