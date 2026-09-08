@@ -1,0 +1,1270 @@
+import { americanGreeks, americanPrice } from "./american-price.ts";
+
+export type TemplateId =
+  | keyof typeof INVERSE_TEMPLATES
+  | "call-diagonal"
+  | "put-diagonal"
+  | "call-butterfly"
+  | "put-butterfly"
+  | "short-call"
+  | "short-put"
+  | "short-straddle"
+  | "short-strangle"
+  | "long-call"
+  | "long-put"
+  | "bull-call"
+  | "bear-put"
+  | "bull-put"
+  | "bear-call"
+  | "long-straddle"
+  | "long-strangle"
+  | "iron-butterfly"
+  | "iron-condor"
+  | "call-calendar"
+  | "put-calendar"
+  | "covered-call"
+  | "protective-put"
+  | "collar";
+
+export interface OptionLeg {
+  id: string;
+  contractId: string;
+  side: "long" | "short";
+  type: "call" | "put";
+  contracts: number;
+  strike: number;
+  expiry: string;
+  entryPrice: number;
+  iv: number;
+  multiplier: number;
+}
+
+export type PricingBasis = "mid" | "natural";
+
+export type ChartRange = { min: number; max: number };
+
+export function isChartRange(value: unknown): value is ChartRange {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Reflect.ownKeys(value).length !== 2) return false;
+  const range = value as ChartRange;
+  return Object.hasOwn(range, "min") && Object.hasOwn(range, "max") && finite(range.min) && finite(range.max) && range.min > 0 && range.min < range.max && range.max <= 1_000_000;
+}
+
+export interface MarketContract {
+  contractId: string;
+  type: "call" | "put";
+  strike: number;
+  expiry: string;
+  multiplier: 100;
+  bid: number;
+  ask: number;
+  iv: number;
+  quoteAsOf: string;
+  sourceTimes?: { bid: string; ask: string; iv: string };
+  volume?: number;
+  openInterest?: number;
+}
+
+export interface MarketSnapshot {
+  imported?: true;
+  contractTerms?: { exerciseStyle: "American"; settlement: "physical-shares"; sharesPerContract: 100; settlementSession: "PM" };
+  underlying: string;
+  strikeCenter?: number;
+  historical?: true;
+  id: string;
+  source: "Tastytrade";
+  captureSource?: "DXLink";
+  spotSourceTimes?: { bid: string; ask: string };
+  retrievedAt: string;
+  spot: number;
+  spotAsOf: string;
+  availableExpiries: string[];
+  contracts: MarketContract[];
+}
+
+export interface StrategyState {
+  valuationModel?: "european-bsm-v1" | "american-crr-1024-v1";
+  id: string;
+  version: number;
+  name: string;
+  underlying: string;
+  spot: number;
+  valuationTimestamp: string;
+  rate: number;
+  dividendYield: number;
+  scenarioDate: string;
+  scenarioSpot: number;
+  ivShift: number;
+  expiryIvShifts?: Array<{ expiry: string; ivShift: number }>;
+  legs: OptionLeg[];
+  stock?: { shares: number; entryPrice: number };
+  feeAllowance?: number;
+  pricing?: { mode: "market"; snapshotId: string; basis: PricingBasis; historical?: true; entryMode?: "fixed" };
+}
+
+export interface StrategyMetrics {
+  entryLabel: "Debit" | "Credit";
+  entryAmount: number;
+  entryAccounting: { grossEntryCashFlow: number; costAllowance: number; netEntryCashFlowAfterAllowance: number; convention: string };
+  maxProfit: number | null;
+  maxLoss: number | null;
+  breakevens: number[];
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  rho: number;
+  mode: "expiration" | "first-expiry" | "spot";
+  modeledLow: number;
+  modeledHigh: number;
+  sampledRange: { kind: "sampled-model-range"; date: string; spotMin: number; spotMax: number; pointCount: number; low: PayoffPoint; high: PayoffPoint };
+  scenarioPnl: number;
+  conditionalTail?: { date: string; model: NonNullable<StrategyState["valuationModel"]>; zeroSpotPnl: number | null; slope: number | null; intercept: number | null; outcome: "loss-unbounded" | "profit-unbounded" | "finite-limit" | "numerically-unresolved"; basis: string };
+}
+
+export interface PayoffPoint {
+  spot: number;
+  pnl: number;
+}
+
+export const TEMPLATES: ReadonlyArray<{ id: TemplateId; name: string }> = [
+  { id: "inverse-iron-butterfly", name: "Inverse Iron Butterfly" },
+  { id: "inverse-iron-condor", name: "Inverse Iron Condor" },
+  { id: "short-call-butterfly", name: "Short Call Butterfly" },
+  { id: "short-put-butterfly", name: "Short Put Butterfly" },
+  { id: "call-diagonal", name: "Long Call Diagonal" },
+  { id: "put-diagonal", name: "Long Put Diagonal" },
+  { id: "call-butterfly", name: "Long Call Butterfly" },
+  { id: "put-butterfly", name: "Long Put Butterfly" },
+  { id: "short-call", name: "Short Call" },
+  { id: "short-put", name: "Short Put" },
+  { id: "short-straddle", name: "Short Straddle" },
+  { id: "short-strangle", name: "Short Strangle" },
+  { id: "long-call", name: "Long Call" },
+  { id: "long-put", name: "Long Put" },
+  { id: "bull-call", name: "Bull Call Spread" },
+  { id: "bear-put", name: "Bear Put Spread" },
+  { id: "bull-put", name: "Bull Put Spread" },
+  { id: "bear-call", name: "Bear Call Spread" },
+  { id: "long-straddle", name: "Long Straddle" },
+  { id: "long-strangle", name: "Long Strangle" },
+  { id: "iron-butterfly", name: "Iron Butterfly" },
+  { id: "iron-condor", name: "Iron Condor" },
+  { id: "call-calendar", name: "Call Calendar" },
+  { id: "put-calendar", name: "Put Calendar" },
+  { id: "covered-call", name: "Covered Call" },
+  { id: "protective-put", name: "Protective Put" },
+  { id: "collar", name: "Collar" },
+];
+
+const DAY_MS = 86_400_000;
+const INVERSE_TEMPLATES = {
+  "inverse-iron-butterfly": "iron-butterfly",
+  "inverse-iron-condor": "iron-condor",
+  "short-call-butterfly": "call-butterfly",
+  "short-put-butterfly": "put-butterfly",
+} as const;
+const YEAR_MS = 365 * DAY_MS;
+const NEAR_EXPIRY = "2026-09-11T20:00:00.000Z";
+const FAR_EXPIRY = "2026-09-18T20:00:00.000Z";
+
+export const SAMPLE_EXPIRIES = [NEAR_EXPIRY, FAR_EXPIRY] as const;
+export const SAMPLE_STRIKES = Array.from({ length: 41 }, (_, index) => 80 + index);
+
+export function sampleContractId(type: OptionLeg["type"], strike: number, expiry: string): string {
+  const date = expiry.slice(2, 10).replaceAll("-", "");
+  const strikeCode = String(Math.round(strike * 1_000)).padStart(8, "0");
+  return `SPY${date}${type === "call" ? "C" : "P"}${strikeCode}`;
+}
+
+const SAMPLE_CONTRACTS = new Set(
+  SAMPLE_EXPIRIES.flatMap((expiry) => SAMPLE_STRIKES.flatMap((strike) => [
+    sampleContractId("call", strike, expiry),
+    sampleContractId("put", strike, expiry),
+  ])),
+);
+
+function leg(
+  id: string,
+  side: OptionLeg["side"],
+  type: OptionLeg["type"],
+  strike: number,
+  entryPrice: number,
+  expiry = FAR_EXPIRY,
+  contracts = 1,
+): OptionLeg {
+  return {
+    id,
+    contractId: sampleContractId(type, strike, expiry),
+    side,
+    type,
+    contracts,
+    strike,
+    expiry,
+    entryPrice,
+    iv: 0.22,
+    multiplier: 100,
+  };
+}
+
+export function createStrategy(templateId: TemplateId): StrategyState {
+  const definition = TEMPLATES.find((template) => template.id === templateId);
+  if (!definition) throw new Error(`Unknown template: ${templateId}`);
+
+  if (templateId in INVERSE_TEMPLATES) {
+    const base = createStrategy(INVERSE_TEMPLATES[templateId as keyof typeof INVERSE_TEMPLATES]);
+    return { ...base, id: templateId, name: definition.name, legs: base.legs.map(item => ({ ...item, side: item.side === "long" ? "short" : "long", id: item.id.startsWith("long-") ? item.id.replace("long-", "short-") : item.id.startsWith("short-") ? item.id.replace("short-", "long-") : item.id })) };
+  }
+  const templates: Record<Exclude<TemplateId, keyof typeof INVERSE_TEMPLATES>, OptionLeg[]> = {
+    "call-diagonal": [leg("near-call", "short", "call", 103, 0.8, NEAR_EXPIRY), leg("far-call", "long", "call", 98, 3.8)],
+    "put-diagonal": [leg("near-put", "short", "put", 97, 0.8, NEAR_EXPIRY), leg("far-put", "long", "put", 102, 3.9)],
+    "call-butterfly": [leg("low-call", "long", "call", 95, 6), leg("body-call", "short", "call", 100, 2.5, FAR_EXPIRY, 2), leg("high-call", "long", "call", 105, 0.8)],
+    "put-butterfly": [leg("low-put", "long", "put", 95, 0.8), leg("body-put", "short", "put", 100, 2.3, FAR_EXPIRY, 2), leg("high-put", "long", "put", 105, 5.6)],
+    "short-call": [leg("call", "short", "call", 100, 2.5)],
+    "short-put": [leg("put", "short", "put", 100, 2.3)],
+    "short-straddle": [leg("call", "short", "call", 100, 2.5), leg("put", "short", "put", 100, 2.3)],
+    "short-strangle": [leg("call", "short", "call", 103, 1.4), leg("put", "short", "put", 97, 1.5)],
+    "covered-call": [leg("call", "short", "call", 105, 2)],
+    "protective-put": [leg("put", "long", "put", 95, 3)],
+    "collar": [leg("put", "long", "put", 95, 3), leg("call", "short", "call", 105, 2)],
+    "long-call": [leg("call", "long", "call", 100, 2.5)],
+    "long-put": [leg("put", "long", "put", 100, 2.3)],
+    "bull-call": [leg("long-call", "long", "call", 98, 3.8), leg("short-call", "short", "call", 103, 1.4)],
+    "bear-put": [leg("long-put", "long", "put", 102, 3.9), leg("short-put", "short", "put", 97, 1.5)],
+    "bull-put": [leg("short-put", "short", "put", 102, 3.9), leg("long-put", "long", "put", 97, 1.5)],
+    "bear-call": [leg("short-call", "short", "call", 98, 3.8), leg("long-call", "long", "call", 103, 1.4)],
+    "long-straddle": [leg("call", "long", "call", 100, 2.5), leg("put", "long", "put", 100, 2.3)],
+    "long-strangle": [leg("call", "long", "call", 103, 1.4), leg("put", "long", "put", 97, 1.5)],
+    "iron-butterfly": [
+      leg("long-put", "long", "put", 95, 0.8),
+      leg("short-put", "short", "put", 100, 2.3),
+      leg("short-call", "short", "call", 100, 2.5),
+      leg("long-call", "long", "call", 105, 0.8),
+    ],
+    "iron-condor": [
+      leg("long-put", "long", "put", 94, 0.5),
+      leg("short-put", "short", "put", 97, 1.5),
+      leg("short-call", "short", "call", 103, 1.4),
+      leg("long-call", "long", "call", 106, 0.5),
+    ],
+    "call-calendar": [
+      leg("near-call", "short", "call", 100, 1.5, NEAR_EXPIRY),
+      leg("far-call", "long", "call", 100, 3.0),
+    ],
+    "put-calendar": [
+      leg("near-put", "short", "put", 100, 1.4, NEAR_EXPIRY),
+      leg("far-put", "long", "put", 100, 2.8),
+    ],
+  };
+
+  return {
+    id: templateId,
+    valuationModel: "european-bsm-v1",
+    version: 1,
+    name: definition.name,
+    underlying: "SPY",
+    spot: 100,
+    valuationTimestamp: "2026-09-01T20:00:00.000Z",
+    rate: 0.04,
+    dividendYield: 0.012,
+    scenarioDate: "2026-09-01T20:00:00.000Z",
+    scenarioSpot: 100,
+    ivShift: 0,
+    legs: templates[templateId as keyof typeof templates].map((item) => ({ ...item })),
+    ...(["covered-call", "protective-put", "collar"].includes(templateId) ? { stock: { shares: 100, entryPrice: 100 } } : {}),
+  };
+}
+
+export function marketLeg(contract: MarketContract, side: OptionLeg["side"], contracts = 1, id = contract.contractId, basis: PricingBasis = "mid", prior?: OptionLeg): OptionLeg {
+  return {
+    id, contractId: contract.contractId, side, type: contract.type, contracts,
+    strike: contract.strike, expiry: contract.expiry, iv: contract.iv, multiplier: contract.multiplier,
+    entryPrice: prior?.contractId === contract.contractId && prior.side === side ? prior.entryPrice : rounded(basis === "natural" ? side === "long" ? contract.ask : contract.bid : (contract.bid + contract.ask) / 2),
+  };
+}
+
+export function translateStrikes(state: StrategyState, anchorId: string, requestedStrike: number, snapshot?: MarketSnapshot, step?: -1 | 1): StrategyState {
+  if (!Number.isFinite(requestedStrike) || (step !== undefined && step !== -1 && step !== 1)) throw new Error("Invalid strike translation request");
+  if (state.pricing && !snapshot) throw new Error("A matching market snapshot is required to move strikes");
+  const errors = state.pricing ? validateMarketStrategy(state, snapshot!) : validateStrategy(state);
+  if (errors.length) throw new Error(errors.join("; "));
+  const anchor = state.legs.find(leg => leg.id === anchorId);
+  if (!anchor) throw new Error("Strike translation anchor is not in this strategy");
+  const grids = state.legs.map(leg => new Map<number, MarketContract | undefined>(state.pricing
+    ? snapshot!.contracts.filter(contract => contract.type === leg.type && contract.expiry === leg.expiry).map(contract => [Math.round(contract.strike * 1000), contract])
+    : SAMPLE_STRIKES.map(strike => [strike * 1000, undefined])));
+  const anchorIndex = state.legs.indexOf(anchor), anchorStrike = Math.round(anchor.strike * 1000);
+  const offsets = [...grids[anchorIndex].keys()].map(strike => strike - anchorStrike)
+    .filter(offset => state.legs.every((leg, index) => grids[index].has(Math.round(leg.strike * 1000) + offset)))
+    .sort((a, b) => a - b);
+  const targetOffset = requestedStrike * 1000 - anchorStrike;
+  const offset = step === 1 ? offsets.find(value => value > 0)
+    : step === -1 ? [...offsets].reverse().find(value => value < 0)
+      : offsets.reduce((best, value) => Math.abs(value - targetOffset) < Math.abs(best - targetOffset) ? value : best, offsets[0]);
+  if (offset === undefined || offset === 0) return state;
+  if (state.pricing?.entryMode === "fixed") throw new Error("Held positions with fixed entry costs cannot move strikes; use a hypothetical strategy instead");
+  const next = { ...state, legs: state.legs.map((leg, index) => {
+    const strike = (Math.round(leg.strike * 1000) + offset) / 1000;
+    return state.pricing
+      ? marketLeg(grids[index].get(Math.round(strike * 1000))!, leg.side, leg.contracts, leg.id, state.pricing.basis)
+      : { ...leg, strike, contractId: sampleContractId(leg.type, strike, leg.expiry) };
+  }) };
+  const nextErrors = state.pricing ? validateMarketStrategy(next, snapshot!) : validateStrategy(next);
+  if (nextErrors.length) throw new Error(nextErrors.join("; "));
+  return next;
+}
+
+export function createMarketStrategy(requestedId: TemplateId, snapshot: MarketSnapshot, basis: PricingBasis = "mid"): StrategyState {
+  const definition = TEMPLATES.find(template => template.id === requestedId);
+  if (!definition) throw new Error(`Unknown template: ${requestedId}`);
+  const reversed = requestedId in INVERSE_TEMPLATES;
+  const templateId = reversed ? INVERSE_TEMPLATES[requestedId as keyof typeof INVERSE_TEMPLATES] : requestedId as Exclude<TemplateId, keyof typeof INVERSE_TEMPLATES>;
+  const expiries = [...new Set(snapshot.contracts.map(contract => contract.expiry))].sort();
+  const near = expiries[0];
+  const far = expiries[1];
+  const calendar = templateId.endsWith("calendar");
+  const putStrikes = [...new Set(snapshot.contracts.filter(contract => contract.expiry === near && contract.type === "put").map(contract => contract.strike))].sort((a, b) => a - b);
+  const callStrikes = new Set(snapshot.contracts.filter(contract => contract.expiry === near && contract.type === "call").map(contract => contract.strike));
+  const types: OptionLeg["type"][] = templateId.includes("call") ? ["call"] : templateId.includes("put") ? ["put"] : ["call", "put"];
+  const strikes = [...new Set(snapshot.contracts.filter(contract => contract.expiry === near).map(contract => contract.strike))]
+    .filter(strike => types.every(type => snapshot.contracts.some(contract => contract.strike === strike && contract.type === type && contract.expiry === near)
+      && (!calendar || snapshot.contracts.some(contract => contract.strike === strike && contract.type === type && contract.expiry === far))))
+    .sort((a, b) => a - b);
+  const butterfly = templateId === "call-butterfly" || templateId === "put-butterfly" || templateId === "iron-butterfly";
+  if (butterfly) {
+    const available = templateId === "iron-butterfly" ? callStrikes : new Set(strikes);
+    let triple: number[] = [];
+    for (const center of strikes) {
+      const low = [...(templateId === "iron-butterfly" ? putStrikes : strikes)].reverse().find(strike => strike < center && available.has(Math.round((2 * center - strike) * 1000) / 1000));
+      if (low === undefined) continue;
+      const distance = Math.abs(center - snapshot.spot), bestDistance = Math.abs(triple[1] - snapshot.spot);
+      if (!triple.length || distance < bestDistance || (distance === bestDistance && center - low < triple[1] - triple[0])) triple = [low, center, Math.round((2 * center - low) * 1000) / 1000];
+    }
+    strikes.splice(0, strikes.length, ...triple);
+  }
+  let sparseCondor: number[] | undefined;
+  if (templateId === "iron-condor" && strikes.length < 5) {
+    const calls = [...callStrikes].sort((a, b) => a - b);
+    let distance = Infinity, gap = Infinity;
+    for (let p = 1; p < putStrikes.length; p++) for (let c = 0; c < calls.length - 1; c++) {
+      if (putStrikes[p] >= calls[c]) continue;
+      const candidateDistance = Math.abs((putStrikes[p] + calls[c]) / 2 - snapshot.spot), candidateGap = calls[c] - putStrikes[p];
+      if (candidateDistance < distance || (candidateDistance === distance && candidateGap < gap)) {
+        sparseCondor = [putStrikes[p - 1], putStrikes[p], calls[c], calls[c + 1]];
+        distance = candidateDistance; gap = candidateGap;
+      }
+    }
+  }
+  const wingPair = ["bull-call", "bear-call", "bull-put", "bear-put", "long-strangle", "short-strangle", "collar"].includes(templateId);
+  let sparsePair: number[] | undefined;
+  if (wingPair && strikes.length < 3) {
+    const lows = types.length === 1 ? strikes : putStrikes;
+    const highs = types.length === 1 ? strikes : [...callStrikes].sort((a, b) => a - b);
+    let distance = Infinity, width = Infinity;
+    for (const low of lows) for (const high of highs) {
+      if (low >= high) continue;
+      const candidateDistance = Math.abs((low + high) / 2 - snapshot.spot), candidateWidth = high - low;
+      if (candidateDistance < distance || (candidateDistance === distance && candidateWidth < width)) {
+        sparsePair = [low, high]; distance = candidateDistance; width = candidateWidth;
+      }
+    }
+  }
+  const radius = templateId === "iron-condor" ? 2 : butterfly || wingPair ? 1 : 0;
+  if (!sparseCondor && !sparsePair && strikes.length < 2 * radius + 1) throw new Error(`${definition.name} unavailable in this quoted chain window`);
+  const nearest = strikes.reduce((best, strike, index) => Math.abs(strike - snapshot.spot) < Math.abs(strikes[best] - snapshot.spot) ? index : best, 0);
+  const atm = Math.max(radius, Math.min(strikes.length - radius - 1, nearest));
+  const pick = (side: OptionLeg["side"], type: OptionLeg["type"], offset = 0, expiry = near, quantity = 1): OptionLeg => {
+    const strike = sparseCondor ? sparseCondor[offset < 0 ? offset + 2 : offset + 1] : sparsePair ? sparsePair[offset < 0 ? 0 : 1] : strikes[atm + offset];
+    const contract = snapshot.contracts.find(item => item.type === type && item.expiry === expiry && item.strike === strike);
+    if (!contract) throw new Error(`${definition.name} unavailable in this quoted chain window`);
+    return marketLeg(contract, reversed ? side === "long" ? "short" : "long" : side, quantity, contract.contractId, basis);
+  };
+  let legs: OptionLeg[];
+  const diagonal = (type: OptionLeg["type"]): OptionLeg[] => {
+    const pairs = snapshot.contracts.filter(contract => contract.type === type && contract.expiry === near).flatMap(short =>
+      snapshot.contracts.filter(long => long.type === type && long.expiry === far && (type === "call" ? long.strike < short.strike : long.strike > short.strike)).map(long => ({ short, long })));
+    pairs.sort((a, b) => Math.abs(a.short.strike - snapshot.spot) - Math.abs(b.short.strike - snapshot.spot) || Math.abs(a.short.strike - a.long.strike) - Math.abs(b.short.strike - b.long.strike) || a.short.strike - b.short.strike);
+    if (!pairs.length) throw new Error(`${definition.name} unavailable in this quoted chain window`);
+    return [marketLeg(pairs[0].short, "short", 1, pairs[0].short.contractId, basis), marketLeg(pairs[0].long, "long", 1, pairs[0].long.contractId, basis)];
+  };
+  switch (templateId) {
+    case "call-diagonal": legs = diagonal("call"); break;
+    case "put-diagonal": legs = diagonal("put"); break;
+    case "call-butterfly": legs = [pick("long", "call", -1), pick("short", "call", 0, near, 2), pick("long", "call", 1)]; break;
+    case "put-butterfly": legs = [pick("long", "put", -1), pick("short", "put", 0, near, 2), pick("long", "put", 1)]; break;
+    case "short-call": legs = [pick("short", "call")]; break;
+    case "short-put": legs = [pick("short", "put")]; break;
+    case "short-straddle": legs = [pick("short", "call"), pick("short", "put")]; break;
+    case "short-strangle": legs = [pick("short", "call", 1), pick("short", "put", -1)]; break;
+    case "covered-call": legs = [pick("short", "call")]; break;
+    case "protective-put": legs = [pick("long", "put")]; break;
+    case "collar": legs = [pick("long", "put", -1), pick("short", "call", 1)]; break;
+    case "long-call": legs = [pick("long", "call")]; break;
+    case "long-put": legs = [pick("long", "put")]; break;
+    case "bull-call": legs = [pick("long", "call", -1), pick("short", "call", 1)]; break;
+    case "bear-call": legs = [pick("short", "call", -1), pick("long", "call", 1)]; break;
+    case "bear-put": legs = [pick("long", "put", 1), pick("short", "put", -1)]; break;
+    case "bull-put": legs = [pick("short", "put", 1), pick("long", "put", -1)]; break;
+    case "long-straddle": legs = [pick("long", "call"), pick("long", "put")]; break;
+    case "long-strangle": legs = [pick("long", "call", 1), pick("long", "put", -1)]; break;
+    case "iron-butterfly": legs = [pick("long", "put", -1), pick("short", "put"), pick("short", "call"), pick("long", "call", 1)]; break;
+    case "iron-condor": legs = [pick("long", "put", -2), pick("short", "put", -1), pick("short", "call", 1), pick("long", "call", 2)]; break;
+    case "call-calendar": legs = [pick("short", "call"), pick("long", "call", 0, far)]; break;
+    case "put-calendar": legs = [pick("short", "put"), pick("long", "put", 0, far)]; break;
+  }
+  const state: StrategyState = {
+    valuationModel: "european-bsm-v1",
+    id: requestedId, version: 1, name: definition.name, underlying: snapshot.underlying, spot: snapshot.spot,
+    valuationTimestamp: snapshot.retrievedAt, rate: 0.04, dividendYield: 0.012,
+    scenarioDate: snapshot.retrievedAt, scenarioSpot: snapshot.spot, ivShift: 0, legs,
+    ...(["covered-call", "protective-put", "collar"].includes(templateId) ? { stock: { shares: 100, entryPrice: snapshot.spot } } : {}),
+    pricing: { mode: "market", snapshotId: snapshot.id, basis, ...(snapshot.historical ? { historical: true as const } : {}) },
+  };
+  const errors = validateMarketStrategy(state, snapshot);
+  if (errors.length) throw new Error(errors.join("; "));
+  return state;
+}
+
+export function validateMarketStrategy(state: StrategyState, snapshot: MarketSnapshot): string[] {
+  const errors = validateStrategy(state);
+  if (state?.underlying !== snapshot.underlying) errors.push("market underlying must match the snapshot");
+  if (!state || !state.pricing || state.pricing.mode !== "market") return [...errors, "market pricing metadata is required"];
+  if (state.pricing.snapshotId !== snapshot.id) errors.push("market snapshot does not match; refresh required");
+  if (state.pricing.historical !== snapshot.historical) errors.push("historical quote provenance does not match");
+  if (state.spot !== snapshot.spot || state.valuationTimestamp !== snapshot.retrievedAt) errors.push("market spot and valuation must match the snapshot");
+  if (!Array.isArray(state.legs)) return errors;
+  for (const item of state.legs) {
+    if (!item || typeof item !== "object") continue;
+    const contract = snapshot.contracts.find(candidate => candidate.contractId === item.contractId);
+    if (!contract) { errors.push(`${item.id}: contract is not in the market snapshot`); continue; }
+    const expected = marketLeg(contract, item.side, item.contracts, item.id, state.pricing.basis);
+    if (["type", "strike", "expiry", "multiplier", "iv", ...(state.pricing.entryMode === "fixed" ? [] : ["entryPrice"])].some(field => item[field as keyof OptionLeg] !== expected[field as keyof OptionLeg])) errors.push(`${item.id}: contract or pricing differs from the market snapshot`);
+  }
+  return errors;
+}
+
+export function contractTermsFacts(snapshot?: MarketSnapshot) {
+  if (snapshot?.imported) return { status: "unknown" as const, basis: "Imported file metadata is unverified; no provider-verified contract terms are available." };
+  const terms = snapshot?.contractTerms;
+  if (!terms || terms.exerciseStyle !== "American" || terms.settlement !== "physical-shares" || terms.sharesPerContract !== 100 || terms.settlementSession !== "PM") {
+    return { status: "unknown" as const, basis: "Supported contract terms are unavailable; do not infer exercise style or settlement from the underlying symbol or valuation model." };
+  }
+  return {
+    exerciseStyle: terms.exerciseStyle, settlement: terms.settlement, sharesPerContract: terms.sharesPerContract, settlementSession: terms.settlementSession,
+    underlying: snapshot!.underlying, status: "provider-verified-standard-window" as const,
+    basis: "Recorded standard-chain share deliverable and representative call/put instrument checks per selected expiry; not inferred from the valuation model. Historical snapshots retain recorded terms, not a current corporate-action check. Assignment/exercise cashflows are not included in valuation or P/L; separate conditional gross strike cashflows may be supplied. Broker exercise deadlines are unknown.",
+  };
+}
+
+export function calculateConditionalAssignment(state: StrategyState, snapshot?: MarketSnapshot) {
+  const assignmentTerms = contractTermsFacts(snapshot);
+  const scenarios = snapshot && !snapshot.historical && assignmentTerms.status === "provider-verified-standard-window" && validateMarketStrategy(state, snapshot).length === 0
+    ? state.legs.filter(leg => leg.side === "short").map(leg => {
+      const shareChange = (leg.type === "call" ? -1 : 1) * leg.contracts * leg.multiplier;
+      const resultingShares = (state.stock?.shares ?? 0) + shareChange, grossStrikeCashflow = -shareChange * leg.strike;
+      if (!Number.isSafeInteger(shareChange) || !Number.isSafeInteger(resultingShares) || !Number.isFinite(grossStrikeCashflow)) throw new Error("Conditional assignment arithmetic unavailable");
+      return { assignedLegId: leg.id, assignedContracts: leg.contracts, shareChange, resultingShares, grossStrikeCashflow, remainingOptionLegIds: state.legs.filter(other => other.id !== leg.id).map(other => other.id) };
+    }) : null;
+  return {
+    status: scenarios === null ? "unavailable" : "conditional",
+    basis: "Separate hypothetical full assignment of each short leg from the ORIGINAL inventory under recorded verified American physical-share snapshot terms, not current corporate-action verification. Before assignment the original options remain; afterward the assigned leg no longer exists, resulting shares and listed options remain. No automatic long exercise or cumulative assignment. Gross strike cashflow is not P/L, buying power, total account cash or cost basis; excludes option premiums, fees, dividend and financing cashflows. No assignment probability, timing or broker action is implied. Partial assignments are not represented. Unavailable for unknown or historical terms. No position is changed.",
+    beforeShares: state.stock?.shares ?? 0, beforeOptionLegIds: state.legs.map(leg => leg.id), scenarios,
+  };
+}
+
+function finite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function quoteValuation(state: StrategyState, snapshot: MarketSnapshot) {
+  const errors = validateMarketStrategy(state, snapshot);
+  if (errors.length) throw new Error(errors.join("; "));
+  const contracts = state.legs.map(item => snapshot.contracts.find(contract => contract.contractId === item.contractId)!);
+  const dates = contracts.map(contract => Date.parse(contract.quoteAsOf));
+  if (state.stock) dates.push(Date.parse(snapshot.spotAsOf));
+  if (dates.some(date => !Number.isFinite(date))) throw new Error("Invalid quote timestamp");
+  const value = state.legs.reduce((sum, item, index) => {
+    const contract = contracts[index];
+    if (!finite(contract.bid) || !finite(contract.ask) || contract.bid < 0 || contract.ask <= 0 || contract.ask < contract.bid) throw new Error("Invalid quote");
+    const price = state.pricing!.basis === "mid" ? (contract.bid + contract.ask) / 2 : item.side === "long" ? contract.bid : contract.ask;
+    return sum + price * (item.side === "long" ? 1 : -1) * item.contracts * item.multiplier;
+  }, (state.stock?.shares ?? 0) * snapshot.spot);
+  const entry = entryCost(state);
+  const optionSpreadLegs = state.legs.map((leg, index) => ({ legId: leg.id, contractId: leg.contractId, side: leg.side, contracts: leg.contracts, multiplier: leg.multiplier, bid: contracts[index].bid, ask: contracts[index].ask, quoteAsOf: contracts[index].quoteAsOf, positionWidthUsd: rounded((contracts[index].ask - contracts[index].bid) * leg.contracts * leg.multiplier) }));
+  const optionQuotedSpreadWidth = rounded(optionSpreadLegs.reduce((sum, leg) => sum + leg.positionWidthUsd, 0));
+  return {
+    optionSpreadLegs, optionQuotedSpreadWidth, optionMidToNaturalDifference: rounded(optionQuotedSpreadWidth / 2),
+    optionSpreadBasis: "Sum of dated option ask-minus-bid widths times quantity and multiplier, without long/short netting. Half-width is midpoint minus natural liquidation value on these same leg quotes. Excludes stock, held costs and allowances. Not realized cost, expected slippage, a complex-order quote, available size, liquidity score or fill probability.",
+    signedEntry: rounded(entry), signedLiquidationValue: rounded(value), ...(state.feeAllowance !== undefined ? { feeAllowance: state.feeAllowance } : {}), pnl: rounded(value - entry - (state.feeAllowance ?? 0)),
+    basis: (state.pricing!.basis === "mid" ? "Midpoint liquidation estimate; not a fill, before unmodeled costs." : "Natural liquidation estimate: sell longs at bid / buy shorts at ask; not a fill, before unmodeled costs.") + (state.stock ? " Options only use that quote basis; stock uses a dated underlying spot mark, not an executable bid/ask. No dividends, financing, borrow or assignment cashflows." : ""),
+    ...(state.stock ? { signedStockValue: rounded(state.stock.shares * snapshot.spot) } : {}),
+    oldestQuoteAt: new Date(Math.min(...dates)).toISOString(), newestQuoteAt: new Date(Math.max(...dates)).toISOString(), historical: snapshot.historical === true,
+  };
+}
+
+function timestamp(value: unknown): number {
+  if (typeof value !== "string") return Number.NaN;
+  const day = value.slice(0, 10), parsedDay = Date.parse(day);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(parsedDay) || new Date(parsedDay).toISOString().slice(0, 10) !== day) return Number.NaN;
+  return Date.parse(value);
+}
+
+export function effectiveIv(state: StrategyState, leg: Pick<OptionLeg, "iv" | "expiry">): number {
+  return leg.iv + state.ivShift + (Array.isArray(state.expiryIvShifts) ? state.expiryIvShifts.find(shift => shift?.expiry === leg.expiry)?.ivShift ?? 0 : 0);
+}
+
+export function pruneExpiryIvShifts(state: StrategyState): StrategyState {
+  if (!state.expiryIvShifts?.length) return state;
+  const retained = state.expiryIvShifts.filter(shift => state.legs.some(leg => leg.expiry === shift.expiry));
+  return retained.length === state.expiryIvShifts.length ? state : { ...state, expiryIvShifts: retained };
+}
+
+export function validateStrategy(state: StrategyState): string[] {
+  const errors: string[] = [];
+  if (!state || typeof state !== "object") return ["strategy must be an object"];
+  if (state.valuationModel !== undefined && state.valuationModel !== "european-bsm-v1" && state.valuationModel !== "american-crr-1024-v1") errors.push("unsupported valuation model");
+  if (state.feeAllowance !== undefined && (!finite(state.feeAllowance) || state.feeAllowance < 0)) errors.push("cost allowance must be finite and non-negative");
+  const market = state.pricing?.mode === "market";
+  if (state.pricing !== undefined && (!market || typeof state.pricing.snapshotId !== "string" || !state.pricing.snapshotId || !["mid", "natural"].includes(state.pricing.basis))) errors.push("invalid market pricing metadata");
+  if (state.pricing?.entryMode !== undefined && state.pricing.entryMode !== "fixed") errors.push("invalid entry mode");
+  if (typeof state.id !== "string" || !state.id || typeof state.name !== "string" || !state.name) errors.push("strategy id and name are required");
+  if (!Number.isInteger(state.version) || state.version < 1) errors.push("version must be a positive integer");
+  if (market ? typeof state.underlying !== "string" || !/^[A-Z]{1,6}$/.test(state.underlying) : state.underlying !== "SPY") errors.push(market ? "invalid market underlying" : "the replay-safe sample supports SPY only");
+  if (!finite(state.spot) || state.spot <= 0) errors.push("spot must be positive and finite");
+  if (!finite(state.scenarioSpot) || state.scenarioSpot <= 0) errors.push("scenario spot must be positive and finite");
+  if (state.stock !== undefined) {
+    const stock = state.stock;
+    if (!stock || typeof stock !== "object" || Array.isArray(stock) || Object.keys(stock).length !== 2 || !Object.hasOwn(stock, "shares") || !Object.hasOwn(stock, "entryPrice") || !Number.isSafeInteger(stock.shares) || stock.shares === 0 || !finite(stock.entryPrice) || stock.entryPrice < 0 || !finite(stock.shares * stock.entryPrice) || !finite(stock.shares * state.spot) || !finite(stock.shares * state.scenarioSpot)) errors.push("stock must contain nonzero safe-integer shares and finite non-negative per-share entry cost with finite valuation");
+  }
+  if (!finite(state.rate) || !finite(state.dividendYield) || !finite(state.ivShift)) errors.push("rate, dividend yield, and IV shift must be finite");
+
+  const valuation = timestamp(state.valuationTimestamp);
+  const scenario = timestamp(state.scenarioDate);
+  if (!Number.isFinite(valuation) || !Number.isFinite(scenario)) errors.push("valuation and scenario dates must be valid timestamps");
+  if (Number.isFinite(valuation) && Number.isFinite(scenario) && scenario < valuation) errors.push("scenario date cannot precede valuation");
+
+  if (!Array.isArray(state.legs) || (!state.legs.length && !state.stock) || state.legs.length > 4) {
+    errors.push(state.legs?.length > 4 ? "strategy must contain one to four legs" : "strategy must contain one to four legs or a nonzero stock holding");
+    return errors;
+  }
+
+  const ids = new Set<string>();
+  if (state.expiryIvShifts !== undefined) {
+    const shifts = state.expiryIvShifts;
+    if (!Array.isArray(shifts) || shifts.length > 2 || shifts.some(shift => !shift || typeof shift !== "object" || Object.keys(shift).sort().join() !== "expiry,ivShift" || typeof shift.expiry !== "string" || !Number.isFinite(Date.parse(shift.expiry)) || new Date(shift.expiry).toISOString() !== shift.expiry || !state.legs.some(leg => leg?.expiry === shift.expiry) || !finite(shift.ivShift) || Math.abs(shift.ivShift) > 10) || new Set(shifts.map(shift => shift.expiry)).size !== shifts.length) errors.push("expiry IV shifts must have unique canonical current expiries and finite shifts within ten volatility units");
+  }
+  const contractIds = new Set<string>();
+  const expiries = new Set<string>();
+  let earliest = Number.POSITIVE_INFINITY;
+  for (const item of state.legs) {
+    if (!item || typeof item !== "object") {
+      errors.push("each leg must be an object");
+      continue;
+    }
+    if (typeof item.id !== "string" || !item.id || ids.has(item.id)) errors.push("leg ids must be present and unique");
+    ids.add(item.id);
+    if (!item.contractId || contractIds.has(item.contractId)) errors.push("contract ids must be present and unique");
+    contractIds.add(item.contractId);
+    if (market) {
+      const identity = typeof item.contractId === "string" && typeof state.underlying === "string" && item.contractId.slice(0, 6) === state.underlying.padEnd(6) ? /^(\d{6})([CP])(\d{8})$/.exec(item.contractId.slice(6)) : null;
+      if (!identity || typeof item.expiry !== "string" || identity[1] !== item.expiry.slice(2, 10).replaceAll("-", "") || identity[2] !== (item.type === "call" ? "C" : "P") || Number(identity[3]) / 1000 !== item.strike) errors.push(`${item.id}: invalid market contract identity`);
+    } else if (!SAMPLE_STRIKES.includes(item.strike) || !SAMPLE_EXPIRIES.includes(item.expiry as typeof SAMPLE_EXPIRIES[number]) || !SAMPLE_CONTRACTS.has(item.contractId) || item.contractId !== sampleContractId(item.type, item.strike, item.expiry)) errors.push(`${item.id}: contract is not in the replay-safe sample catalog`);
+    if (item.side !== "long" && item.side !== "short") errors.push(`${item.id}: invalid side`);
+    if (item.type !== "call" && item.type !== "put") errors.push(`${item.id}: invalid option type`);
+    if (!Number.isInteger(item.contracts) || item.contracts < 1) errors.push(`${item.id}: contracts must be a positive integer`);
+    if (!finite(item.strike) || item.strike <= 0) errors.push(`${item.id}: strike must be positive and finite`);
+    if (!finite(item.entryPrice) || item.entryPrice < 0) errors.push(`${item.id}: entry price must be non-negative and finite`);
+    if (!finite(item.iv) || item.iv <= 0 || !finite(effectiveIv(state, item)) || effectiveIv(state, item) <= 0) errors.push(`${item.id}: shifted IV must be positive and finite`);
+    if (item.multiplier !== 100) errors.push(`${item.id}: only standard 100-share contracts are supported`);
+    const expiry = timestamp(item.expiry);
+    if (!Number.isFinite(expiry) || (Number.isFinite(valuation) && expiry <= valuation)) errors.push(`${item.id}: expiry must follow valuation`);
+    else earliest = Math.min(earliest, expiry);
+    expiries.add(item.expiry);
+  }
+  if (expiries.size > 2) errors.push("at most two expiries are supported");
+  if (Number.isFinite(scenario) && scenario > earliest) errors.push("scenario date cannot follow the earliest expiry");
+  return errors;
+}
+
+function assertValid(state: StrategyState): void {
+  const errors = validateStrategy(state);
+  if (errors.length) throw new Error(errors.join("; "));
+}
+
+function normalPdf(value: number): number {
+  return Math.exp(-0.5 * value * value) / Math.sqrt(2 * Math.PI);
+}
+
+function normalCdf(value: number): number {
+  const absolute = Math.abs(value);
+  const t = 1 / (1 + 0.2316419 * absolute);
+  const polynomial = t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const positive = 1 - normalPdf(absolute) * polynomial;
+  return value >= 0 ? positive : 1 - positive;
+}
+
+interface LegValue {
+  price: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  rho: number;
+}
+
+function intrinsic(item: OptionLeg, spot: number): LegValue {
+  const raw = item.type === "call" ? spot - item.strike : item.strike - spot;
+  const delta = item.type === "call"
+    ? spot > item.strike ? 1 : spot < item.strike ? 0 : 0.5
+    : spot < item.strike ? -1 : spot > item.strike ? 0 : -0.5;
+  return { price: Math.max(0, raw), delta, gamma: 0, theta: 0, vega: 0, rho: 0 };
+}
+
+function priceLeg(state: StrategyState, item: OptionLeg, spot: number, at: number): LegValue;
+function priceLeg(state: StrategyState, item: OptionLeg, spot: number, at: number, priceOnly: true): Pick<LegValue, "price">;
+function priceLeg(state: StrategyState, item: OptionLeg, spot: number, at: number, priceOnly = false): Pick<LegValue, "price"> | LegValue {
+  const expiry = Date.parse(item.expiry);
+  if (at >= expiry) return intrinsic(item, spot);
+
+  const years = (expiry - at) / YEAR_MS;
+  const volatility = effectiveIv(state, item);
+  if (state.valuationModel === "american-crr-1024-v1") return priceOnly
+    ? { price: americanPrice(item.type, spot, item.strike, years, state.rate, state.dividendYield, volatility, 1024) }
+    : americanGreeks(item.type, spot, item.strike, years, state.rate, state.dividendYield, volatility, 1024);
+  const rootTime = Math.sqrt(years);
+  const d1 = (Math.log(spot / item.strike) + (state.rate - state.dividendYield + 0.5 * volatility * volatility) * years) / (volatility * rootTime);
+  const d2 = d1 - volatility * rootTime;
+  const discountedSpot = spot * Math.exp(-state.dividendYield * years);
+  const discountedStrike = item.strike * Math.exp(-state.rate * years);
+  const price = item.type === "call"
+    ? discountedSpot * normalCdf(d1) - discountedStrike * normalCdf(d2)
+    : discountedStrike * normalCdf(-d2) - discountedSpot * normalCdf(-d1);
+  if (priceOnly) return { price };
+  const density = normalPdf(d1);
+  const commonTheta = -(discountedSpot * density * volatility) / (2 * rootTime);
+
+  if (item.type === "call") {
+    return {
+      price,
+      delta: Math.exp(-state.dividendYield * years) * normalCdf(d1),
+      gamma: spot === 0 ? 0 : Math.exp(-state.dividendYield * years) * density / (spot * volatility * rootTime),
+      theta: (commonTheta - state.rate * discountedStrike * normalCdf(d2) + state.dividendYield * discountedSpot * normalCdf(d1)) / 365,
+      vega: discountedSpot * density * rootTime / 100,
+      rho: discountedStrike * normalCdf(d2) * years / 100,
+    };
+  }
+  return {
+    price,
+    delta: Math.exp(-state.dividendYield * years) * (normalCdf(d1) - 1),
+    gamma: spot === 0 ? 0 : Math.exp(-state.dividendYield * years) * density / (spot * volatility * rootTime),
+    theta: (commonTheta + state.rate * discountedStrike * normalCdf(-d2) - state.dividendYield * discountedSpot * normalCdf(-d1)) / 365,
+    vega: discountedSpot * density * rootTime / 100,
+    rho: -discountedStrike * normalCdf(-d2) * years / 100,
+  };
+}
+
+function entryCost(state: StrategyState): number {
+  return state.legs.reduce((total, item) => total + (item.side === "long" ? 1 : -1) * item.entryPrice * item.contracts * item.multiplier, (state.stock?.shares ?? 0) * (state.stock?.entryPrice ?? 0));
+}
+
+export type PnlDisplayMode = "pnl" | "position-value" | "risk-percent";
+
+export function pnlDisplayBasis(state: StrategyState, mode: PnlDisplayMode): { label: string; unit: "USD" | "%"; scale: number; offset: number; denominator: number | null } | null {
+  if (mode === "pnl") return { label: "P/L", unit: "USD", scale: 1, offset: 0, denominator: null };
+  if (mode === "position-value") return { label: "Position value", unit: "USD", scale: 1, offset: entryCost(state) + (state.feeAllowance ?? 0), denominator: null };
+  if (state.legs.length && new Set(state.legs.map(leg => leg.expiry)).size !== 1) return null;
+  const loss = exactExpiration(state).maxLoss;
+  return loss !== null && loss > 0 ? { label: "P/L / max loss", unit: "%", scale: 100 / loss, offset: 0, denominator: loss } : null;
+}
+
+function strategyAt(state: StrategyState, spot: number, at: number): { value: number; pnl: number; delta: number; gamma: number; theta: number; vega: number; rho: number } {
+  const entry = entryCost(state);
+  let value = (state.stock?.shares ?? 0) * spot;
+  let delta = state.stock?.shares ?? 0;
+  let gamma = 0;
+  let theta = 0;
+  let vega = 0;
+  let rho = 0;
+  for (const item of state.legs) {
+    const priced = priceLeg(state, item, spot, at);
+    const signedContracts = (item.side === "long" ? 1 : -1) * item.contracts * item.multiplier;
+    value += priced.price * signedContracts;
+    delta += priced.delta * signedContracts;
+    gamma += priced.gamma * signedContracts;
+    theta += priced.theta * signedContracts;
+    vega += priced.vega * signedContracts;
+    rho += priced.rho * signedContracts;
+  }
+  return { value, pnl: value - entry - (state.feeAllowance ?? 0), delta, gamma, theta, vega, rho };
+}
+
+function firstExpiry(state: StrategyState): number {
+  return Math.min(...state.legs.map((item) => Date.parse(item.expiry)));
+}
+
+function rounded(value: number): number {
+  return Math.abs(value) < 1e-9 ? 0 : Number(value.toFixed(8));
+}
+
+export function evaluateScenario(state: StrategyState) {
+  assertValid(state);
+  const scenario = strategyAt(state, state.scenarioSpot, Date.parse(state.scenarioDate));
+  return {
+    pnl: rounded(scenario.pnl),
+    delta: rounded(scenario.delta),
+    gamma: rounded(scenario.gamma),
+    theta: rounded(scenario.theta),
+    vega: rounded(scenario.vega),
+    rho: rounded(scenario.rho),
+  };
+}
+
+function strategyValue(state: StrategyState, spot: number, at: number): number {
+  return state.legs.reduce((total, item) => total + priceLeg(state, item, spot, at, true).price * ((item.side === "long" ? 1 : -1) * item.contracts * item.multiplier), (state.stock?.shares ?? 0) * spot);
+}
+
+export function payoffSeries(state: StrategyState, min: number, max: number, steps: number, at?: number): PayoffPoint[] {
+  const { spots, date } = scenarioGrid(state, min, max, steps, at);
+  const entry = entryCost(state);
+  return spots.map(spot => {
+    const value = strategyValue(state, spot, date);
+    return { spot: rounded(spot), pnl: rounded(value - entry - (state.feeAllowance ?? 0)) };
+  });
+}
+
+function scenarioGrid(state: StrategyState, min: number, max: number, steps: number, at?: number) {
+  assertValid(state);
+  if (!finite(min) || !finite(max) || min < 0 || max <= min) throw new Error("payoff range must be finite, non-negative, and increasing");
+  if (!Number.isInteger(steps) || steps < 1 || steps > 10_000) throw new Error("steps must be an integer from 1 to 10000");
+  if (at === undefined) at = state.legs.length ? firstExpiry(state) : Date.parse(state.scenarioDate);
+  if (!finite(at) || at < Date.parse(state.valuationTimestamp) || (state.legs.length > 0 && at > firstExpiry(state))) throw new Error("payoff date must be between valuation and first expiry");
+  return { date: at, spots: Array.from({ length: steps + 1 }, (_, index) => min + ((max - min) * index) / steps) };
+}
+
+export function scenarioSeries(state: StrategyState, min: number, max: number, steps: number, at?: number) {
+  const { spots, date } = scenarioGrid(state, min, max, steps, at);
+  return spots.map(spot => {
+    const scenario = strategyAt(state, spot, date);
+    return {
+      spot: rounded(spot), pnl: rounded(scenario.pnl), delta: rounded(scenario.delta),
+      gamma: rounded(scenario.gamma), theta: rounded(scenario.theta), vega: rounded(scenario.vega), rho: rounded(scenario.rho),
+    };
+  });
+}
+
+export function scenarioCurve(state: StrategyState, min: number, max: number, metric: keyof ReturnType<typeof evaluateScenario>, at = Date.parse(state.scenarioDate)) {
+  if (state.valuationModel === "american-crr-1024-v1" && metric !== "pnl") {
+    const { spots, date } = scenarioGrid(state, min, max, 160, at);
+    const valueAt = (spot: number) => rounded(state.legs.reduce((total, leg) => total + americanGreeks(leg.type, spot, leg.strike, Math.max(0, Date.parse(leg.expiry) - date) / YEAR_MS, state.rate, state.dividendYield, effectiveIv(state, leg), 1024, metric) * (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier, metric === "delta" ? state.stock?.shares ?? 0 : 0));
+    const samples = new Map(spots.map(spot => [rounded(spot), valueAt(spot)]));
+    for (const spot of new Set([state.scenarioSpot, ...state.legs.map(leg => leg.strike)])) if (spot > 0 && spot >= min && spot <= max) samples.set(spot, valueAt(spot));
+    return [...samples].sort(([left], [right]) => left - right).map(([spot, value]) => ({ spot, value }));
+  }
+  const samples = new Map(metric === "pnl" ? payoffSeries(state, min, max, 160, at).map(point => [point.spot, point.pnl]) : scenarioSeries(state, min, max, 160, at).map(point => [point.spot, point[metric]]));
+  for (const spot of new Set([state.scenarioSpot, ...state.legs.map(leg => leg.strike)])) {
+    if (spot > 0 && spot >= min && spot <= max) samples.set(spot, evaluateScenario({ ...state, scenarioSpot: spot, scenarioDate: new Date(at).toISOString() })[metric]);
+  }
+  return [...samples].sort(([left], [right]) => left - right).map(([spot, value]) => ({ spot, value }));
+}
+
+export function scenarioHeatmap(state: StrategyState, range?: ChartRange) {
+  assertValid(state);
+  if (!state.legs.length) throw new Error("Stock-only heatmap unavailable: no option expiry horizon.");
+  if (range !== undefined && !isChartRange(range)) throw new Error("Invalid chart range");
+  const min = range?.min ?? Math.min(state.spot * .76, state.scenarioSpot, ...state.legs.map(leg => leg.strike));
+  const max = range?.max ?? Math.max(state.spot * 1.24, state.scenarioSpot, ...state.legs.map(leg => leg.strike));
+  const start = Date.parse(state.valuationTimestamp), end = firstExpiry(state);
+  return Array.from({ length: 18 }, (_, row) => {
+    const date = new Date(start + (end - start) * row / 17).toISOString();
+    if (range) return Array.from({ length: 44 }, (_, col) => {
+      const spot = col === 43 ? max : min + (max - min) * col / 43;
+      return { spot, date, pnl: rounded(strategyValue(state, spot, Date.parse(date)) - entryCost(state) - (state.feeAllowance ?? 0)) };
+    });
+    return payoffSeries(state, min, max, 43, Date.parse(date)).map(({ pnl }, col) => ({ spot: min + (max - min) * col / 43, date, pnl }));
+  }).flat();
+}
+
+export function scenarioSpots(state: StrategyState, range?: ChartRange) {
+  assertValid(state);
+  if (range !== undefined && !isChartRange(range)) throw new Error("Invalid chart range");
+  const anchors = [state.spot, state.scenarioSpot, ...state.legs.map(leg => leg.strike)];
+  const min = range?.min ?? Math.min(state.spot - state.spot / 10, ...anchors);
+  const max = range?.max ?? Math.max(Math.min(Number.MAX_VALUE, state.spot + state.spot / 10), ...anchors);
+  return [...new Set([...Array.from({ length: 11 }, (_, index) => range && index === 10 ? max : min + (max - min) * (index / 10)), ...anchors.filter(spot => spot >= min && spot <= max)])].sort((a, b) => a - b);
+}
+
+export function scenarioTable(state: StrategyState, range?: ChartRange) {
+  return scenarioSpots(state, range).map(spot => ({ spot, ...evaluateScenario({ ...state, scenarioSpot: spot }) }));
+}
+
+export function scenarioSpotAttribution(state: StrategyState, range?: ChartRange) {
+  const spots = scenarioSpots(state, range);
+  const at = Date.parse(state.scenarioDate);
+  const baselineValue = strategyValue(state, state.scenarioSpot, at);
+  return {
+    baseline: { spot: state.scenarioSpot, date: state.scenarioDate, ivShift: state.ivShift, ...(state.expiryIvShifts?.length ? { expiryIvShifts: structuredClone(state.expiryIvShifts) } : {}) },
+    basis: "Modeled spot-only P/L change from selected scenario. Same position, date, IV, rates and held costs. Stock plus option repricing contributions reconcile to total, subject to rounding. Not realized returns, market-causal attribution, delta-times-move approximation or guaranteed hedge protection.",
+    rows: spots.map(spot => {
+      const pnlChange = rounded(strategyValue(state, spot, at) - baselineValue);
+      const stockChange = rounded((state.stock?.shares ?? 0) * (spot - state.scenarioSpot));
+      return { spot, pnlChange, stockChange, optionChange: rounded(pnlChange - stockChange) };
+    }),
+  };
+}
+
+function expirationValue(state: StrategyState, spot: number): number {
+  return state.legs.reduce((value, leg) => value + intrinsic(leg, spot).price * ((leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier), (state.stock?.shares ?? 0) * spot);
+}
+
+function exactExpiration(state: StrategyState): { maxProfit: number | null; maxLoss: number | null; breakevens: number[] } {
+  const entry = entryCost(state);
+  const strikes = [...new Set(state.legs.map((item) => item.strike))].sort((a, b) => a - b);
+  const points = [0, ...strikes];
+  const values = points.map((spot) => expirationValue(state, spot) - entry - (state.feeAllowance ?? 0));
+  const roots: number[] = [];
+  const addRoot = (root: number) => {
+    if (root >= 0 && !roots.some((value) => Math.abs(value - root) < 1e-7)) roots.push(rounded(root));
+  };
+
+  for (let index = 0; index < points.length; index += 1) {
+    if (Math.abs(values[index]) < 1e-8) addRoot(points[index]);
+    if (index === points.length - 1 || values[index] * values[index + 1] >= 0) continue;
+    const root = points[index] - values[index] * (points[index + 1] - points[index]) / (values[index + 1] - values[index]);
+    addRoot(root);
+  }
+
+  const lastSpot = points.at(-1)!;
+  const lastValue = values.at(-1)!;
+  const tailSlope = state.legs.reduce(
+    (total, item) => total + (item.type === "call" ? (item.side === "long" ? 1 : -1) * item.contracts * item.multiplier : 0),
+    state.stock?.shares ?? 0,
+  );
+  if (Math.abs(tailSlope) > 1e-12) {
+    const root = lastSpot - lastValue / tailSlope;
+    if (root >= lastSpot) addRoot(root);
+  }
+
+  const finiteMax = Math.max(...values);
+  const finiteMin = Math.min(...values);
+  return {
+    maxProfit: tailSlope > 0 ? null : rounded(Math.max(0, finiteMax)),
+    maxLoss: tailSlope < 0 ? null : rounded(Math.max(0, -finiteMin)),
+    breakevens: roots.sort((a, b) => a - b),
+  };
+}
+
+export function expirationProbability(state: StrategyState, range?: { lower: number; upper: number }, volatilityReference?: Pick<MarketContract, "iv" | "contractId" | "expiry">) {
+  assertValid(state);
+  return probabilityFromValidatedState(state, range, volatilityReference);
+}
+
+function probabilityFromValidatedState(state: StrategyState, range?: { lower: number; upper: number }, volatilityReference?: Pick<MarketContract, "iv" | "contractId" | "expiry">) {
+  if (range && (!finite(range.lower) || !finite(range.upper) || range.lower <= 0 || range.upper <= range.lower)) throw new Error("Price range must have positive finite increasing bounds.");
+  if (!state.legs.length) return { probability: null, reason: "Stock-only probability unavailable: no option expiry or volatility reference.", spot: state.scenarioSpot, from: state.scenarioDate, expiry: null, feeAllowance: state.feeAllowance ?? 0, volatility: null, volatilityContractId: null, rate: state.rate, dividendYield: state.dividendYield, basis: "Stock marked at selected scenario spot; no terminal distribution or expiry is inferred.", priceRange: null };
+  let priceRange: { lower: number; upper: number; below: number; between: number; above: number } | null = null;
+  const reference = volatilityReference ?? [...state.legs].sort((a, b) => Math.abs(a.strike - state.scenarioSpot) - Math.abs(b.strike - state.scenarioSpot) || a.contractId.localeCompare(b.contractId))[0];
+  const volatility = effectiveIv(state, reference);
+  const expiry = firstExpiry(state);
+  if (volatilityReference && (!finite(volatility) || volatility <= 0 || typeof reference.contractId !== "string" || !reference.contractId || Date.parse(reference.expiry) !== expiry)) throw new Error("Invalid probability volatility reference");
+  const years = (expiry - Date.parse(state.scenarioDate)) / YEAR_MS;
+  const assumptions = {
+    spot: state.scenarioSpot, from: state.scenarioDate, expiry: reference.expiry,
+    feeAllowance: state.feeAllowance ?? 0,
+    volatility, volatilityContractId: reference.contractId, rate: state.rate, dividendYield: state.dividendYield,
+    basis: `Conditional risk-neutral lognormal model from selected scenario to common expiry. ${volatilityReference ? "Shared quoted-window reference IV" : "Nearest-strike leg IV"} plus global and matching expiry shifts; ties use contract ID. Constant volatility/rate/yield; no smile, jumps, discrete dividends or assignment. Supplied flat cost allowance is deducted; actual broker fees are not estimated. Positive intact-position P/L against held/estimated entry costs, not a forecast, historical win rate, touch probability or trading edge.`,
+  };
+  const result = (probability: number | null, reason: string | null = null) => ({ probability, reason, ...assumptions, priceRange });
+  if (state.legs.some(leg => Date.parse(leg.expiry) !== expiry)) return result(null, "Mixed-expiry probability is not calculated.");
+  const entry = entryCost(state);
+  if (years === 0) {
+    if (range) priceRange = { ...range, below: Number(state.scenarioSpot < range.lower), between: Number(state.scenarioSpot >= range.lower && state.scenarioSpot <= range.upper), above: Number(state.scenarioSpot > range.upper) };
+    return result(expirationValue(state, state.scenarioSpot) - entry - (state.feeAllowance ?? 0) > 0 ? 1 : 0);
+  }
+  const deviation = volatility * Math.sqrt(years);
+  const drift = (state.rate - state.dividendYield - volatility * volatility / 2) * years;
+  if (!Number.isFinite(deviation) || !Number.isFinite(drift) || deviation <= 0) return result(null, "Distribution inputs exceed the numerical range.");
+  const cdf = (spot: number) => spot <= 0 ? 0 : spot === Infinity ? 1 : normalCdf((Math.log(spot) - Math.log(state.scenarioSpot) - drift) / deviation);
+  if (range) {
+    const below = cdf(range.lower), throughUpper = cdf(range.upper);
+    priceRange = { ...range, below, between: Math.max(0, throughUpper - below), above: 1 - throughUpper };
+  }
+  const points = [0, ...new Set(state.legs.map(leg => leg.strike))].sort((a, b) => a - b);
+  let probability = 0;
+  for (let index = 0; index < points.length; index++) {
+    let lower = points[index], upper = points[index + 1] ?? Infinity;
+    const pnl = expirationValue(state, lower) - entry - (state.feeAllowance ?? 0);
+    const slope = state.legs.reduce((total, leg) => total + (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier * (leg.type === "call" ? Number(lower >= leg.strike) : -Number(lower < leg.strike)), state.stock?.shares ?? 0);
+    if (!Number.isFinite(pnl) || !Number.isFinite(slope)) return result(null, "Payoff exceeds the numerical range.");
+    if (slope === 0) { if (pnl <= 0) continue; }
+    else {
+      const root = lower - pnl / slope;
+      if (slope > 0) lower = Math.max(lower, root);
+      else upper = Math.min(upper, root);
+    }
+    if (upper > lower) probability += cdf(upper) - cdf(lower);
+  }
+  return result(Math.max(0, Math.min(1, probability)));
+}
+
+export function expirationDistribution(state: StrategyState) {
+  const facts = expirationProbability(state);
+  const empty = (reason: string | null, pointMass: number | null = null) => ({ points: [] as { spot: number; density: number }[], omittedMass: null as number | null, pointMass, reason });
+  if (facts.reason || facts.expiry === null || facts.volatility === null) return empty(facts.reason);
+  const years = (Date.parse(facts.expiry) - Date.parse(facts.from)) / YEAR_MS;
+  if (years === 0) return empty(null, facts.spot);
+  const deviation = facts.volatility * Math.sqrt(years);
+  const mean = Math.log(facts.spot) + (facts.rate - facts.dividendYield - facts.volatility ** 2 / 2) * years;
+  const lowZ = Math.min(-4, -deviation);
+  const low = Math.exp(mean + lowZ * deviation), high = Math.exp(mean + 4 * deviation);
+  if (!(low > 0) || !Number.isFinite(high) || high <= low) return empty("Distribution curve exceeds the numerical range.");
+  // ponytail: 257 log-spaced samples plus exact mode; adaptive rendering if extreme skew needs finer geometry.
+  const zValues = [...new Set([...Array.from({ length: 257 }, (_, index) => lowZ + (4 - lowZ) * index / 256), -deviation, 0])].sort((a, b) => a - b);
+  const points = zValues.map(z => {
+    const logSpot = mean + z * deviation;
+    return { spot: Math.exp(logSpot), density: Math.exp(-z * z / 2 - Math.log(2 * Math.PI) / 2 - logSpot - Math.log(deviation)) };
+  });
+  if (points.some(point => !Number.isFinite(point.density)) || !points.some(point => point.density > 0)) return empty("Distribution density exceeds the numerical range.");
+  return { points, omittedMass: normalCdf(lowZ) + normalCdf(-4), pointMass: null, reason: null };
+}
+
+export function scenarioFacts(state: StrategyState) {
+  assertValid(state);
+  const at = Date.parse(state.scenarioDate);
+  const later = state.legs.length ? Math.min(at + DAY_MS, firstExpiry(state)) : at;
+  const current = strategyAt(state, state.scenarioSpot, at);
+  const future = later > at ? strategyAt(state, state.scenarioSpot, later) : null;
+  const intrinsicValue = state.legs.reduce((sum, item) => sum + intrinsic(item, state.scenarioSpot).price * (item.side === "long" ? 1 : -1) * item.contracts * item.multiplier, 0);
+  const stockValue = (state.stock?.shares ?? 0) * state.scenarioSpot;
+  return {
+    date: state.scenarioDate,
+    valuationModel: state.valuationModel ?? "european-bsm-v1",
+    spot: state.scenarioSpot,
+    basis: !state.legs.length ? "Stock-only mark at the selected scenario spot. P/L subtracts held entry cost and the supplied allowance once; no option expiry, dividend, financing, borrow or assignment cashflows are modeled." : (state.valuationModel === "american-crr-1024-v1"
+      ? "American CRR 1024-step model at the scenario date/spot/IV with continuous dividend yield; not entry cost or an executable quote. Early-exercise valuation does not model assignment, discrete dividends or lifecycle cashflows."
+      : "European model at the scenario date/spot/IV; not entry cost or an executable quote. Model value minus intrinsic can be negative under European carry assumptions.") + " Within the selected model, at fixed contract terms, scenario spot/date, effective IV, rate and yield, option valuation has no historical price-path input. Position P/L additionally uses signed quantities, held entry costs and the allowance. Missing mixed-expiry extrema are an engine limitation, not evidence of path dependence or mathematical impossibility.",
+    valuation: {
+      signedEntryEstimate: rounded(entryCost(state)),
+      ...(state.feeAllowance !== undefined ? { feeAllowance: state.feeAllowance } : {}),
+      signedModelValue: rounded(current.value),
+      signedIntrinsicValue: rounded(intrinsicValue),
+      signedModelResidual: rounded(current.value - stockValue - intrinsicValue),
+      ...(state.stock ? { signedStockValue: rounded(stockValue), stockBasis: "Held per-share cost assumption, not a verified fill. Stock marked at scenario spot; no dividend, financing, borrow or assignment cashflows." } : {}),
+      modelPnl: rounded(current.pnl),
+      entryBasis: state.pricing?.entryMode === "fixed" ? "User-held entry costs; not broker-verified fills or tax basis." : state.pricing?.mode === "market"
+        ? state.pricing.basis === "natural" ? "Natural estimate: buy at ask / sell at bid; not a fill." : "Midpoint quote entry estimate; not a fill."
+        : "Sample/manual entry estimate; not a fill.",
+    },
+    legs: state.legs.map(item => {
+      const priced = priceLeg(state, item, state.scenarioSpot, at);
+      const value = priced.price;
+      const signedContracts = (item.side === "long" ? 1 : -1) * item.contracts * item.multiplier;
+      const intrinsicValue = intrinsic(item, state.scenarioSpot).price;
+      return {
+        legId: item.id,
+        greeks: {
+          delta: rounded(priced.delta * signedContracts),
+          gamma: rounded(priced.gamma * signedContracts),
+          theta: rounded(priced.theta * signedContracts),
+          vega: rounded(priced.vega * signedContracts),
+          rho: rounded(priced.rho * signedContracts),
+        },
+        moneyness: state.scenarioSpot === item.strike ? "at-the-money" : intrinsicValue > 0 ? "in-the-money" : "out-of-the-money",
+        modelValuePerShare: rounded(value),
+        intrinsicPerShare: rounded(intrinsicValue),
+        modelValueMinusIntrinsicPerShare: rounded(value - intrinsicValue),
+        modelResidualFractionOfModelValue: value === 0 ? null : rounded((value - intrinsicValue) / value),
+      };
+    }),
+    timeStep: future ? {
+      date: new Date(later).toISOString(),
+      calendarDays: (later - at) / DAY_MS,
+      pnl: rounded(future.pnl),
+      changeInValue: rounded(future.pnl - current.pnl),
+      thetaAtStart: rounded(current.theta),
+      thetaAtEnd: rounded(future.theta),
+      assumptions: "Full model repricing with spot, IV, rate and yield unchanged. Capped at first expiry; not a realized forecast or constant theta times days.",
+    } : null,
+  };
+}
+
+export function calculateStrategy(state: StrategyState): StrategyMetrics {
+  const scenario = evaluateScenario(state);
+  const expiries = new Set(state.legs.map((item) => item.expiry));
+  const mode = !state.legs.length ? "spot" : expiries.size === 1 ? "expiration" : "first-expiry";
+  const entry = entryCost(state);
+  const strikes = state.legs.map((item) => item.strike);
+  const domainMin = Math.max(0, Math.min(state.spot, ...strikes) * 0.5);
+  const domainMax = Math.max(state.spot, ...strikes) * 1.5;
+  const modeled = payoffSeries(state, domainMin, domainMax, 200);
+  const low = modeled.reduce((a, b) => b.pnl < a.pnl ? b : a);
+  const high = modeled.reduce((a, b) => b.pnl > a.pnl ? b : a);
+  const exact = mode !== "first-expiry" ? exactExpiration(state) : null;
+
+  return {
+    entryLabel: entry >= 0 ? "Debit" : "Credit",
+    entryAmount: rounded(Math.abs(entry)),
+    entryAccounting: {
+      grossEntryCashFlow: rounded(-entry),
+      costAllowance: rounded(state.feeAllowance ?? 0),
+      netEntryCashFlowAfterAllowance: rounded(-entry - (state.feeAllowance ?? 0)),
+      convention: "USD; positive means cash received, negative means cash paid. Gross entry excludes the supplied cost allowance; net subtracts it once. Allowance is a modeled deduction, not a verified fill or broker fee.",
+    },
+    maxProfit: exact?.maxProfit ?? null,
+    maxLoss: exact?.maxLoss ?? null,
+    breakevens: exact?.breakevens ?? [],
+    delta: scenario.delta,
+    gamma: scenario.gamma,
+    theta: scenario.theta,
+    vega: scenario.vega,
+    rho: scenario.rho,
+    mode,
+    modeledLow: low.pnl,
+    modeledHigh: high.pnl,
+    sampledRange: { kind: "sampled-model-range", date: mode === "spot" ? state.scenarioDate : new Date(firstExpiry(state)).toISOString(), spotMin: domainMin, spotMax: domainMax, pointCount: modeled.length, low, high },
+    scenarioPnl: scenario.pnl,
+    ...(mode === "first-expiry" ? { conditionalTail: firstExpiryTail(state) } : {}),
+  };
+}
+
+function firstExpiryContext(state: StrategyState, input: { min: number; max: number; tolerance: number; maxEvaluations: number }) {
+  assertValid(state);
+  if (!input || !finite(input.min) || input.min < 0 || !finite(input.max) || input.max <= input.min || !finite(input.tolerance) || input.tolerance <= 0 || !Number.isInteger(input.maxEvaluations) || input.maxEvaluations < 2 || input.maxEvaluations > 1024) throw new Error("Invalid first-expiry range request");
+  const quantities = state.legs.map(leg => (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier);
+  if (!quantities.every(Number.isSafeInteger) || !Number.isSafeInteger(quantities.reduce((sum, quantity) => sum + Math.abs(quantity), Math.abs(state.stock?.shares ?? 0)))) throw new Error("Unsafe first-expiry range quantities");
+  const at = firstExpiry(state), cost = entryCost(state) + (state.feeAllowance ?? 0), shares = state.stock?.shares ?? 0;
+  const anchors = [...new Set([input.min, input.max, ...state.legs.map(leg => leg.strike).filter(strike => strike > input.min && strike < input.max)])].sort((a, b) => a - b);
+  if (anchors.length > input.maxEvaluations || !finite(cost)) throw new Error("First-expiry range budget or costs invalid");
+  type Point = { spot: number; pnl: number; prices: number[] };
+  const cache = new Map<number, Point>();
+  const point = (spot: number) => {
+    const cached = cache.get(spot);
+    if (cached) return cached;
+    const prices = state.legs.map(leg => priceLeg(state, leg, spot, at, true).price);
+    const pnl = prices.reduce((sum, price, i) => sum + quantities[i] * price, shares * spot - cost);
+    if (![...prices, pnl].every(Number.isFinite)) throw new Error("First-expiry range outside numerical domain");
+    const value = { spot, pnl, prices };
+    cache.set(spot, value);
+    return value;
+  };
+  const points = anchors.map(point);
+  const interval = (a: Point, b: Point, previous?: Point, next?: Point) => {
+    let lowA = shares * a.spot - cost, lowB = shares * b.spot - cost;
+    let highA = lowA, highB = lowB;
+    state.legs.forEach((leg, i) => {
+      const left = quantities[i] * a.prices[i], right = quantities[i] * b.prices[i];
+      const expired = Date.parse(leg.expiry) <= at;
+      let supportA = Math.min(a.prices[i], b.prices[i]), supportB = supportA;
+      if (!expired) {
+        const support = (candidateA: number, candidateB: number) => {
+          if (![candidateA, candidateB].every(Number.isFinite)) throw new Error("First-expiry range outside numerical domain");
+          if (candidateA / 2 + candidateB / 2 > supportA / 2 + supportB / 2) { supportA = candidateA; supportB = candidateB; }
+        };
+        if (previous) support(a.prices[i], a.prices[i] + (a.prices[i] - previous.prices[i]) / (a.spot - previous.spot) * (b.spot - a.spot));
+        if (next) support(b.prices[i] - (next.prices[i] - b.prices[i]) / (next.spot - b.spot) * (b.spot - a.spot), b.prices[i]);
+      }
+      lowA += expired || quantities[i] < 0 ? left : quantities[i] * supportA;
+      lowB += expired || quantities[i] < 0 ? right : quantities[i] * supportB;
+      highA += expired || quantities[i] > 0 ? left : quantities[i] * supportA;
+      highB += expired || quantities[i] > 0 ? right : quantities[i] * supportB;
+    });
+    if (![lowA, lowB, highA, highB].every(Number.isFinite)) throw new Error("First-expiry range outside numerical domain");
+    return { a, b, lower: Math.min(lowA, lowB, a.pnl, b.pnl), upper: Math.max(highA, highB, a.pnl, b.pnl), interiorExcluded: lowA >= 0 && lowB >= 0 && (lowA > 0 || lowB > 0) || highA <= 0 && highB <= 0 && (highA < 0 || highB < 0) };
+  };
+  return { at, cache, point, points, interval };
+}
+
+export function firstExpiryRange(state: StrategyState, input: { min: number; max: number; tolerance: number; maxEvaluations: number }) {
+  const { at, cache, point, points, interval } = firstExpiryContext(state, input);
+  let minimum = points.reduce((best, value) => value.pnl < best.pnl ? value : best);
+  let maximum = points.reduce((best, value) => value.pnl > best.pnl ? value : best);
+  let lower = 0, upper = 0;
+  while (true) {
+    const intervals = points.slice(1).map((value, i) => interval(points[i], value, points[i - 1], points[i + 2]));
+    lower = Math.min(...intervals.map(value => value.lower), minimum.pnl);
+    upper = Math.max(...intervals.map(value => value.upper), maximum.pnl);
+    if (minimum.pnl - lower <= input.tolerance && upper - maximum.pnl <= input.tolerance || cache.size >= input.maxEvaluations) break;
+    let selected = -1, threat = -Infinity;
+    intervals.forEach((value, i) => {
+      const midpoint = value.a.spot + (value.b.spot - value.a.spot) / 2;
+      const gap = Math.max(minimum.pnl - value.lower, value.upper - maximum.pnl);
+      if (midpoint > value.a.spot && midpoint < value.b.spot && gap > threat) { selected = i; threat = gap; }
+    });
+    if (selected < 0) throw new Error("First-expiry range exceeds numerical spot resolution");
+    const current = intervals[selected];
+    const midpoint = point(current.a.spot + (current.b.spot - current.a.spot) / 2);
+    if (midpoint.pnl < minimum.pnl) minimum = midpoint;
+    if (midpoint.pnl > maximum.pnl) maximum = midpoint;
+    points.splice(selected + 1, 0, midpoint);
+  }
+  return {
+    date: new Date(at).toISOString(), spotMin: input.min, spotMax: input.max, tolerance: input.tolerance, evaluations: cache.size,
+    status: minimum.pnl - lower <= input.tolerance && upper - maximum.pnl <= input.tolerance ? "tolerance-met" as const : "budget-exhausted" as const,
+    minimum: { lower, upper: minimum.pnl, at: { spot: minimum.spot, pnl: minimum.pnl } },
+    maximum: { lower: maximum.pnl, upper, at: { spot: maximum.spot, pnl: maximum.pnl } },
+    basis: "Conditional intact-position first-expiry P/L on the stated finite spot domain with fixed effective IV, rate and continuous yield. Signed per-leg monotonic endpoint and convex secant enclosures; tolerance measures the remaining search gap, excluding pricing approximation and floating-point roundoff. Not certified numerical bounds, out-of-domain extrema, lifetime risk, assignment, settlement or executable liquidation. Includes signed stock, held entry costs and supplied allowance once.",
+  };
+}
+
+export function firstExpiryBreakevens(state: StrategyState, input: { min: number; max: number; spotTolerance: number; maxEvaluations: number }) {
+  const { at, cache, point, points, interval } = firstExpiryContext(state, { ...input, tolerance: input?.spotTolerance });
+  type Band = { lower: number; upper: number; lowerPnl: number; upperPnl: number; kind: "sign-changing" | "unresolved" };
+  let candidates: Band[] = [];
+  while (true) {
+    const leaves = points.slice(1).map((value, i) => ({ ...interval(points[i], value, points[i - 1], points[i + 2]), index: i }))
+      .filter(value => value.lower <= 0 && value.upper >= 0 && !value.interiorExcluded);
+    candidates = [];
+    for (const leaf of leaves) {
+      const previous = candidates.at(-1);
+      if (previous && previous.upper === leaf.a.spot) { previous.upper = leaf.b.spot; previous.upperPnl = leaf.b.pnl; }
+      else candidates.push({ lower: leaf.a.spot, upper: leaf.b.spot, lowerPnl: leaf.a.pnl, upperPnl: leaf.b.pnl, kind: "unresolved" });
+    }
+    for (const band of candidates) if (band.lowerPnl < 0 && band.upperPnl > 0 || band.lowerPnl > 0 && band.upperPnl < 0) band.kind = "sign-changing";
+    const wide = candidates.filter(band => band.upper - band.lower > input.spotTolerance);
+    if (!wide.length || cache.size >= input.maxEvaluations) break;
+    let selected: typeof leaves[number] | undefined;
+    for (const leaf of leaves) {
+      const middle = leaf.a.spot + (leaf.b.spot - leaf.a.spot) / 2;
+      if (middle > leaf.a.spot && middle < leaf.b.spot && wide.some(band => leaf.a.spot >= band.lower && leaf.b.spot <= band.upper)
+        && (!selected || leaf.b.spot - leaf.a.spot > selected.b.spot - selected.a.spot)) selected = leaf;
+    }
+    if (!selected) throw new Error("First-expiry breakevens exceed numerical spot resolution");
+    points.splice(selected.index + 1, 0, point(selected.a.spot + (selected.b.spot - selected.a.spot) / 2));
+  }
+  return {
+    date: new Date(at).toISOString(), spotMin: input.min, spotMax: input.max, spotTolerance: input.spotTolerance, evaluations: cache.size,
+    status: candidates.every(band => band.upper - band.lower <= input.spotTolerance) ? "spot-tolerance-met" as const : "budget-exhausted" as const,
+    evaluatedZeros: points.filter(value => value.pnl === 0).map(value => value.spot), candidates,
+    basis: "Conditional intact-position first-expiry numerical breakeven candidates only within the stated spot domain, with fixed effective IV, model, rate and continuous yield. Signed stock, held entry costs and allowance are included once. Sign-changing bands do not establish root uniqueness; unresolved bands may contain crossings, tangencies, flat zero regions or no root. Evaluated zeros are numerical samples, not certified exact roots. Spot tolerance limits merged candidate width, not pricing error. Not certified root isolation or complete mathematical root counts: pricing approximation and floating-point roundoff are excluded. No out-of-domain, lifetime, assignment, settlement or execution claims.",
+  };
+}
+
+function firstExpiryTail(state: StrategyState): NonNullable<StrategyMetrics["conditionalTail"]> {
+  const at = firstExpiry(state), model = state.valuationModel ?? "european-bsm-v1";
+  const years = (Math.max(...state.legs.map(leg => Date.parse(leg.expiry))) - at) / YEAR_MS;
+  const carry = model === "american-crr-1024-v1" ? Math.min(0, state.dividendYield) : state.dividendYield;
+  const exponent = -carry * years;
+  let baseSlope = state.stock?.shares ?? 0, futureCalls = 0;
+  let safeQuantities = true;
+  let intercept = -entryCost(state) - (state.feeAllowance ?? 0);
+  for (const leg of state.legs) {
+    const quantity = (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier;
+    safeQuantities &&= Number.isSafeInteger(quantity);
+    if (leg.type !== "call") continue;
+    const future = Date.parse(leg.expiry) > at;
+    baseSlope += quantity;
+    if (future) futureCalls += quantity;
+    safeQuantities &&= [baseSlope, futureCalls].every(Number.isSafeInteger);
+    const discount = !future || (model === "american-crr-1024-v1" && state.dividendYield > 0) ? 1
+      : model === "american-crr-1024-v1" && state.dividendYield === 0 ? Math.exp(Math.min(0, -state.rate * years)) : Math.exp(-state.rate * years);
+    intercept -= quantity * leg.strike * discount;
+  }
+  // Two-expiry invariant: all surviving calls share carry; aggregate before cancellation.
+  const correction = futureCalls === 0 ? 0 : futureCalls * Math.expm1(exponent);
+  const slope = baseSlope + correction;
+  const zeroSpotPnl = strategyValue(state, 0, at) - entryCost(state) - (state.feeAllowance ?? 0);
+  const finiteLimit = baseSlope === 0 && (futureCalls === 0 || carry === 0);
+  const resolved = [slope, intercept, zeroSpotPnl].every(Number.isFinite) && safeQuantities
+    && (finiteLimit || Math.abs(slope) > 8 * Number.EPSILON * (Math.abs(baseSlope) + Math.abs(correction)));
+  return {
+    date: new Date(at).toISOString(), model,
+    zeroSpotPnl: resolved ? rounded(zeroSpotPnl) : null,
+    slope: resolved ? slope : null, intercept: resolved ? intercept : null,
+    outcome: !resolved ? "numerically-unresolved" : finiteLimit ? "finite-limit" : slope < 0 ? "loss-unbounded" : "profit-unbounded",
+    basis: "Conditional intact-position P/L at first expiry. Expiring options use intrinsic; surviving options use the selected model with fixed effective IV, rate and continuous yield. Upper-tail P/L approaches slope times spot plus intercept as spot tends to infinity; it need not describe practical prices. Zero-spot P/L is a separate endpoint. A finite upper-tail limit is not a maximum or a loss cap; interior extrema are not established. Includes signed shares, entry costs and supplied allowance once. Not lifetime risk, executable liquidation, discrete dividends, assignment or settlement cashflows.",
+  };
+}
+
+export class CandidateSearchLimitError extends Error {
+  constructor() { super("Candidate search exceeds 300,000 structures; narrow the quoted strike/expiry window"); }
+}
+
+export function searchCandidates(context: StrategyState, snapshot: MarketSnapshot, input: { targetSpot: number; targetDate: string; maxLoss: number; feeAllowance: number; basis: PricingBasis; objective: "target-pnl" | "return-on-risk" | "expiry-probability" }) {
+  if (!input || Object.keys(input).sort().join() !== "basis,feeAllowance,maxLoss,objective,targetDate,targetSpot" || !finite(input.targetSpot) || input.targetSpot <= 0 || input.targetSpot > 1_000_000 || !finite(input.maxLoss) || input.maxLoss <= 0 || !finite(input.feeAllowance) || input.feeAllowance < 0 || !["mid", "natural"].includes(input.basis) || !["target-pnl", "return-on-risk", "expiry-probability"].includes(input.objective) || typeof input.targetDate !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(input.targetDate) || !Number.isFinite(Date.parse(input.targetDate)) || new Date(input.targetDate).toISOString() !== (input.targetDate.includes(".") ? input.targetDate : input.targetDate.replace("Z", ".000Z")) || Date.parse(input.targetDate) < Date.parse(snapshot.retrievedAt)) throw new Error("Invalid candidate search request");
+  if (snapshot.historical || snapshot.contracts.length > 100 || new Set(snapshot.contracts.map(c => c.contractId)).size !== snapshot.contracts.length || validateMarketStrategy(context, snapshot).length) throw new Error("Candidate snapshot unavailable or invalid");
+  const contracts = [...snapshot.contracts].filter(c => Date.parse(c.expiry) >= Date.parse(input.targetDate)).sort((a, b) => a.contractId.localeCompare(b.contractId));
+  const base = (legs: OptionLeg[]): StrategyState => ({
+    id: "candidate", version: context.version, name: "Quoted candidate", underlying: snapshot.underlying,
+    valuationModel: context.valuationModel, spot: snapshot.spot, valuationTimestamp: snapshot.retrievedAt,
+    rate: context.rate, dividendYield: context.dividendYield, ivShift: context.ivShift,
+    scenarioSpot: input.targetSpot, scenarioDate: input.targetDate, feeAllowance: input.feeAllowance,
+    pricing: { mode: "market", snapshotId: snapshot.id, basis: input.basis }, legs,
+  });
+  const longLegs = new Map<string, OptionLeg>();
+  for (const contract of contracts) {
+    if (!finite(contract.bid) || !finite(contract.ask) || contract.bid < 0 || contract.ask <= 0 || contract.ask < contract.bid || !Number.isFinite(Date.parse(contract.quoteAsOf))) throw new Error("Invalid candidate quote");
+    const leg = marketLeg(contract, "long", 1, contract.contractId, input.basis), state = base([leg]);
+    assertValid(state);
+    longLegs.set(contract.contractId, leg);
+  }
+  const groups = [...new Set(contracts.map(c => c.expiry))].map(expiry => ({
+    calls: contracts.filter(c => c.expiry === expiry && c.type === "call").sort((a, b) => a.strike - b.strike),
+    puts: contracts.filter(c => c.expiry === expiry && c.type === "put").sort((a, b) => a.strike - b.strike),
+  }));
+  const equalWings = (a: MarketContract, b: MarketContract, c: MarketContract) => Math.round(a.strike * 1000) + Math.round(c.strike * 1000) === 2 * Math.round(b.strike * 1000);
+  let planned = contracts.length;
+  for (const { calls, puts } of groups) {
+    for (const put of puts) planned += calls.filter(call => put.strike <= call.strike).length;
+    for (const group of [calls, puts]) {
+      for (const long of group) planned += group.filter(short => short.strike !== long.strike).length;
+      for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) for (let k = j + 1; k < group.length; k++) if (equalWings(group[i], group[j], group[k])) planned += 2;
+    }
+    for (let q = 1; q < puts.length; q++) for (let c = 0; c < calls.length; c++) if (puts[q].strike <= calls[c].strike) planned += 2 * q * (calls.length - c - 1);
+  }
+  // ponytail: bounded synchronous enumeration; partition search if larger windows become necessary.
+  if (planned > 300_000) throw new CandidateSearchLimitError();
+  const prices = new Map([...longLegs].map(([id, leg]) => [id, priceLeg(base([leg]), leg, input.targetSpot, Date.parse(input.targetDate), true).price]));
+  const references = new Map(groups.map(({ calls, puts }) => {
+    const reference = [...calls, ...puts].sort((a, b) => Math.abs(a.strike - snapshot.spot) - Math.abs(b.strike - snapshot.spot) || a.contractId.localeCompare(b.contractId))[0];
+    return [reference.expiry, reference];
+  }));
+  const probabilityFor = (state: StrategyState) => probabilityFromValidatedState({ ...state, scenarioSpot: snapshot.spot, scenarioDate: snapshot.retrievedAt }, undefined, references.get(state.legs[0].expiry)!);
+  const ranked: Array<{ id: string; state: StrategyState; score: number; pnl: number }> = [];
+  const compare = (a: typeof ranked[number], b: typeof ranked[number]) => b.score - a.score || a.id.localeCompare(b.id);
+  let evaluated = 0, eligible = 0, excludedRisk = 0, excludedBudget = 0;
+  const evaluate = (legs: OptionLeg[]) => {
+    evaluated++;
+    const state = base(legs), loss = exactExpiration(state).maxLoss;
+    if (loss === null || loss <= 0) { excludedRisk++; return; }
+    if (loss > input.maxLoss) { excludedBudget++; return; }
+    const pnl = rounded(legs.reduce((sum, leg) => sum + prices.get(leg.contractId)! * (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier, 0) - entryCost(state) - input.feeAllowance);
+    const score = input.objective === "expiry-probability" ? probabilityFor(state).probability : input.objective === "target-pnl" ? pnl : pnl / loss;
+    if (!finite(pnl) || !finite(score)) throw new Error("Candidate numerical range exceeded");
+    eligible++;
+    ranked.push({ id: legs.map(leg => `${leg.side}:${leg.contractId}${leg.contracts === 1 ? "" : `*${leg.contracts}`}`).join("|"), state, score, pnl });
+    ranked.sort(compare);
+    if (ranked.length > 5) ranked.pop();
+  };
+  for (const long of contracts) {
+    const leg = longLegs.get(long.contractId)!;
+    evaluate([leg]);
+    for (const short of contracts) if (short.type === long.type && short.expiry === long.expiry && short.strike !== long.strike) evaluate([leg, marketLeg(short, "short", 1, short.contractId, input.basis)]);
+  }
+  for (const { calls, puts } of groups) {
+    for (const put of puts) for (const call of calls) if (put.strike <= call.strike) evaluate([
+      longLegs.get(put.contractId)!, longLegs.get(call.contractId)!,
+    ]);
+    for (const group of [calls, puts]) for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) for (let k = j + 1; k < group.length; k++) {
+      if (equalWings(group[i], group[j], group[k])) for (const side of ["long", "short"] as const) evaluate([
+        marketLeg(group[i], side, 1, group[i].contractId, input.basis),
+        marketLeg(group[j], side === "long" ? "short" : "long", 2, group[j].contractId, input.basis),
+        marketLeg(group[k], side, 1, group[k].contractId, input.basis),
+      ]);
+    }
+    for (let p = 0; p < puts.length; p++) for (let q = p + 1; q < puts.length; q++) for (let c = 0; c < calls.length; c++) {
+      if (puts[q].strike > calls[c].strike) continue;
+      for (let d = c + 1; d < calls.length; d++) for (const side of ["long", "short"] as const) evaluate([
+        marketLeg(puts[p], side, 1, puts[p].contractId, input.basis),
+        marketLeg(puts[q], side === "long" ? "short" : "long", 1, puts[q].contractId, input.basis),
+        marketLeg(calls[c], side === "long" ? "short" : "long", 1, calls[c].contractId, input.basis),
+        marketLeg(calls[d], side, 1, calls[d].contractId, input.basis),
+      ]);
+    }
+  }
+  return {
+    snapshotId: snapshot.id, baseVersion: context.version, model: context.valuationModel ?? "european-bsm-v1", request: { ...input },
+    coverage: "All quoted long calls/puts, same-expiry long straddles/strangles (put strike at or below call), verticals, equal-wing call/put butterflies (1:2:1) in both directions, and standard/inverse iron butterflies/condors including unequal wings in this window. Other legs use one contract each. No stock, arbitrary ratios, mixed-expiry or other families.",
+    assumptions: "New positions at dated quote entries, not held-position adjustments or executable fills. Expiry-specific IV shifts reset to zero; global IV shift is retained. Conditional target model P/L, not expected return or trading edge. Loss budget applies to intact expiration payoff, not margin or assignment cashflows.",
+    probabilityBasis: "Snapshot spot/time to each expiry, using one shared nearest-spot quoted contract IV per expiry (contract ID breaks ties), plus global IV shift. Risk-neutral lognormal positive intact-expiry P/L after allowance, not forecast win rate, expected return, touch or assignment probability. Different expiries have different horizons; high probability can accompany small gains and large losses.",
+    planned, evaluated, eligible, excludedRisk, excludedBudget, excludedBeforeTarget: snapshot.contracts.length - contracts.length,
+    candidates: ranked.slice(0, 5).map(({ id, state, score }) => ({ id, state, score, metrics: calculateStrategy(state), probability: probabilityFor(state) })),
+  };
+}

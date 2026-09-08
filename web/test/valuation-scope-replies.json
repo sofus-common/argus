@@ -1,0 +1,38 @@
+{
+  "preview": {
+    "text": "No. The American chart inspection is strictly a read-only preview evaluated via a 1024-step Cox-Ross-Rubinstein (CRR) tree at the scenario date (2026-09-01T20:00:00.000Z). It evaluates seven hypothetical checkpoints (e.g., P/L of -$9.28 at spot $100, -$233.41 at $90, and +$242.18 at $110) without altering canonical metrics.\n\nCanonical metrics—including the -$9.32 scenario P/L, Greeks (delta 39.91, gamma 0.36), and expiration payoff bounds ($240 maximum loss, $260 maximum profit)—remain governed by the European Black-Scholes-Merton model (`european-bsm-v1`).\n\nAdditionally, the American preview does not compute or imply early-exercise or assignment probabilities. The engine's 46.80% expiration probability is exclusively a terminal European risk-neutral calculation reflecting positive intact-position P/L at the September 18, 2026 expiry. It is not an early assignment chance, touch probability, or forecast.",
+    "assumptions": [
+      "Chart checkpoints represent American 1024-step CRR valuations at 2026-09-01T20:00:00.000Z with flat rate (4.0%), dividend yield (1.2%), and leg IVs (22.0%), excluding discrete dividends.",
+      "Canonical metrics and probabilities remain strictly European BSM intact-position models at expiration."
+    ],
+    "objections": [
+      "American preview checkpoints do not provide early-exercise triggers, assignment probabilities, or executable multi-leg execution prices.",
+      "A 46.80% expiration probability measures terminal risk-neutral profit probability at expiry, not the likelihood of touching strikes or being assigned early."
+    ],
+    "operations": [],
+    "suggested_prompts": [
+      "How does the American CRR P/L compare to European P/L across the seven spot checkpoints?",
+      "What early assignment risks exist for the short $103 call prior to expiry?"
+    ],
+    "risk_classification": "bounded",
+    "evidence_ids": []
+  },
+  "spread": {
+    "text": "No. Aggregate option bid-ask spread width does not establish actual transaction costs, guaranteed fills, or executable net profit.\n\nKey distinctions:\n• Quoted spread width ($40 total: $20 on the 98 call, $20 on the 103 call) is simply the sum of separate leg ask-minus-bid widths. It does not measure multi-leg package pricing, order-book depth, or fill probability.\n• Mid-to-natural difference ($20) measures midpoint versus natural liquidation (selling long at bid $3.70, buying short at ask $1.50), not round-trip execution cost.\n• Modeled P/L and bounds (max loss $240, max profit $260, breakeven $100.40) are based on estimated midpoint entries ($3.80 debit and $1.40 credit) without deducted slippage or broker fees. They are not realized proceeds.\n• Data context: Under synthetic evaluation mode, contract quotes and widths are fictional benchmarks, not executable market liquidity.",
+    "assumptions": [
+      "Position remains intact to expiration with European-style settlement assumptions.",
+      "Calculations use midpoint entry estimates rather than filled multi-leg execution prices."
+    ],
+    "objections": [
+      "Summing individual leg bid-ask widths ignores complex-order routing, which can fill inside leg widths.",
+      "Midpoint-based P/L overstates real-world return if liquidating simultaneously across natural bid/ask marks."
+    ],
+    "operations": [],
+    "suggested_prompts": [
+      "What would the position value be if liquidated at natural bid/ask prices today?",
+      "How does a flat fee allowance impact the spread's breakeven and maximum profit?"
+    ],
+    "risk_classification": "bounded",
+    "evidence_ids": []
+  }
+}

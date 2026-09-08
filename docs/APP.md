@@ -1,5 +1,19 @@
 # App contract
 
+## Scope notice - 2026-09-05
+
+The contract below belongs to the original research evidence viewer. It does
+not define completion of the current AI-native options workspace. Current
+product scope is the AI-native options workspace described in `../README.md`,
+together with the user's full OptionStrat-quality objective. Detailed local
+planning remains under `.sdlc/` and is not included in this source release.
+The initial prototype's non-goals must not be
+used to exclude real-time data, broader analytics or secure private hosting.
+The research viewer remains a separate existing feature; this notice does not
+remove or change it.
+
+## Original research-viewer contract
+
 The app is a read-only evidence viewer, not an agent control room. Its first
 screen answers: **did AI add value over the same quant strategy?** All displayed
 values come from event-ledger and claim-manifest artifacts.

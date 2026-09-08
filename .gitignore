@@ -5,6 +5,7 @@ private/
 .venv/
 __pycache__/
 .pytest_cache/
+.pytest-tmp/
 data/
 artifacts/
 runs/
@@ -19,3 +20,12 @@ logs/
 # local Alpaca CLI binary (download from github.com/alpacahq/cli/releases)
 bin/
 *.egg-info/
+.npm-cache/
+node_modules/
+web/node_modules/
+web/.pnpm-store/
+web/dist/
+web/*.tsbuildinfo
+web/.wrangler/
+web/.dev.vars*
+!web/.dev.vars.example

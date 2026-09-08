@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "argus-options-lab",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-09-04",
+  "workers_dev": false,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "FEED", "class_name": "QuoteFeed" }]
+  },
+  "migrations": [{ "tag": "v1-feed", "new_sqlite_classes": ["QuoteFeed"] }],
+  "secrets": {
+    "required": ["OPENROUTER_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "FRED_API_KEY", "EXA_AI_KEY", "TASTYTRADE_CLIENT_ID", "TASTYTRADE_CLIENT_SECRET", "TASTYTRADE_REFRESH_TOKEN", "THETADATA_TERMINAL_URL"]
+  },
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "ratelimits": [
+    {
+      "name": "SAVED_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    },
+    {
+      "name": "SPARRING_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ]
+}

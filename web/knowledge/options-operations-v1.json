@@ -1,0 +1,38 @@
+{
+  "version": "options-operations-v1",
+  "reviewedAt": "2026-09-07",
+  "scope": "Application-reviewed educational reference, not broker policy, contract verification or evidence of an event. Early exercise rules apply conditionally to American-style contracts; share delivery requires verified physical settlement and deliverables. User hypotheticals remain hypothetical. Annualized dividend yield does not establish an ex-dividend date or cash dividend. Actual event facts must come from separately supplied dated evidence.",
+  "verifiedAccountFacts": { "brokerExerciseCutoff": null, "forcedLiquidationPolicy": null },
+  "rules": [
+    {
+      "id": "exercise-cutoff",
+      "fact": "Exercise instructions are subject to the holder's brokerage cutoff for that day, which is not universally market close. An exact broker cutoff is unknown without its applicable policy. Exercise to obtain a dividend must precede the ex-dividend date, subject to that cutoff.",
+      "sources": ["https://www.optionseducation.org/optionsoverview/exercising-options", "https://www.optionseducation.org/referencelibrary/faq/options-exercise"]
+    },
+    {
+      "id": "independent-legs",
+      "fact": "Assignment of a short option does not automatically exercise an offsetting long option. Closing moneyness alone cannot guarantee matched exercise or assignment outcomes; contrary instructions and after-hours price changes matter. A terminal payoff calculation is not a statement that physical settlement occurs simultaneously at market close.",
+      "sources": ["https://www.optionseducation.org/strategies/all-strategies/bull-call-spread-debit-call-spread"]
+    },
+    {
+      "id": "dividend-condition",
+      "fact": "Assignment alone does not establish a dividend liability. Dividend exposure depends on the actual ex-dividend date, exercise timing and resulting share inventory. Existing shares may meet delivery; a short share position across the relevant ex-dividend date may owe a payment in lieu of the dividend.",
+      "sources": ["https://www.optionseducation.org/referencelibrary/faq/options-exercise"]
+    },
+    {
+      "id": "assigned-inventory",
+      "fact": "For physically settled options, assignment changes share inventory according to the verified deliverable and existing holdings. The assigned option is no longer an open option leg; other options remain unless separately closed or exercised. A remaining long call can still hedge short shares. Broker liquidation decisions, timing, execution prices and resulting losses cannot be established from a payoff chart.",
+      "sources": ["https://www.optionseducation.org/referencelibrary/faq/options-assignment", "https://www.optionseducation.org/strategies/all-strategies/long-call-calendar-spread-call-horizontal"]
+    },
+    {
+      "id": "closing-value",
+      "fact": "Selling a long option may recover available time value, subject to executable quotes, liquidity and costs; exercising forfeits remaining time value. Closing realizes available execution values, not guaranteed model values or plotted payoff bounds. Following short-call assignment, closing the exposure means addressing the actual shares and remaining option, not an already-assigned short option.",
+      "sources": ["https://www.optionseducation.org/referencelibrary/faq/options-exercise", "https://www.optionseducation.org/referencelibrary/faq/general-information"]
+    },
+    {
+      "id": "roll-risk",
+      "fact": "Rolling closes an existing option position and opens a new one with a different strike and/or expiration. It does not erase realized P/L, guarantee recovery, or preserve the original position's modeled loss bound. Any remaining or new position requires its own risk and cost assessment.",
+      "sources": ["https://www.optionseducation.org/referencelibrary/optionsglossary?filter=R"]
+    }
+  ]
+}

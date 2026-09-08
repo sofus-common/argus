@@ -1,0 +1,12 @@
+{
+  "name": "argus-local-storage",
+  "compatibility_date": "2026-09-04",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "argus-local",
+      "database_id": "argus-local",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

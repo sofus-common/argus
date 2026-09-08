@@ -1,0 +1,19 @@
+{
+  "text": "Under the requested scenario at spot $103 on 2026-09-08T20:00:00.000Z with a +5.0 percentage point bump to the back month:\n\n• Front-month call (2026-09-11): effective IV remains 25.0% (0.20 base + 0.03 global + 0.02 expiry).\n• Back-month call (2026-09-18): effective IV rises from 27.0% to 32.0% (0.25 base + 0.03 global - 0.01 expiry + 0.05 leg shift).\n• Modeled P/L improves by +$27.57, moving from -$94.73 to -$67.16 (reflecting the $7 flat cost allowance once).\n\nLocal Greeks adjust to delta -18.22, gamma -0.99, theta -$2.49/day, and vega +4.14 USD per percentage point. Because the strategy is net long vega in the second expiry, an isolated back-month volatility expansion increases long leg residual value and offsets part of the ITM short-call drag.",
+  "assumptions": [
+    "Evaluated via European Black-Scholes at spot $103, date 2026-09-08, rate 4.0%, and yield 1.2% using normalized synthetic sample contracts.",
+    "Modeled IV shifts are hypothetical what-if adjustments and do not reflect observed execution spreads or market liquidity."
+  ],
+  "objections": [
+    "Calendar spreads carry asymmetric risk if volatility collapses (vol crush) in the back month rather than expanding.",
+    "First-expiry tail risk remains loss-unbounded on an extreme upward rally where the short call expands faster than the long call's intrinsic buffer."
+  ],
+  "operations": [],
+  "suggested_prompts": [
+    "What happens if spot returns to the strike of 100 at this same date?",
+    "Evaluate a parallel 5 percentage point IV drop across both expiries.",
+    "Run analyze_first_expiry over a spot range of 90 to 110."
+  ],
+  "risk_classification": "not-exact",
+  "evidence_ids": []
+}

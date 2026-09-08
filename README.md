@@ -1,5 +1,206 @@
 # ARGUS — does the AI earn its inference bill?
 
+## AI-native options builder PoC
+
+The new local PoC is an OptionStrat-style strategy workspace with 23
+templates, custom one- to four-leg composition, payoff and price/time views,
+deterministic risk metrics, and an AI sparring rail. AI responses are proposals:
+assumptions, objections, and metric changes are shown before Accept or Reject.
+The UTC scenario-date control and time slider update the solid modeled P/L curve
+and Greeks; the dashed curve remains an expiration/first-expiry reference. Click
+a heatmap cell, or inspect with arrow keys and select with Enter/Space, to apply
+its date and spot. These changes share AI context, saved state and Undo. Modeling
+stops at the first expiry; moving time is a what-if scenario, not a forecast.
+The builder starts with a normalized replay-safe SPY sample. Select **Use real
+prices** to load Tastytrade SPY contracts, or enter a standard equity/ETF ticker
+and select **Load symbol**. QQQ and AAPL have been checked against real provider
+responses. Each symbol uses its own contracts, underlying quote, news and expiry
+schedule; unsupported or incomplete provider data fails without changing the position.
+Loading a symbol rebuilds the template; Undo restores the previous position.
+The window includes bid/ask quotes and provider IV for up to
+100 contracts across two expiries and 25 strikes per expiry. All 23 templates
+use listed strikes. Midpoint is the default entry estimate; buy-at-ask/sell-at-bid
+is selectable. Neither promises a fill. Quote timestamps remain visible; this is
+an explicitly refreshed snapshot, not a streaming feed. Refresh preserves selected
+contracts and quantities or fails without changing the position. Changing the
+chain window explicitly rebuilds the template. Sample mode is never a fallback.
+Within **Choose chain window**, set **Strike center** and select **Browse strikes**
+to load another strike neighborhood while keeping selected legs and quantities.
+Those legs are retained inside the bounded quote window. Browsing refreshes quotes
+and re-estimates entry unless **Keep entry costs** is enabled. Held per-share costs
+are editable and survive refresh, basis changes, and save/load; they are not broker-
+verified fills. Changing a contract or side initializes that leg from quotes.
+**Re-estimate entry** explicitly resets costs. Dated liquidation estimates use
+midpoint or sell-long-at-bid/buy-short-at-ask prices, separately from scenario P/L.
+Neither includes fees or guarantees a fill. Refresh retains the
+committed center; Undo restores the prior catalog and center.
+Server snapshots use shared D1 storage for ten minutes, scoped to the owner and
+provider credential fingerprint. Other app instances can resolve the same handle;
+expired handles require refresh rather than trusting client quotes. Apply local
+migrations before running real pricing. Separate, dated market context comes from Alpaca quotes/news, FRED rates, Exa official-source research
+and Tastytrade underlying quotes. ThetaData supplies local contract-reference
+metadata only, not live option prices. There is no account or order path.
+
+Alpaca cash-dividend context supplies validated provider-reported upcoming ex-dates
+to the AI and its existing source disclosure. The bounded query uses provider
+process dates; those and retrieval time are not ex-dates. Missing results do not
+prove there is no event. This is not a complete earnings/dividend calendar and
+does not change the model dividend yield or simulate discrete dividend cashflows.
+
+Tastytrade underlying IV-index/rank and liquidity metrics are separate contextual
+sources. Missing/stale timestamps fail closed. Raw provider scores do not replace
+contract IV or establish executable liquidity; record update time is not a quote
+observation. The source disclosure preserves those limits rather than implying
+that a provider score is a trade recommendation or probability of profit.
+
+Provider-reported earnings dates use the earnings record timestamp and explicit
+estimate flag. Even estimated=false is not treated as issuer confirmation; no
+report session, expected move or EPS association is inferred. Missing/stale
+records are disclosed as gaps, not absence of an upcoming report.
+
+Open **Events & market context** in the sparring rail and select **Load context**
+to inspect dated sources without running AI or changing the position. Earnings
+and dividends appear first. Refresh may reuse the shared60-second cache; AI
+requests retrieve their own context. Changing symbol clears the displayed results.
+
+```bash
+pnpm --dir web install
+pnpm --dir web db:migrate:local
+pnpm --dir web dev
+```
+
+Open `http://127.0.0.1:5173`. OpenRouter is optional for local use. Local development
+loads the allowlisted keys in `web/.dev.vars.example` from the repository `.env`
+(or the main checkout's `.env` when using a worktree). `web/.dev.vars` is also
+supported. Credentials stay in Worker bindings and are never included in the client.
+For local development, `http://theta-terminal:25503` maps to the Docker-published
+`http://127.0.0.1:25503`. This loopback integration is unavailable on Cloudflare;
+the other providers use cloud-reachable HTTPS APIs. Do not expose the terminal
+publicly. Commercial data redistribution and Tastytrade user authorization are
+separate release gates for any later public product; this workspace is private.
+
+### Private workspace
+
+The local development server supplies an explicit loopback-only identity. Saved
+workspace controls offer Save, Save as new, Load and Delete; there is no autosave.
+Records persist in local D1 under `web/.wrangler/state`. Revisions prevent a stale
+tab from overwriting another save. Loading goes through the builder's Undo path.
+Real quote catalogs are copied from the server cache, never accepted from the
+browser. Reopened quotes are marked historical and keep their original quote and
+valuation timestamps. Refresh prices is a separate action. Snapshot handles and
+records are scoped to the authenticated owner; API responses are not cached.
+
+Export saved JSON downloads the selected record's current stored revision,
+including original quote data and close/roll/correction history. It excludes
+unsaved edits and AI conversations. Keep exports private. The versioned JSON
+format supports preview and import as a new private saved record; it never
+overwrites the original. Imported quotes remain historical and unverified.
+
+Stock-only positions support signed shares, held costs, scenario curves/tables,
+frozen comparison, saved remaining holdings and underlying-only stream capture.
+They have no option expiry or expiry probability. Capture and refresh preserve
+entry cost; Undo restores the prior position. Streaming limits apply to the
+underlying bid/ask timestamps even when no options remain.
+
+Hosting is not deployed or configured by this change. Before release, configure a
+Cloudflare Access application and explicit user allowlist, `ACCESS_TEAM_DOMAIN`
+(full HTTPS team origin), `ACCESS_AUD`, `APP_ORIGIN` (exact HTTPS app origin), and
+a real `DB` D1 binding with the migration applied. The Worker verifies Access JWTs
+for HTML, assets and APIs. Missing configuration fails closed; workers.dev and
+preview URLs are disabled. Production output contains no development identity or
+local database binding. Do not use `wrangler.local.json` as a deployment config.
+Keep the dev server bound to loopback; local development is not a hosted login.
+Release verification must test every enabled hostname with and without Access.
+
+Analysis uses `google/gemini-3.8-flash` through OpenRouter with medium reasoning,
+no provider fallback and data collection denied. ZDR is not required, as explicitly
+requested by the owner. Secrets remain server-side. Calculated risk and payoff
+checkpoints are authoritative; the server rejects conflicting risk classifications
+and unavailable source citations. Quotes older than 24 hours are excluded from
+current claims; news/research and FRED observations retain their dates. Providers
+have bounded requests and a 60-second per-configuration cache. Missing sources
+degrade explicitly. A separate fresh-context verification call now checks draft
+prose and proposed facts before return. Rejection or unavailable verification
+withholds the draft and leaves the position unchanged. Both calls share a20-second
+deadline, without retries. The same-model check is probabilistic screening, not
+proof that free-text reasoning is always correct.
+
+Analysis prompts live in `web/prompts/analysis-v1.json`; tool permissions, schemas,
+calculations and model settings remain code-enforced. To activate a new local
+version, copy the complete bundle, change its version and text, then run:
+
+```bash
+node web/activate-prompts.mjs path/to/candidate.json
+```
+
+Apply local migrations first. The command freezes the candidate, runs the full
+offline regression suite against those exact bytes, then activates it in local
+D1 and checks the stored version/hash. It never deploys or calls inference.
+Versions cannot be overwritten or deleted; changed text needs a new version.
+Changing model/tool/output contracts requires updating `ANALYSIS_ENGINE_VERSION`
+and reevaluating a new bundle version; old-engine selections fail closed.
+Each AI request loads one frozen generation/verifier bundle without a redeploy.
+No active selection uses the shipped baseline; invalid selected configuration
+withholds analysis. This is a private operator command, not an HTTP editor.
+Offline mocks check contracts, not trading-analysis quality; semantic prompt
+changes still require separately reviewed model-output evaluations before release.
+All four AI workflows now require private D1 tracing. Responses include
+`X-ARGUS-Trace-Id` and `X-ARGUS-Trace-Status`; authenticated
+`GET /api/analysis-traces/:id` returns only the current owner's trace. There is no
+listing or administration endpoint. Traces contain frozen facts, allowed model
+inputs/outputs, tool admission/results, verification and analysis disposition,
+with prompt version/hash, elapsed times and available total-token usage. They are
+not a whole-application HTTP audit or proof of response delivery.
+
+Transport headers, private model reasoning and known configured credentials are
+excluded. This does not detect arbitrary secrets a user types. Conversations and
+strategy/source snapshots remain sensitive; keep local D1 private. No automatic
+trace expiry is implemented yet. Capture is bounded to64events/8MiB per analysis;
+overflow or failed persistence withholds the answer with `trace_unavailable`
+without retrying inference. Running/incomplete traces expose metadata only.
+Local migrations are required before chat; deployment and hosted retention are
+still separate release gates.
+
+Verification: `pnpm --dir web test` and `pnpm --dir web build`. With the local app
+running, `node web/test/live-analysis.mjs --run` makes up to eight paid generation/
+verification requests. `node web/test/live-chain.mjs --run` retrieves real quotes and
+makes up to four paid requests. Review prose as well as contract assertions:
+the live chain check exposed incorrect free-text payoff explanations despite
+correct calculated metrics. This remains a consumer-release blocker.
+`node web/test/live-verification.mjs --run` makes six paid verifier-only requests
+against paired false/correct synthetic claims, reporting both false accepts and
+false rejects. `node web/test/model-comparison.mjs --run` makes up to24 paid synthetic-position
+requests comparing Qwen3.8Max and Gemini3.8Flash using the same cases and runtime
+deadline. Its contract assertions are not an automatic prose-accuracy score.
+
+`node web/test/live-stream.mjs --self-check` checks DXLink compact decoding offline.
+With the local app running, `node web/test/live-stream.mjs --run` opens a bounded
+read-only streaming probe for SPY and one verified option; no AI calls or orders.
+It distinguishes provider timestamps from receipt time and exits 1 on incomplete
+timestamped coverage. The initial Saturday probe authenticated and received quotes
+and IV, but quotes had zero timestamps. **Connect live feed** now displays separate
+streamed marks through a shared authenticated server relay. Unknown timestamps stay
+unknown; these marks do not silently replace scenario/AI snapshots or held costs.
+Upstream interruptions receive three shared bounded retries; marks clear while
+reconnecting. Silent/flapping sessions exhaust the budget. Browser-to-relay loss,
+protocol rejection or exhaustion still requires explicit reconnect.
+**Capture for analysis** explicitly creates a new immutable snapshot for selected
+contracts only, with held entry costs preserved. The server requires complete
+bid/ask/IV source times no older than five minutes, receipts within60s and source
+skew within60s. Unknown timestamps fail closed; these limits do not promise fills.
+Now advances to capture time; a future scenario stays fixed. Undo restores the
+previous snapshot. Refresh quotes to retrieve alternative contracts again.
+`node web/test/market-browser.cjs --capture-only` checks capture interactions with
+fixtures; `--live-feed-only --live-capture-check` checks real missing-time rejection.
+`node web/test/market-browser.cjs --feed-only`
+checks UI isolation with a mock stream; `--live-feed-only` checks the real local feed.
+The Cloudflare Durable Object binding is configured, not deployed or hosted-verified.
+
+The browser regression pages under `web/test/` run against the local development
+server with synthetic inputs. Legacy `.cjs` browser scripts require a separately
+installed Playwright/Chrome setup. Optional live-verification replay modes also
+require local `.sdlc` evidence; those artifacts are not part of this source release.
+
 Paper-only options agent for the Alpaca AI Trading Agents Hackathon. Every
 cycle a deterministic quant control picks a defined-risk SPY/QQQ vertical
 (debit or credit) from a frozen candidate set, and a bounded LLM picks from the
