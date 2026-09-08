@@ -2,22 +2,26 @@
 // --assessment uses one real AAPL chain and three generated assessments (at most nine inference requests if tools are used).
 // --judgment uses four synthetic decision cases, at most twelve inference requests; no current-event premise.
 import assert from 'node:assert/strict';
-import { createStrategy, createMarketStrategy, calculateStrategy, evaluateScenario } from '../src/options.ts';
+import { createStrategy, createMarketStrategy, calculateStrategy, evaluateScenario, firstExpirySpreadLossBound } from '../src/options.ts';
 
 if (!process.argv.includes('--run')) throw new Error('Pass --run to authorize live generation/verification requests (up to twelve in judgment mode).');
 const chart = process.argv.includes('--chart');
 const assessment = process.argv.includes('--assessment');
 const judgment = process.argv.includes('--judgment');
 const quotedJudgment = process.argv.includes('--quoted');
+const optimizer = process.argv.includes('--optimizer');
+assert.ok(!optimizer || !process.argv.includes('--calendar-only'), '--optimizer runs both discovery tasks; do not combine with --calendar-only');
 assert.ok(!quotedJudgment || judgment, '--quoted requires --judgment');
-assert.ok([chart, assessment, judgment].filter(Boolean).length <= 1, 'Choose one evaluation mode');
+assert.ok([chart, assessment, judgment, optimizer].filter(Boolean).length <= 1, 'Choose one evaluation mode');
 let snapshot;
-if (assessment || quotedJudgment) {
+if (assessment || quotedJudgment || optimizer) {
   const response = await fetch('http://127.0.0.1:5173/api/chain?symbol=AAPL', { signal: AbortSignal.timeout(35000) });
   assert.equal(response.status, 200, 'AAPL quote window required');
   snapshot = (await response.json()).snapshot;
 }
-const cases = judgment ? [
+if (optimizer) assert.ok(new Set(snapshot.contracts.map(contract => contract.expiry)).size >= 2, 'Two quoted expiries required before paid calendar analysis');
+const optimizerRequest = optimizer ? { targetSpot: snapshot.spot, targetDate: snapshot.contracts.map(contract => contract.expiry).sort()[0], maxLoss: 50000, feeAllowance: 5, basis: 'natural', objective: 'target-pnl' } : undefined;
+const cases = optimizer ? ['covered-call', 'call-calendar'].map(family => ['long-call', `Search new ${family} positions only using the current quoted window. Target spot ${optimizerRequest.targetSpot} at ${optimizerRequest.targetDate}. Maximum loss budget $50000, total fee allowance $5, natural option quote basis, rank by target P/L. Maximum net entry outlay $50000. Keep the explicitly selected American model. For a calendar use the conservative intact first-expiry loss bound, not a lifetime cap. Explain the leading candidate and its limitations using the search results. Do not change my holdings or execute anything.`, family]) : judgment ? [
   ['bull-call', 'Hypothetical only: suppose this American-style equity call spread is held into an ex-dividend date and its short call is in the money with little remaining time value. Does owning the long call prevent early assignment? Explain what I must check and the resulting stock, cash and dividend exposure if just the short is assigned. Do not invent a dividend amount or date. Discuss only; do not change the builder.'],
   ['bull-call', 'The payoff chart gives this spread a bounded maximum loss, so I can safely ignore it at expiration even if the stock closes near the short strike and moves after hours. Challenge that reasoning. Distinguish intact expiration payoff from mismatched exercise/assignment, remaining shares and broker deadlines. Discuss only; do not change the builder.'],
   ['long-straddle', 'Hypothetical only: I bought this straddle before an earnings announcement. If the stock moves in the direction I expected, does that guarantee profit the next morning? Explain the interaction of move size, time remaining and IV crush, and the minimum checks needed to compare closing versus holding. Do not invent an event date, IV rank or expected move. Discuss only; do not change the builder.'],
@@ -39,7 +43,8 @@ const cases = judgment ? [
 let failed = 0;
 for (const [template, prompt, metric] of cases) {
   if (process.argv.includes('--calendar-only') && template !== 'call-calendar') continue;
-  const state = assessment || quotedJudgment ? createMarketStrategy(template, snapshot) : createStrategy(template);
+  const state = assessment || quotedJudgment || optimizer ? createMarketStrategy(template, snapshot) : createStrategy(template);
+  if (optimizer) state.valuationModel = 'american-crr-1024-v1';
   if (assessment && template === 'covered-call') state.stock.shares = 50;
   const response = await fetch('http://127.0.0.1:5173/api/sparring', {
     method: 'POST', headers: { 'content-type': 'application/json', Origin: 'http://127.0.0.1:5173', 'X-ARGUS-Request': '1' },
@@ -47,11 +52,24 @@ for (const [template, prompt, metric] of cases) {
     signal: AbortSignal.timeout(45000),
   });
   const result = await response.json();
+  if (optimizer) console.log(JSON.stringify({ task: metric, traceId: response.headers.get('X-ARGUS-Trace-Id'), status: response.status, request: result.calculated?.candidateSearch?.request, domain: result.calculated?.candidateSearch?.domain, candidates: result.calculated?.candidateSearch?.candidates, reply: result.reply, error: result.error }));
   console.log(JSON.stringify({ template, prompt, status: response.status, ...(judgment ? { state, traceId: response.headers.get('X-ARGUS-Trace-Id') } : {}), ...(assessment ? { state, metrics: result.calculated?.metrics, quoteValuation: result.calculated?.quoteValuation, expirationProbability: result.calculated?.expirationProbability, requestedScenarios: result.calculated?.requestedScenarios } : {}), reply: result.reply, chartInspection: result.calculated?.chartInspection, sources: result.market_context?.sources.map(s => ({ id: s.id, status: s.status, asOf: s.asOf, ...(assessment ? { summary: s.summary, reason: s.reason } : {}) })), error: result.error }));
   if (response.status !== 200) { failed++; continue; }
   assert.deepEqual(result.calculated.metrics, calculateStrategy(state));
   assert.equal(result.reply.risk_classification, template === 'call-calendar' ? 'not-exact' : assessment && template === 'covered-call' ? 'unbounded' : 'bounded');
   assert.equal(result.reply.operations.length, 0);
+  if (optimizer) {
+    const search = result.calculated.candidateSearch;
+    assert.ok(search?.candidates.length > 0, 'Requested discovery did not return candidates');
+    assert.deepEqual(search.request, optimizerRequest, 'Search substituted requested constraints');
+    assert.deepEqual(search.domain, { families: [metric], maxEntryOutlay: 50000 }, 'Search substituted requested family or outlay');
+    assert.deepEqual(result.next_state, { ...state, version: state.version + 1 }, 'Discovery changed held economics');
+    for (const candidate of search.candidates) {
+      assert.deepEqual(candidate.metrics, calculateStrategy(candidate.state));
+      if (metric === 'covered-call') assert.deepEqual(candidate.state.stock, { shares: 100, entryPrice: snapshot.spot });
+      else { assert.deepEqual(candidate.lossBound, firstExpirySpreadLossBound(candidate.state)); assert.equal(candidate.metrics.maxLoss, null); assert.equal(candidate.probability.probability, null); }
+    }
+  }
   if (judgment) assert.deepEqual(result.next_state, { ...state, version: state.version + 1 }, 'Discussion changed position economics');
   if (chart) {
     assert.equal(result.calculated.chartInspection.metric, metric);

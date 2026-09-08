@@ -389,11 +389,15 @@ const POSITION_COMPARISON_TOOL = { type: "function", function: {
 
 const CANDIDATE_TOOL = { type: "function", function: {
   name: "search_candidates",
-  description: "Read-only search for NEW quoted long-option, same-expiry long straddle/strangle, vertical, 1:2:1 butterfly and iron butterfly/condor alternatives in both directions. Requires explicit target spot/date and dollar loss budget. Does not adjust held positions or place orders. Fee allowance is a total dollar estimate per candidate. Current window only; searches over 300,000 structures require a narrower window. expiry-probability ranks snapshot-to-expiry risk-neutral profit probability, not a forecast.",
+  description: "Read-only search for NEW quoted long-option, same-expiry long straddle/strangle, vertical, 1:2:1 butterfly and iron butterfly/condor alternatives in both directions. Requires explicit target spot/date and dollar loss budget. Optional explicit domain selects stock-backed or long calendar/diagonal families and requires a net entry-outlay cap; never infer a domain silently. Mixed families require selected American valuation, target at or before short expiry and no expiry-probability objective. Their lossBound is conservative first-expiry loss, not exact maximum, lifetime risk or margin; other families retain exact intact-expiry risk. Does not adjust held positions or place orders. Fee allowance is a total dollar estimate per candidate. Current window only; searches over 300,000 structures require a narrower window. expiry-probability ranks snapshot-to-expiry risk-neutral profit probability, not a forecast.",
   parameters: { type: "object", additionalProperties: false, required: ["targetSpot", "targetDate", "maxLoss", "feeAllowance", "basis", "objective"], properties: {
     targetSpot: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 }, targetDate: { type: "string", format: "date-time" },
     maxLoss: { type: "number", exclusiveMinimum: 0 }, feeAllowance: { type: "number", minimum: 0 },
     basis: { type: "string", enum: ["mid", "natural"] }, objective: { type: "string", enum: ["target-pnl", "return-on-risk", "expiry-probability"] },
+    domain: { type: "object", additionalProperties: false, required: ["families", "maxEntryOutlay"], properties: {
+      families: { type: "array", minItems: 1, maxItems: 8, uniqueItems: true, items: { type: "string", enum: ["options", "covered-call", "protective-put", "collar", "call-calendar", "put-calendar", "call-diagonal", "put-diagonal"] } },
+      maxEntryOutlay: { type: "number", minimum: 0, description: "Explicit maximum net entry outlay in USD: signed option entries plus new share cost and allowance, floored at zero. Not margin, buying power or total risk." },
+    } },
   } },
 } };
 
@@ -1085,7 +1089,10 @@ export async function spar(
         observeAnalysis(observer, { stage: "tool-admission", reason: "allowed-read-only-tool", input: { name: fn.name, arguments: JSON.parse(fn.arguments) } });
         if (fn.name === "search_candidates") {
           if (!snapshot || !candidateAvailable()) throw new Error("Fresh candidate quotes required");
-          calculated.candidateSearch = searchCandidates(request.state, snapshot, JSON.parse(fn.arguments));
+          const args = record(JSON.parse(fn.arguments));
+          if (!args) throw new Error("Invalid candidate search request");
+          const { domain, ...search } = args;
+          calculated.candidateSearch = searchCandidates(request.state, snapshot, search as Parameters<typeof searchCandidates>[2], domain as Parameters<typeof searchCandidates>[3]);
         } else if (fn.name === "analyze_first_expiry") {
           const bounds = readFirstExpiryBounds(JSON.parse(fn.arguments));
           if (!bounds) throw new Error();

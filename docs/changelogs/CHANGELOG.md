@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Connected conversational discovery to the existing stock-backed and American
+  calendar/diagonal optimizer through an optional explicit family/outlay domain.
+  No new agent loop: the existing read-only tool, continuation and verifier remain.
+  AI-returned search constraints and financial results now pass the shared client
+  validator before display; inspection compares held and candidate positions at
+  the same target. Stock quantities and conservative first-expiry bounds are
+  labeled explicitly. Apply remains a separate user action and Undo preserves
+  excluded holdings and entry costs. Canonical no-op comparison also handles
+  valid responses with reordered stock/exclusion fields.
+  Prompt v12 / analysis contract v6 passed all 645 offline tests before local
+  activation. TypeScript/build and 33 desktop/mobile workflow checks passed.
+  Two real AAPL/OpenRouter tasks returned the exact covered-call/calendar family,
+  target and budgets, with recalculated figures and unchanged holdings. Reviewed
+  explanations distinguished conditional candidate risk from lifetime guarantees.
+  This is two-task qualification, not exhaustive AI expertise or hosted proof;
+  browser inference/persistence remains mocked. Exercise-opportunity valuation
+  versus actual exercise cashflows could be worded more clearly in one live reply.
+
 - Expanded direct discovery with call/put calendars and diagonals: one earlier
   short option and one later long option, requiring explicit American valuation
   and a target no later than short expiry. Budgets use a conservative intact

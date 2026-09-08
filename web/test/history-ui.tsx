@@ -10,7 +10,7 @@ import type { SavedStrategy } from '../src/saved-strategies'
 import { buildPositionPerformance } from '../src/position-performance'
 import { createPosition } from '../src/position-lifecycle'
 import { projectPositionLots, recordLotTransaction, upgradePositionLots } from '../src/position-lots'
-import { calculateStrategy, createMarketStrategy, createStrategy, projectAnalysisPosition, searchCandidates, type MarketSnapshot } from '../src/options'
+import { calculateStrategy, createMarketStrategy, createStrategy, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, type MarketSnapshot } from '../src/options'
 import { buildIntradayHistory, buildIvHistory } from '../src/intraday-history'
 import { buildPriceHistory } from '../src/price-history'
 import '../src/styles.css'
@@ -494,17 +494,68 @@ async function run() {
         assert(!fixture.querySelector('.proposal-card') && held() === original && fixture.textContent?.includes('REVIEW FAILED'), 'Untrusted excluded-cost mutation was accepted');
       } finally { await unmount(); window.fetch = priorFetch; window.Worker = priorWorker }
     });
+    await test('Mocked AI stock and calendar discovery validates before rendering and requires explicit Apply', async () => {
+      await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
+      const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];
+      const snapshot: MarketSnapshot = { id: 'ai-domain-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [95, 100, 105].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp })))) };
+      const held = createMarketStrategy('long-call', snapshot); held.valuationModel = 'american-crr-1024-v1';
+      const seed = { id: 'ai-domain-seed', title: 'Synthetic AI domains', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
+      let family: 'protective-put' | 'call-calendar' = 'protective-put', attack: 'bound' | 'domain' | 'outlay' | undefined, saved: typeof seed | undefined, calls = 0;
+      window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Mocked AI domains', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies' && init?.method === 'POST') { saved = { ...seed, id: 'ai-domain-copy', state: JSON.parse(String(init.body)).state }; return Response.json({ record: saved }, { status: 201 }); }
+        if (url === '/api/strategies') return Response.json({ strategies: [seed] });
+        if (url === '/api/strategies/ai-domain-seed') return Response.json({ record: seed });
+        if (url === '/api/sparring') {
+          calls++; const body = JSON.parse(String(init?.body));
+          const candidateSearch = searchCandidates(projectAnalysisPosition(body.state)!, snapshot, { targetSpot: 100, targetDate: dates[0], maxLoss: 20000, feeAllowance: 5, basis: 'mid', objective: 'target-pnl' }, { families: [family], maxEntryOutlay: 20000 });
+          assert(candidateSearch.candidates.length > 0, 'AI domain fixture has no candidate');
+          if (attack === 'bound') candidateSearch.candidates[0].lossBound!.amount += 1;
+          if (attack === 'domain') candidateSearch.domain!.families = ['options'];
+          if (attack === 'outlay') candidateSearch.domain!.maxEntryOutlay = 0;
+          return Response.json({ request_id: body.request_id, base_state_version: body.base_state_version, next_state: { ...body.state, version: body.state.version + 1 }, reply: { text: 'Synthetic mocked AI discovery.', operations: [], assumptions: [], objections: [], suggested_prompts: [], evidence_ids: [], risk_classification: 'bounded' }, calculated: { riskSummary: 'Synthetic test only', dataMode: 'market-snapshot', candidateSearch }, market_context: { sources: [], retrievedAt: stamp } });
+        }
+        throw new Error(`Unexpected mocked AI domain request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean, stage: string) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), `AI domain ${stage}: ${fixture.textContent?.slice(-1500)}`) };
+      const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input, .leg-list select, [aria-label="Shares"], [aria-label="Share entry cost"], [aria-label="Scenario spot"], [aria-label="Scenario date UTC"]')].map(field => field.value).join();
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !!fixture.querySelector('option[value="ai-domain-seed"]'), 'seed'); await change('Saved positions', seed.id); await click('Load');
+        await waitFor(() => !fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call calendar"]')?.disabled, 'model');
+        const before = inputs();
+        for (family of ['protective-put', 'call-calendar'] as const) {
+          const displayed = fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length;
+          await click('Break the thesis'); await waitFor(() => fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed + 1, `${family} render`);
+          const card = [...fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]')].at(-1)!;
+          assert(family === 'protective-put' ? /100 shares/i.test(card.textContent ?? '') : /conservative.*first.expiry/i.test(card.textContent ?? '') && !card.textContent?.includes('Unbounded'), 'AI candidate omitted stock or conservative risk scope');
+          await act(async () => card.querySelector<HTMLButtonElement>('button')!.click()); await waitFor(() => !!fixture.querySelector('.proposal-card'), `${family} inspect`);
+          await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), `${family} target comparison`);
+          assert(inputs() === before && !saved, 'AI search or inspection changed holdings before Apply');
+          await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, `${family} save`);
+          assert(family === 'protective-put' ? saved!.state.stock?.shares === 100 && saved!.state.stock.entryPrice === snapshot.spot : new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && !saved!.state.stock, 'AI candidate Apply lost stock or mixed expiries');
+          await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); saved = undefined; assert(inputs() === before, 'AI candidate Undo changed original holdings');
+        }
+        for (attack of ['bound', 'domain', 'outlay'] as const) {
+          const displayed = fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length;
+          await click('Break the thesis'); await waitFor(() => !fixture.querySelector('.thinking'), `${attack} rejection`);
+          assert(fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed && inputs() === before && !fixture.querySelector('.proposal-card') && fixture.textContent?.includes('REVIEW FAILED'), `Forged ${attack} was displayed or changed holdings`);
+        }
+        assert(calls === 5, 'Mocked AI acceptance path was skipped');
+      } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
+    });
     await test('Quoted candidate transfer preserves excluded fixed-entry holdings and Undo', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket, priorWorker = window.Worker;
       const stamp = new Date(fixedNow - 120000).toISOString(), expiry = '2027-10-09T20:00:00.000Z';
       const snapshot: MarketSnapshot = { id: 'candidate-held-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2027-10-09'], contracts: [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp }))) };
       const heldState = createMarketStrategy('bull-call', snapshot);
       heldState.pricing!.entryMode = 'fixed'; heldState.legs[0].entryPrice = 1.23; heldState.excludedLegIds = [heldState.legs[0].id];
+      heldState.stock = { shares: 50, entryPrice: 100 };
       const seed = { id: 'candidate-held-seed', title: 'Held candidate fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: heldState, snapshot };
       let saved: typeof seed | undefined, maliciousCandidate: 'entry' | 'fixed' | undefined;
       let activeSnapshot = snapshot;
-      const candidate = createMarketStrategy('long-put', snapshot);
-      candidate.legs[0].id = 'candidate-put';
+      let candidate = createMarketStrategy('long-put', snapshot);
       const sentStates: ReturnType<typeof createStrategy>[] = [];
       window.Worker = class extends priorWorker { postMessage(message: any, options?: any) { if (message?.state?.legs) sentStates.push(structuredClone(message.state)); super.postMessage(message, options) } };
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
@@ -523,19 +574,20 @@ async function run() {
           return Response.json({ snapshot: activeSnapshot });
         }
         if (url === '/api/sparring') {
-          const body = JSON.parse(String(init?.body)), next = { ...body.state, version: body.state.version + 1 };
-          const offered = structuredClone(candidate);
-          if (maliciousCandidate) offered.legs[0].entryPrice = 0.01;
-          if (maliciousCandidate === 'fixed') offered.pricing!.entryMode = 'fixed';
+          const body = JSON.parse(String(init?.body)), next = mergeAnalysisProposal(body.state, { ...projectAnalysisPosition(body.state)!, version: body.state.version + 1 });
+          const candidateSearch = searchCandidates(projectAnalysisPosition(body.state)!, activeSnapshot, { targetSpot: 90, targetDate: expiry, maxLoss: 300, feeAllowance: 0, basis: 'mid', objective: 'target-pnl' });
+          candidate = structuredClone(candidateSearch.candidates[0].state);
+          if (maliciousCandidate) candidateSearch.candidates[0].state.legs[0].entryPrice = 0.01;
+          if (maliciousCandidate === 'fixed') candidateSearch.candidates[0].state.pricing!.entryMode = 'fixed';
           return Response.json({ request_id: body.request_id, base_state_version: body.base_state_version, next_state: next,
             reply: { text: 'Inspect this quoted alternative.', operations: [], assumptions: [], objections: [], suggested_prompts: [], evidence_ids: [], risk_classification: 'bounded' },
-            calculated: { riskSummary: 'Included holdings only', dataMode: 'market-snapshot', candidateSearch: { baseVersion: body.state.version, snapshotId: snapshot.id, model: 'european-bsm-v1', coverage: 'Synthetic one-candidate fixture', probabilityBasis: 'Not a forecast', evaluated: 1, eligible: 1, request: { objective: 'target-pnl', targetSpot: candidate.scenarioSpot, targetDate: candidate.scenarioDate, basis: 'mid', feeAllowance: 0 }, candidates: [{ id: 'put-alternative', state: offered, metrics: calculateStrategy(offered), score: 1, probability: { probability: null, volatility: null, volatilityContractId: null, spot: candidate.spot, from: candidate.valuationTimestamp, expiry } }] } }, market_context: { sources: [], retrievedAt: stamp } });
+            calculated: { riskSummary: 'Included holdings only', dataMode: 'market-snapshot', candidateSearch }, market_context: { sources: [], retrievedAt: stamp } });
         }
         throw new Error('Unexpected candidate fixture request');
       }) as typeof fetch;
       const waitFor = async (check: () => boolean) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), `Candidate transfer did not settle: ${fixture.querySelector('[role="alert"]')?.textContent ?? ''}`) };
       const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
-      const inspect = async () => { const button = [...fixture.querySelectorAll('button')].filter(button => button.textContent === 'Inspect candidate' && !button.disabled).at(-1); assert(button, 'No current candidate to inspect'); await act(async () => button.click()) };
+      const inspect = async () => { const button = [...fixture.querySelectorAll<HTMLButtonElement>('[aria-label="Ranked quoted candidates"]')].at(-1)?.querySelector<HTMLButtonElement>('button'); assert(button && !button.disabled, 'No current candidate to inspect'); await act(async () => button.click()) };
       try {
         root = createRoot(fixture); await act(async () => root!.render(<App />));
         await waitFor(() => !!fixture.querySelector('option[value="candidate-held-seed"]'));
@@ -544,10 +596,11 @@ async function run() {
         const original = inputs();
         await click('Break the thesis'); await waitFor(() => !!fixture.querySelector('[aria-label="Ranked quoted candidates"]'));
         await inspect(); await waitFor(() => !!fixture.querySelector('.proposal-card'));
-        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'));
+        await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'));
+        assert(fixture.querySelector<HTMLInputElement>('[aria-label="Shares"]')?.value === '50', 'AI inspection changed held shares before Apply');
         assert(sentStates.some(position => position.legs.length === 1 && position.legs[0].contractId === candidate.legs[0].contractId), 'Candidate comparison was not projected');
         await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved);
-        assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.excludedLegIds?.join() === heldState.excludedLegIds!.join(), 'Candidate lost fixed-entry mode or exclusion selection');
+        assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.excludedLegIds?.join() === heldState.excludedLegIds!.join() && !saved!.state.stock, 'Candidate lost fixed-entry mode, exclusion selection or explicit share replacement');
         assert(JSON.stringify(saved!.state.legs[0]) === JSON.stringify(heldState.legs[0]) && saved!.state.legs[1].contractId === candidate.legs[0].contractId, 'Candidate changed excluded cost or failed to replace included leg');
         const applied = inputs(); saved = undefined;
         await click('Refresh prices'); await waitFor(() => fixture.querySelector('.contract-quote')?.textContent?.includes('Bid $4.00') === true);
@@ -556,12 +609,12 @@ async function run() {
         assert(inputs() === applied && saved!.state.pricing?.entryMode === 'fixed' && saved!.state.legs[1].entryPrice === candidate.legs[0].entryPrice, 'Quote refresh changed newly frozen or retained entry costs');
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
-        assert(inputs() === original && fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'), 'Candidate Undo did not restore held construction');
+        assert(inputs() === original && fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)') && fixture.querySelector<HTMLInputElement>('[aria-label="Shares"]')?.value === '50' && fixture.querySelector<HTMLInputElement>('[aria-label="Share entry cost"]')?.value === '100', 'Candidate Undo did not restore held construction and shares');
         for (const attack of ['entry', 'fixed'] as const) {
+          const displayed = fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length;
           maliciousCandidate = attack; await click('Break the thesis');
           await waitFor(() => !fixture.querySelector('.thinking'));
-          await inspect(); await waitFor(() => !fixture.querySelector('.thinking'));
-          assert(!fixture.querySelector('.proposal-card') && inputs() === original && fixture.querySelector('[role="alert"]'), `Untrusted ${attack} candidate pricing was promoted to held costs`);
+          assert(!fixture.querySelector('.proposal-card') && inputs() === original && fixture.querySelectorAll('[aria-label="Ranked quoted candidates"]').length === displayed && fixture.textContent?.includes('REVIEW FAILED'), `Untrusted ${attack} candidate pricing was displayed or promoted to held costs`);
         }
       } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket; window.Worker = priorWorker }
     });

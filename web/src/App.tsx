@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from 'react'
 import { SymbolSearch } from './SymbolSearch'
 import { OptionChainTable } from './OptionChainTable'
-import { CandidateSearch, type CandidateSearchResult } from './CandidateSearch'
+import { CandidateSearch, checkSearch, type CandidateSearchResult } from './CandidateSearch'
 import { PriceHistory } from './PriceHistory'
 import { streamFreshness } from './stream-freshness'
 import { DraftRecovery } from './DraftRecovery'
@@ -1344,6 +1344,12 @@ export function App() {
       const response = await fetch('/api/sparring', { method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json', 'X-ARGUS-Request': '1' }, body: JSON.stringify({ request_id: requestId, base_state_version: baseVersion, state: reviewedPosition, conversation, ...(probabilityRange ? { probability_range: probabilityRange } : {}), ...(firstExpiryRange ? { first_expiry_range: firstExpiryRange } : {}), chart_context: { ...(american ? { view: 'heatmap', metric: 'pnl', valuationModel: 'american-crr-1024-v1' } : { view, metric: view === 'curve' ? chartMetric : 'pnl' }), ...(chartRange ? { range: chartRange } : {}), ...(activePnlDisplay !== 'pnl' && displayBasis ? { pnlDisplay: activePnlDisplay } : {}) } }) })
       const data = await response.json() as Partial<SparringSuccess> & { error?: { code: string; message?: string } }
       if (reviewRequest.current !== controller) return
+      if (data.calculated?.candidateSearch) {
+        if (!response.ok || !reviewedSnapshot || !data.reply || data.request_id !== requestId || data.base_state_version !== baseVersion || data.reply.operations.length || JSON.stringify(data.next_state) !== JSON.stringify(mergeAnalysisProposal(reviewedPosition, { ...projectAnalysisPosition(reviewedPosition)!, version: baseVersion + 1 }))) throw new Error('Candidate discovery must leave the reviewed holdings unchanged.')
+        const search = data.calculated.candidateSearch
+        data.calculated.candidateSearch = await checkSearch(search, projectAnalysisPosition(reviewedPosition)!, reviewedSnapshot, search.request, search.domain, controller.signal)
+        if (reviewRequest.current !== controller || strategyRef.current.version !== baseVersion) return
+      }
       if (data.next_state && data.reply) {
         if (data.request_id !== requestId || data.base_state_version !== baseVersion) throw new Error('Mismatched proposal identity')
         if (strategyRef.current.version !== baseVersion) {
@@ -1400,15 +1406,15 @@ export function App() {
       const next = mergeAnalysisProposal(current, includedNext), includedBefore = projectAnalysisPosition(current)!
       if (validateMarketConstruction(next, snapshot).length) throw new Error('Candidate no longer matches its quoted snapshot.')
       const baselineInRange = !includedBefore.legs.length || Date.parse(includedNext.scenarioDate) <= Math.min(...includedBefore.legs.map(leg => Date.parse(leg.expiry)))
-      const comparisonBaseline = !analysis && baselineInRange ? { ...structuredClone(includedBefore), scenarioSpot: includedNext.scenarioSpot, scenarioDate: includedNext.scenarioDate } : undefined
+      const comparisonBaseline = baselineInRange ? { ...structuredClone(includedBefore), scenarioSpot: includedNext.scenarioSpot, scenarioDate: includedNext.scenarioDate } : undefined
       const [before, selected] = await Promise.all([requestWorkspaceValuation(comparisonBaseline ?? includedBefore, controller.signal), requestWorkspaceValuation(projectAnalysisPosition(next)!, controller.signal)])
       if (reviewRequest.current !== controller || strategyRef.current !== current) return
       if (JSON.stringify(selected.metrics) !== JSON.stringify(candidate.metrics)) throw new Error('Candidate metrics could not be reconciled. Position unchanged.')
       const mixedCandidate = new Set(includedNext.legs.map(leg => leg.expiry)).size > 1
       const lossBound = mixedCandidate ? firstExpirySpreadLossBound(includedNext) : undefined
-      if (JSON.stringify(lossBound) !== JSON.stringify(candidate.lossBound) || lossBound && (analysis || lossBound.amount <= 0 || lossBound.amount > search.request.maxLoss)) throw new Error('Candidate first-expiry risk bound could not be reconciled. Position unchanged.')
+      if (JSON.stringify(lossBound) !== JSON.stringify(candidate.lossBound) || lossBound && (lossBound.amount <= 0 || lossBound.amount > search.request.maxLoss)) throw new Error('Candidate first-expiry risk bound could not be reconciled. Position unchanged.')
       setView('curve')
-      setProposal({ request_id: `candidate:${id}`, base_state_version: current.version, next_state: next, metrics: selected.metrics, before: before.metrics, comparisonBaseline, lossBound, ...(!analysis && !baselineInRange ? { comparisonUnavailable: 'Target-date comparison unavailable: the search date is beyond the first held option expiry. Current metrics retain the workspace scenario; no settlement or post-expiry holdings are inferred.' } : {}), ...(analysis ? { calculated: analysis.calculated, market_context: analysis.market_context } : {}), reply: {
+      setProposal({ request_id: `candidate:${id}`, base_state_version: current.version, next_state: next, metrics: selected.metrics, before: before.metrics, comparisonBaseline, lossBound, ...(!baselineInRange ? { comparisonUnavailable: 'Target-date comparison unavailable: the search date is beyond the first held option expiry. Current metrics retain the workspace scenario; no settlement or post-expiry holdings are inferred.' } : {}), ...(analysis ? { calculated: analysis.calculated, market_context: analysis.market_context } : {}), reply: {
         text: 'Selected quoted alternative', operations: [], evidence_ids: [], suggested_prompts: [], risk_classification: lossBound ? 'bounded' : selected.metrics.maxLoss === null ? 'unbounded' : 'bounded',
         assumptions: ['Replace included holdings with this new position, not a roll or executed trade. Included entries and any shares are replaced by the displayed quoted option legs; excluded holdings and their costs are retained.', `Candidate entry basis: ${search.request.basis}; total fee allowance ${money(search.request.feeAllowance)}. ${comparisonBaseline ? 'Held baseline and candidate are repriced at the search target; differences are modeled scenarios, not trading edge.' : 'Current and candidate scenarios may differ; their P/L difference is not a like-for-like improvement.'}`],
         objections: ['Dated quote estimates are not fills. No assignment, margin or realized closing costs are modeled. This selection is locally recalculated, not a new AI review.'],
@@ -1608,12 +1614,14 @@ export function App() {
                 {message.analysis.calculated?.candidateSearch && <section className="verified-risk" aria-label="Ranked quoted candidates">
                   <b>QUOTED ALTERNATIVES · NEW POSITIONS</b>
                   <p>{message.analysis.calculated.candidateSearch.coverage}</p>
+                  <p>{message.analysis.calculated.candidateSearch.assumptions}</p>
                   <details><summary>Search probability assumptions</summary><p>{message.analysis.calculated.candidateSearch.probabilityBasis}</p><p>Workspace probability after Apply uses your selected scenario and nearest strategy-leg IV; it can differ from these search figures.</p></details>
                   <p>{message.analysis.calculated.candidateSearch.evaluated} evaluated · {message.analysis.calculated.candidateSearch.eligible} within constraints · showing {message.analysis.calculated.candidateSearch.candidates.length}. Ranked by {message.analysis.calculated.candidateSearch.request.objective}.</p>
                   <p>Target ${message.analysis.calculated.candidateSearch.request.targetSpot} at {message.analysis.calculated.candidateSearch.request.targetDate} · {message.analysis.calculated.candidateSearch.model}. Not expected returns.</p>
                   {message.analysis.calculated.candidateSearch.candidates.map((candidate, rank) => <div key={candidate.id}>
-                    <p><strong>{rank + 1}. {candidate.state.legs.map(legDescription).join(' / ')}</strong></p>
-                    <p>Max profit at expiry {candidate.metrics.maxProfit === null ? 'Unbounded' : money(candidate.metrics.maxProfit)} · max loss at expiry {money(candidate.metrics.maxLoss)}</p>
+                    <p><strong>{rank + 1}. {candidate.state.stock && `${candidate.state.stock.shares} shares at ${money(candidate.state.stock.entryPrice)} dated mark / `}{candidate.state.legs.map(legDescription).join(' / ')}</strong></p>
+                    <p>Max profit at expiry {candidate.lossBound ? 'Not exact' : candidate.metrics.maxProfit === null ? 'Unbounded' : money(candidate.metrics.maxProfit)} · {candidate.lossBound ? `Conservative first-expiry loss bound ${money(candidate.lossBound.amount)} at ${candidate.lossBound.date}` : `max loss at expiry ${money(candidate.metrics.maxLoss)}`}</p>
+                    {candidate.lossBound && <p>{candidate.lossBound.basis} This does not cap losses before first expiry or lifetime losses.</p>}
                     <p>Target P/L {money(candidate.metrics.scenarioPnl)} · score {candidate.score.toFixed(3)}</p>
                     <p>Modeled expiry profit probability: {candidate.probability.probability === null ? 'Unavailable' : `${(candidate.probability.probability * 100).toFixed(1)}%`} · not a forecast</p>
                     <details><summary>Probability reference</summary><p>From ${candidate.probability.spot} at {candidate.probability.from} to {candidate.probability.expiry}. IV {candidate.probability.volatility === null ? 'unavailable' : (candidate.probability.volatility * 100).toFixed(1)}% ({candidate.probability.volatilityContractId}).</p></details>

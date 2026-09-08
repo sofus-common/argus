@@ -6,8 +6,23 @@ import { ANALYSIS_ENGINE_VERSION, loadAnalysisPrompts, promptDigest } from "../s
 import { defaultAnalysisPrompts, readAnalysisPrompts, type AnalysisPrompts } from "../src/analysis-prompts";
 import { createApp } from "../src/worker";
 import { createStrategy } from "../src/options";
+import previous from "../prompts/analysis-v11.json";
 
 const db = (env as { DB: D1Database }).DB;
+it("versions domain-aware discovery while preserving unrelated prompt bytes", () => {
+  expect(defaultAnalysisPrompts.version).toBe("analysis-v12");
+  expect(ANALYSIS_ENGINE_VERSION).toBe("analysis-contract-v6");
+  for (const [key, value] of Object.entries(previous.prompts)) {
+    if (key !== "SYSTEM_PROMPT" && key !== "VERIFICATION_PROMPT") expect(defaultAnalysisPrompts.prompts[key as keyof typeof defaultAnalysisPrompts.prompts]).toBe(value);
+  }
+});
+it("requires explicit discovery domains and keeps candidate risk horizons separate", () => {
+  for (const key of ["SYSTEM_PROMPT", "VERIFICATION_PROMPT"] as const) {
+    const prompt = defaultAnalysisPrompts.prompts[key];
+    for (const term of ["domain.families", "maxEntryOutlay", "covered-call", "protective-put", "collar", "call-calendar", "put-calendar", "call-diagonal", "put-diagonal", "lossBound", "before first expiry", "100 shares", "Inspect candidate", "silently substitute"])
+      expect(prompt, `${key} missing ${term}`).toContain(term);
+  }
+});
 it("binds candidate evaluation to the exact imported prompt bytes", async () => {
   const expected = (env as { ARGUS_PROMPT_EXPECTED_DIGEST?: string }).ARGUS_PROMPT_EXPECTED_DIGEST;
   if (expected) expect(await promptDigest(defaultAnalysisPrompts)).toBe(expected);
@@ -61,6 +76,7 @@ it("rejects tampering, incompatible engines and invalid evaluation dates without
     { engine: "analysis-contract-v2" },
     { engine: "analysis-contract-v3" },
     { engine: "analysis-contract-v4" },
+    { engine: "analysis-contract-v5" },
     { evaluated: "not-a-date" },
     { json: JSON.stringify({ ...defaultAnalysisPrompts, version: "wrong-version" }) },
     { json: JSON.stringify({ ...defaultAnalysisPrompts, prompts: {} }) },

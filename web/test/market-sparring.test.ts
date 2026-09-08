@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { calculateStrategy, evaluateScenario, scenarioFacts, scenarioTable, scenarioSpotAttribution, createMarketStrategy, createStrategy, marketLeg, validateMarketStrategy, validateMarketConstruction, mergeAnalysisProposal, projectAnalysisPosition, type MarketSnapshot } from "../src/options";
+import { calculateStrategy, evaluateScenario, scenarioFacts, scenarioTable, scenarioSpotAttribution, createMarketStrategy, createStrategy, marketLeg, validateMarketStrategy, validateMarketConstruction, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, type MarketSnapshot, type CandidateSearchDomain } from "../src/options";
 import { AnalysisVerificationError, InvalidProposalError, RESPONSE_SCHEMA, parseSparringRequest, strategyFacts, spar, type SparringReply, type SparringRequest } from "../src/sparring";
 import type { MarketContext } from "../src/market-context";
 import { americanScenario } from "../src/american-surface";
@@ -716,6 +716,48 @@ it.each(["reply", "risk-type", "replace", "add", "remove", "update", "add-leg", 
   });
 });
 
+it('passes explicitly scoped stock and American mixed discovery through the unchanged read-only AI workflow', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
+  try {
+    const fresh = { ...snapshot, spotAsOf: snapshot.retrievedAt, availableExpiries: ['2026-09-08', '2026-09-15'], contracts: ['2026-09-08', '2026-09-15'].flatMap((date, index) => snapshot.contracts.map(c => ({ ...c, expiry: `${date}T20:15:00.000Z`, contractId: c.contractId.replace('260908', date.slice(2).replaceAll('-', '')), bid: c.bid + index, ask: c.ask + index, quoteAsOf: snapshot.retrievedAt }))) };
+    const domains: CandidateSearchDomain[] = [{ families: ['covered-call', 'protective-put', 'collar'], maxEntryOutlay: 100000 }, { families: ['call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'], maxEntryOutlay: 1000 }];
+    for (const domain of domains) {
+      const input = request(); input.state.valuationModel = 'american-crr-1024-v1';
+      const before = structuredClone(input), quotesBefore = structuredClone(fresh);
+      const search = { targetSpot: 655, targetDate: snapshot.retrievedAt, maxLoss: 100000, feeAllowance: 5, basis: 'natural' as const, objective: 'return-on-risk' as const };
+      const call = { id: 'domain-search', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify({ ...search, domain }) } };
+      const normal = provider(reply()), events: any[] = [];
+      const fetcher = vi.fn<typeof fetch>(async (url, init): Promise<Response> => fetcher.mock.calls.length === 1 ? Response.json({ choices: [{ message: { tool_calls: [call] } }] }) : normal(url, init));
+      const result = await spar(input, 'key', fetcher, context, fresh, undefined, event => events.push(event));
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(result.calculated.candidateSearch).toEqual(searchCandidates(input.state, fresh, search, domain));
+      expect(result.calculated.candidateSearch!.candidates.length).toBeGreaterThan(0);
+      expect(JSON.parse(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).messages.at(-1).content)).toEqual(result.calculated.candidateSearch);
+      expect(JSON.parse(JSON.parse(String(fetcher.mock.calls[2][1]?.body)).messages[1].content).calculated.candidateSearch).toEqual(result.calculated.candidateSearch);
+      expect(events.find(event => event.stage === 'tool-result').output).toEqual(result.calculated.candidateSearch);
+      const schema = JSON.parse(String(fetcher.mock.calls[0][1]?.body)).tools.find((tool: any) => tool.function.name === 'search_candidates').function.parameters;
+      expect(schema.required).not.toContain('domain'); expect(schema.properties.domain.required).toEqual(['families', 'maxEntryOutlay']); expect(schema.properties.domain.additionalProperties).toBe(false);
+      expect(input).toEqual(before); expect(fresh).toEqual(quotesBefore); expect(result.next_state).toEqual({ ...before.state, version: before.state.version + 1 });
+      const mutating = provider(reply([{ kind: 'set_contracts', leg_id: input.state.legs[0].id, contracts: 2 }]));
+      const mutator = vi.fn<typeof fetch>(async (url, init): Promise<Response> => mutator.mock.calls.length === 1 ? Response.json({ choices: [{ message: { tool_calls: [call] } }] }) : mutating(url, init));
+      await expect(spar(input, 'key', mutator, context, fresh)).rejects.toThrow('Candidate search is read-only'); expect(mutator).toHaveBeenCalledTimes(2);
+    }
+  } finally { vi.useRealTimers(); }
+}, 30000);
+it('rejects malformed discovery domains and unsupported model or objective before continuation', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
+  try {
+    const fresh = { ...snapshot, spotAsOf: snapshot.retrievedAt, contracts: snapshot.contracts.map(c => ({ ...c, quoteAsOf: snapshot.retrievedAt })) };
+    const search = { targetSpot: 655, targetDate: snapshot.retrievedAt, maxLoss: 1000, feeAllowance: 5, basis: 'natural', objective: 'target-pnl' };
+    const valid = { families: ['call-calendar'], maxEntryOutlay: 1000 };
+    for (const args of [null, [], { ...search, domain: null }, ...[{ families: [] }, { families: ['options'] }, { families: ['flow'], maxEntryOutlay: 1 }, { families: ['options', 'options'], maxEntryOutlay: 1 }, { families: ['options'], maxEntryOutlay: -1 }, { families: ['options'], maxEntryOutlay: '100' }, { ...valid, extra: true }].map(domain => ({ ...search, domain })), { ...search, domain: valid }, { ...search, domain: valid, objective: 'expiry-probability' }, { ...search, domain: { families: ['options'], maxEntryOutlay: 1 }, snapshotId: 'other-owner' }]) {
+      const input = request(); if ((args as any)?.objective === 'expiry-probability') input.state.valuationModel = 'american-crr-1024-v1';
+      const before = structuredClone(input);
+      const fetcher = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { tool_calls: [{ id: 'invalid-domain', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify(args) } }] } }] }));
+      await expect(spar(input, 'key', fetcher, context, fresh)).rejects.toThrow('Invalid scenario tool request'); expect(fetcher).toHaveBeenCalledTimes(1); expect(input).toEqual(before);
+    }
+  } finally { vi.useRealTimers(); }
+}, 30000);
 it.each(["target-pnl", "return-on-risk", "expiry-probability"])("returns frozen read-only %s candidate facts through the native AI tool roundtrip", async objective => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(snapshot.retrievedAt);
