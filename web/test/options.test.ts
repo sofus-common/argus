@@ -22,6 +22,7 @@ import {
   translateStrikes,
   marketLeg,
   searchCandidates,
+  firstExpirySpreadLossBound,
   validateMarketStrategy,
   type MarketSnapshot,
   validateStrategy,
@@ -36,6 +37,56 @@ import {
 } from "../src/options";
 
 const IDS = TEMPLATES.map((template) => template.id);
+describe('mixed-expiry candidate bounds', () => {
+  const snapshot: MarketSnapshot = { id: 'mixed-search', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09', '2026-11-09'], contracts: ['2026-10-09', '2026-11-09'].flatMap(date => (['call', 'put'] as const).flatMap(type => [95, 105].map(strike => ({ contractId: `SPY   ${date.slice(2).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: `${date}T20:00:00.000Z`, multiplier: 100 as const, bid: date.includes('10-09') ? 1 : 3, ask: date.includes('10-09') ? 3 : 5, iv: .25, quoteAsOf: '2026-09-01T12:00:00.000Z' })))) };
+  const input = { targetSpot: 102, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 10000, feeAllowance: 5, basis: 'mid' as const, objective: 'target-pnl' as const };
+  const domain = { families: ['call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'] as Array<'call-calendar' | 'put-calendar' | 'call-diagonal' | 'put-diagonal'>, maxEntryOutlay: 1000 };
+  it('enumerates only requested earlier-short later-long pairs and retains modeled risk boundaries', () => {
+    const held = { ...createMarketStrategy('long-call', snapshot), valuationModel: 'american-crr-1024-v1' as const }, before = structuredClone(held);
+    for (const basis of ['mid', 'natural'] as const) for (const objective of ['target-pnl', 'return-on-risk'] as const) {
+      const result = searchCandidates(held, snapshot, { ...input, basis, objective }, domain);
+      expect(result).toMatchObject({ planned: 8, evaluated: 8, eligible: 8, excludedRisk: 0, excludedCost: 0 });
+      const oracle = snapshot.contracts.filter(quote => quote.expiry.startsWith('2026-10')).flatMap(short => snapshot.contracts.filter(long => long.type === short.type && long.expiry.startsWith('2026-11')).map(long => {
+        const debit = (basis === 'mid' ? 200 : 400) + 5, width = Math.max(0, short.type === 'call' ? long.strike - short.strike : short.strike - long.strike);
+        const shortValue = Math.max(0, short.type === 'call' ? input.targetSpot - short.strike : short.strike - input.targetSpot);
+        const longValue = americanPrice(long.type, input.targetSpot, long.strike, 31 / 365, held.rate, held.dividendYield, long.iv + held.ivShift, 1024);
+        const pnl = Number((100 * (longValue - shortValue) - debit).toFixed(8));
+        return { id: `short:${short.contractId}|long:${long.contractId}`, score: objective === 'target-pnl' ? pnl : pnl / (debit + 100 * width) };
+      })).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 5);
+      expect(result.candidates.map(({ id, score }) => ({ id, score }))).toEqual(oracle);
+      for (const candidate of result.candidates) {
+        const [short, long] = candidate.state.legs;
+        expect(short.side).toBe('short'); expect(long.side).toBe('long'); expect(short.expiry < long.expiry).toBe(true);
+        const debit = (basis === 'mid' ? 200 : 400) + 5;
+        const width = Math.max(0, short.type === 'call' ? long.strike - short.strike : short.strike - long.strike);
+        expect(candidate.lossBound).toMatchObject({ kind: 'conservative-first-expiry', amount: debit + 100 * width, date: short.expiry });
+        expect(candidate.metrics.maxLoss).toBeNull(); expect(candidate.metrics.maxProfit).toBeNull(); expect(candidate.probability.probability).toBeNull();
+        expect(candidate.score).toBe(objective === 'target-pnl' ? candidate.metrics.scenarioPnl : candidate.metrics.scenarioPnl / (debit + 100 * width));
+      }
+    }
+    for (const family of domain.families) expect(searchCandidates(held, snapshot, input, { ...domain, families: [family] })).toMatchObject({ planned: 2, evaluated: 2 });
+    expect(searchCandidates(held, snapshot, input, { ...domain, maxEntryOutlay: 204.99 })).toMatchObject({ eligible: 0, excludedCost: 8 });
+    expect(searchCandidates(held, snapshot, { ...input, maxLoss: 204 }, domain)).toMatchObject({ eligible: 0, excludedBudget: 8 });
+    expect(searchCandidates(held, snapshot, { ...input, targetDate: '2026-10-10T20:00:00.000Z' }, domain)).toMatchObject({ planned: 0, evaluated: 0 });
+    expect(searchCandidates(held, snapshot, { ...input, targetDate: '2026-10-08T20:00:00.000Z' }, domain)).toMatchObject({ planned: 8, evaluated: 8 });
+    expect(() => searchCandidates({ ...held, valuationModel: 'european-bsm-v1' }, snapshot, input, domain)).toThrow();
+    expect(() => searchCandidates(held, snapshot, { ...input, objective: 'expiry-probability' }, domain)).toThrow();
+    expect(held).toEqual(before);
+  }, 30000);
+  it('bounds American first-expiry marks without claiming exact extrema and rejects unsupported holdings', () => {
+    const held = { ...createMarketStrategy('long-call', snapshot), valuationModel: 'american-crr-1024-v1' as const, scenarioDate: input.targetDate, feeAllowance: 7 };
+    for (const type of ['call', 'put'] as const) for (const [shortStrike, longStrike] of [[95, 95], [95, 105], [105, 95]]) for (const dividendYield of [-.04, .08]) {
+      const legs = [marketLeg(snapshot.contracts.find(c => c.type === type && c.strike === shortStrike && c.expiry.startsWith('2026-10'))!, 'short', 2, 'short', 'mid'), marketLeg(snapshot.contracts.find(c => c.type === type && c.strike === longStrike && c.expiry.startsWith('2026-11'))!, 'long', 2, 'long', 'mid')];
+      const state = { ...held, legs, dividendYield, rate: dividendYield > 0 ? -.03 : .05 }, bound = firstExpirySpreadLossBound(state);
+      expect(bound.amount).toBe(407 + 200 * Math.max(0, type === 'call' ? longStrike - shortStrike : shortStrike - longStrike));
+      for (const point of payoffSeries(state, 0, 200, 4)) expect(point.pnl).toBeGreaterThanOrEqual(-bound.amount - 1e-6);
+      expect(firstExpirySpreadLossBound({ ...state, legs: [...legs].reverse() })).toEqual(bound);
+      expect(firstExpirySpreadLossBound({ ...state, legs: [{ ...legs[0], entryPrice: 10000 }, legs[1]] }).amount).toBe(0);
+      expect(() => firstExpirySpreadLossBound({ ...state, legs: [{ ...legs[0], entryPrice: 1e308 }, legs[1]] })).toThrow();
+      for (const invalid of [{ ...state, valuationModel: 'european-bsm-v1' }, { ...state, stock: { shares: 1, entryPrice: 100 } }, { ...state, excludedLegIds: ['short'] }, { ...state, legs: legs.map(leg => ({ ...leg, side: leg.side === 'long' ? 'short' : 'long' })) }, { ...state, legs: [legs[0], { ...legs[1], contracts: 1 }] }]) expect(() => firstExpirySpreadLossBound(invalid as StrategyState)).toThrow();
+    }
+  }, 30000);
+});
 describe('explicit stock-backed candidate domain', () => {
   const snapshot: MarketSnapshot = { id: 'stock-search', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09'], contracts: ([['call', 100], ['call', 110], ['put', 90], ['put', 100]] as const).map(([type, strike]) => ({ contractId: `SPY   261009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100, bid: 1, ask: 3, iv: .2, quoteAsOf: '2026-09-01T12:00:00.000Z' })) };
   const input = { targetSpot: 120, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 100000, feeAllowance: 5, basis: 'mid' as const, objective: 'target-pnl' as const };

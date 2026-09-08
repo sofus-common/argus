@@ -86,6 +86,61 @@ async function run() {
     finally { await unmount() }
   }
   try {
+    await test('American calendar discovery preserves bound scope through comparison, save, reopen and Undo', async () => {
+      await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
+      const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];
+      const snapshot: MarketSnapshot = { id: 'mixed-discovery', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [95, 100, 105].map(strike => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}C${String(strike * 1000).padStart(8, '0')}`, type: 'call' as const, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp }))) };
+      const held = createMarketStrategy('long-call', snapshot); held.valuationModel = 'american-crr-1024-v1'; held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.feeAllowance = 5;
+      const seed = { id: 'mixed-seed', title: 'Mixed search fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
+      let saved: typeof seed | undefined, mode: 'normal' | 'altered' | 'deferred' = 'normal', release: (() => void) | undefined, calls = 0;
+      window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Mixed fixture', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies' && init?.method === 'POST') { saved = { ...seed, id: 'mixed-copy', state: JSON.parse(String(init.body)).state }; return Response.json({ record: saved }, { status: 201 }); }
+        if (url === '/api/strategies') return Response.json({ strategies: saved ? [seed, saved] : [seed] });
+        if (url === '/api/strategies/mixed-seed') return Response.json({ record: seed });
+        if (url === '/api/strategies/mixed-copy') return Response.json({ record: saved });
+        if (url === '/api/candidates') {
+          calls++; const body = JSON.parse(String(init?.body)), result = searchCandidates(body.state, snapshot, body.search, body.domain);
+          assert(result.candidates.length > 0, 'No calendar candidates in fixture');
+          if (mode === 'altered') result.candidates[0].lossBound!.amount += 1;
+          if (mode === 'deferred') return new Promise<Response>(resolve => { release = () => resolve(Response.json({ search: result })); });
+          return Response.json({ search: result });
+        }
+        throw new Error(`Unexpected mixed search request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean, stage: string) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), `Mixed discovery ${stage}: ${[...fixture.querySelectorAll('[role="alert"], .workspace-error')].map(node => node.textContent).join(' | ')}`) };
+      const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input, .leg-list select')].map(field => field.value).join();
+      const configure = async () => {
+        await change('Optimizer target date UTC', dates[0].slice(0, 19)); await change('Optimizer target price', '100');
+        await act(async () => fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer options only"]')!.click());
+        await act(async () => fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call calendar"]')!.click());
+      };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !!fixture.querySelector('option[value="mixed-seed"]'), 'seed');
+        await change('Saved positions', seed.id); await click('Load');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer call calendar"]') && !fixture.querySelector<HTMLInputElement>('[aria-label="Optimizer call calendar"]')!.disabled, 'American model');
+        const before = inputs(); await configure(); await click('Find strategies');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'ranking');
+        assert(fixture.querySelector('[aria-label="Deterministic quoted candidates"]')!.textContent!.toLowerCase().includes('conservative'), 'Calendar bound not labeled');
+        await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspection');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), 'target comparison');
+        assert(inputs() === before, 'Calendar inspection changed held entries');
+        const boundScope = fixture.querySelector('[aria-label="Candidate conservative first-expiry bound"]')?.textContent ?? '';
+        assert(boundScope.includes('Conservative first-expiry loss bound') && boundScope.includes('does not cap losses before first expiry or lifetime losses'), 'Inspection omitted bound scope');
+        await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, 'save');
+        assert(saved!.state.legs.length === 2 && new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && saved!.state.valuationModel === 'american-crr-1024-v1', 'Calendar transfer lost expiries or explicit model');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Calendar Undo lost held inputs');
+        await change('Saved positions', 'mixed-copy'); await click('Load'); await waitFor(() => fixture.querySelectorAll('.leg-row').length === 2, 'reopen');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Reopened calendar Undo changed holding');
+        await configure(); mode = 'altered'; await click('Find strategies'); await waitFor(() => !!fixture.querySelector('[aria-label="Strategy optimizer"] [role="alert"]'), 'tamper');
+        assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && inputs() === before, 'Altered bound reached builder');
+        mode = 'deferred'; await click('Find strategies'); await waitFor(() => !!release, 'pending');
+        await change('Optimizer maximum entry outlay', '9999'); await act(async () => release!()); release = undefined;
+        await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && calls === 3, 'Cancelled calendar search survived');
+      } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
+    });
     await test('Three-expiry tail reaches the rendered workspace through the valuation worker', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
       const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-09-10T20:00:00.000Z', '2027-10-08T20:00:00.000Z', '2027-11-12T20:00:00.000Z'];

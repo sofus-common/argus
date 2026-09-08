@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Expanded direct discovery with call/put calendars and diagonals: one earlier
+  short option and one later long option, requiring explicit American valuation
+  and a target no later than short expiry. Budgets use a conservative intact
+  first-expiry loss bound, not exact maximum loss, lifetime risk or margin.
+  Probability ranking is unavailable for these searches. Bounds and metrics
+  are recomputed before comparison and transfer; existing AI searches remain
+  byte-identical in six compatibility checks, with no new inference calls.
+  Verified 187 focused tests, TypeScript and production build; an independent
+  numerical review matched 40 ranked results across dates, bases and objectives.
+  Real-data checks searched 1,250 mixed-expiry pairs from 100 SPY quotes.
+  All 32 rendered workflow checks passed at desktop and 390px mobile widths,
+  including calendar comparison, Apply/save/reopen/Undo, altered-bound rejection
+  and pending-search cancellation. Browser providers and saved backend are
+  mocked; this does not establish live-session reliability or hosted readiness.
+
 - Corrected conditional first-expiry tail calculations for positions with three
   or four expiries. Each surviving maturity now receives its own carry and
   strike discount; exact same-expiry offsets and numerical-uncertainty guards

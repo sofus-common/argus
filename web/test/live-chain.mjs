@@ -69,8 +69,28 @@ if (optimizer) {
     assert.deepEqual(validateMarketStrategy(candidate.state, snapshot), []);
     assert.ok(Math.max(0, -candidate.metrics.entryAccounting.netEntryCashFlowAfterAllowance) <= domain.maxEntryOutlay);
   }
+  const mixedState = { ...state, valuationModel: 'american-crr-1024-v1' };
+  const mixedDomain = { families: ['call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'], maxEntryOutlay: 5000 };
+  const mixedSearch = { ...search, maxLoss: 5000 };
+  const mixedResponse = await post('/api/candidates', { state: mixedState, search: mixedSearch, domain: mixedDomain });
+  const mixedBody = await mixedResponse.json();
+  assert.equal(mixedResponse.status, 200, JSON.stringify(mixedBody.error));
+  assert.ok(mixedBody.search.candidates.length > 0);
+  for (const candidate of mixedBody.search.candidates) {
+    const short = candidate.state.legs.find(leg => leg.side === 'short'), long = candidate.state.legs.find(leg => leg.side === 'long');
+    assert.equal(candidate.state.legs.length, 2); assert.equal(short.type, long.type);
+    assert.ok(Date.parse(short.expiry) < Date.parse(long.expiry));
+    const debit = (long.entryPrice - short.entryPrice) * 100 + mixedSearch.feeAllowance;
+    const bound = Math.max(0, debit + 100 * Math.max(0, long.type === 'call' ? long.strike - short.strike : short.strike - long.strike));
+    assert.ok(Math.abs(candidate.lossBound.amount - bound) < 1e-8);
+    assert.equal(candidate.lossBound.date, short.expiry);
+    assert.ok(bound <= mixedSearch.maxLoss && Math.max(0, debit) <= mixedDomain.maxEntryOutlay);
+    assert.equal(candidate.metrics.maxLoss, null); assert.equal(candidate.probability.probability, null);
+    assert.deepEqual(candidate.metrics, calculateStrategy(candidate.state));
+    assert.deepEqual(validateMarketStrategy(candidate.state, snapshot), []);
+  }
   assert.deepEqual(state, original);
-  console.log(JSON.stringify({ passed: true, contracts: snapshot.contracts.length, retrievedAt: snapshot.retrievedAt, spotAsOf: snapshot.spotAsOf, oldestQuote: snapshot.contracts.map(c => c.quoteAsOf).sort()[0], evaluated: body.search.evaluated, eligible: body.search.eligible, returned: body.search.candidates.length, stockEvaluated: stockBody.search.evaluated, stockReturned: stockBody.search.candidates.length, inferenceRequests: 0, sourceUnchanged: true, coverage: body.search.coverage }));
+  console.log(JSON.stringify({ passed: true, contracts: snapshot.contracts.length, retrievedAt: snapshot.retrievedAt, spotAsOf: snapshot.spotAsOf, oldestQuote: snapshot.contracts.map(c => c.quoteAsOf).sort()[0], evaluated: body.search.evaluated, eligible: body.search.eligible, returned: body.search.candidates.length, stockEvaluated: stockBody.search.evaluated, stockReturned: stockBody.search.candidates.length, mixedEvaluated: mixedBody.search.evaluated, mixedReturned: mixedBody.search.candidates.length, inferenceRequests: 0, sourceUnchanged: true, coverage: body.search.coverage }));
   process.exit(0);
 }
 const target = { scenarioDate: state.scenarioDate, scenarioSpot: state.spot, ivShift: 0, legIvShifts: state.legs.map((leg, i) => ({ legId: leg.id, ivShift: (i + 1) / 100 })) };

@@ -40,6 +40,23 @@ it("searches quoted candidates directly without inference and rejects stale or f
     expect(candidate.state.stock).toEqual({ shares: 100, entryPrice: 100 });
     expect(candidate.metrics).toEqual(calculateStrategy(candidate.state));
   }
+  const later = new Date(Date.parse(expiry) + 30 * 86400000).toISOString();
+  const mixedSnapshot = { ...snapshot, availableExpiries: [expiry.slice(0, 10), later.slice(0, 10)], contracts: [...snapshot.contracts, ...snapshot.contracts.map(quote => ({ ...quote, expiry: later, contractId: quote.contractId.replace(expiry.slice(2, 10).replaceAll("-", ""), later.slice(2, 10).replaceAll("-", "")) }))] };
+  await traceDB.prepare("UPDATE quote_snapshots SET snapshot_json = ? WHERE id = ?").bind(JSON.stringify(mixedSnapshot), snapshot.id).run();
+  const mixedDomain = { families: ["call-calendar"], maxEntryOutlay: 1000 }, american = { ...state, valuationModel: "american-crr-1024-v1" };
+  expect((await request({ state, search, domain: mixedDomain })).status).toBe(400);
+  expect((await request({ state: american, search: { ...search, objective: "expiry-probability" }, domain: mixedDomain })).status).toBe(400);
+  const mixedResult = await request({ state: american, search, domain: mixedDomain });
+  expect(mixedResult.status).toBe(200);
+  const mixedBody = await mixedResult.json() as any;
+  expect(mixedBody.search.candidates).toHaveLength(3);
+  for (const candidate of mixedBody.search.candidates) {
+    expect(candidate.lossBound).toMatchObject({ kind: "conservative-first-expiry", amount: 105, date: expiry });
+    expect(candidate.metrics.maxLoss).toBeNull(); expect(candidate.metrics.maxProfit).toBeNull();
+    expect(candidate.probability.probability).toBeNull();
+    expect(candidate.metrics).toEqual(calculateStrategy(candidate.state));
+  }
+  await traceDB.prepare("UPDATE quote_snapshots SET snapshot_json = ? WHERE id = ?").bind(JSON.stringify(snapshot), snapshot.id).run();
   for (const invalid of [null, {}, { ...domain, maxEntryOutlay: -1 }, { ...domain, families: [] }, { ...domain, families: ["calendar"] }, { ...domain, families: ["options", "options"] }, { ...domain, extra: true }]) expect((await request({ state, search, domain: invalid })).status).toBe(400);
   for (const body of [{ state, search, extra: true }, { state, search: { ...search, maxLoss: -1 } }, { state, search: { ...search, maxCost: 10 } }]) expect((await request(body)).status).toBe(400);
   expect((await request({ state: { ...state, legs: [] }, search })).status).toBe(422);
