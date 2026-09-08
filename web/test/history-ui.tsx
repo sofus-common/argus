@@ -189,6 +189,68 @@ async function run() {
         assert(fixture.textContent?.includes('Future source time'), 'Future source presented as current');
       } finally { await unmount(); window.setInterval = priorInterval; Date.now = () => fixedNow }
     });
+    await test('Reversible exclusion retains construction, restores through Undo and supports empty drafts', async () => {
+      await unmount(); const priorFetch = window.fetch, priorWorker = window.Worker;
+      const sentStates: ReturnType<typeof createStrategy>[] = [];
+      const activeWorkers = new Set<Worker>();
+      window.Worker = class extends priorWorker {
+        constructor(url: string | URL, options?: WorkerOptions) { super(url, options); activeWorkers.add(this) }
+        terminate() { activeWorkers.delete(this); super.terminate() }
+        postMessage(message: any, options?: any) { if (message?.state?.legs) sentStates.push(structuredClone(message.state)); super.postMessage(message, options) }
+      };
+      let saved: { id: string; title: string; revision: number; createdAt: string; updatedAt: string; state: ReturnType<typeof createStrategy>; snapshot: null; lifecycle: null } | undefined;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Exclusion test', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies' && init?.method === 'POST') {
+          const body = JSON.parse(String(init.body)), stamp = new Date(fixedNow).toISOString();
+          saved = { id: 'excluded-test', title: body.title, revision: 1, createdAt: stamp, updatedAt: stamp, state: body.state, snapshot: null, lifecycle: null };
+          return Response.json({ record: saved }, { status: 201 });
+        }
+        if (url === '/api/strategies') return Response.json({ strategies: saved ? [saved] : [] });
+        if (url === '/api/strategies/excluded-test') return Response.json({ record: saved });
+        throw new Error('Unexpected exclusion test request');
+      }) as typeof fetch;
+      const selection = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input[type="checkbox"]')];
+      const rows = () => fixture.querySelectorAll('.leg-row').length;
+      const held = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
+      const empty = () => fixture.querySelector('[aria-label="Empty analysis selection"]');
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        const count = rows(), original = held();
+        assert(count > 0 && selection().length === count, 'Each leg needs an analysis inclusion toggle');
+        await act(async () => selection()[0].click());
+        assert(sentStates.at(-1)?.legs.length === count - 1 && !sentStates.at(-1)?.excludedLegIds?.length, 'Worker received canonical excluded holdings instead of included projection');
+        for (const checkbox of selection().filter(input => input.checked)) await act(async () => checkbox.click());
+        assert(empty() && rows() === count && held() === original, 'Exclusion lost holdings or failed to clear analysis');
+        assert(activeWorkers.size === 0, 'Empty selection retained a pricing worker');
+        assert(selection().every(input => !input.checked), 'All-excluded selection not retained');
+        await click('Save');
+        for (let i = 0; i < 100 && (fixture.querySelector('[aria-label="Saved positions"]') as HTMLSelectElement | null)?.value !== 'excluded-test'; i++) await settleTimers();
+        assert(saved?.state.legs.length === count && saved.state.excludedLegIds?.length === count, 'Save lost excluded inventory');
+        await click('Include all legs');
+        assert(!empty() && selection().every(input => input.checked) && held() === original, 'Re-inclusion changed held inputs');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(empty() && selection().every(input => !input.checked), 'Undo did not restore all-excluded state');
+        await click('Include all legs'); await click('Load');
+        for (let i = 0; i < 100 && !empty(); i++) await settleTimers();
+        assert(empty() && rows() === count && held() === original, 'Saved reload lost excluded inventory or selection');
+        for (let i = 0; i < count; i++) await act(async () => fixture.querySelector<HTMLButtonElement>('.leg-row [aria-label="Remove leg"]')!.click());
+        assert(empty() && rows() === 0, 'Last leg cannot be removed into empty construction');
+        await click('＋ Add leg');
+        assert(rows() === 1 && !empty(), 'Empty construction cannot add its first leg');
+        const calendar = [...fixture.querySelectorAll<HTMLButtonElement>('.template-list button')].find(button => button.querySelector('span')?.textContent?.toLowerCase() === 'call calendar');
+        assert(calendar, 'Calendar template missing'); await act(async () => calendar.click());
+        const expiries = [...fixture.querySelectorAll<HTMLInputElement>('.leg-list [aria-label="Expiry"]')].map(input => input.value).sort();
+        await act(async () => selection()[0].click());
+        await change('Scenario date UTC', expiries[1].slice(0, -1));
+        await act(async () => fixture.querySelectorAll<HTMLButtonElement>('.leg-row [aria-label="Remove leg"]')[1].click());
+        assert(empty() && rows() === 1, 'Calendar exclusion did not retain near leg');
+        await click('Include all legs');
+        assert(empty(), 'Invalid near-expiry re-inclusion changed selection');
+        await click('Reset scenario to valuation'); await click('Include all legs');
+        assert(!empty() && selection()[0].checked, 'Empty calendar cannot recover its scenario date');
+      } finally { await unmount(); window.fetch = priorFetch; window.Worker = priorWorker }
+    });
     await test('Workspace captures preserve holdings and scenarios, group automatic Undo and reject late edits', async () => {
       await unmount(); const priorFetch = window.fetch, originalSocket = window.WebSocket, originalWorker = window.Worker;
       let socket: { onmessage?: (event: { data: string }) => void } | undefined, captures = 0;

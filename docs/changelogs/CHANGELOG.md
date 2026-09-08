@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added visible reversible leg inclusion, Include all, and empty construction.
+  Charts, quotes, probability and Greeks use included holdings; save/load, Undo
+  and refresh retain canonical costs and legs. Empty selections stop pricing
+  workers. Explicit date reset recovers excluded calendars after later scenarios.
+  Verified23 browser checks at desktop and390px,147 focused tests, TypeScript,
+  build and independent review. Synthetic data only. AI review is explicitly
+  unavailable while legs are excluded, pending exclusion-aware proposal handling.
+
 - Preserved hypothetical leg exclusions and empty constructions through draft
   recovery, owner-scoped saves, reload and import/export. Market validation still
   checks excluded contracts. Ledger marks and scenarios value every held lot;
