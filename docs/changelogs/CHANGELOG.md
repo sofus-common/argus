@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Verified actual local feed disconnect/reconnect on the same held-cost position:
+  disconnect cleared marks, reconnect restored coverage, entry costs stayed fixed,
+  and automatic repricing remained off. Missing bid/ask source timestamps kept
+  capture disabled before and after reconnect. A separate bounded feed probe
+  observed advancing IV timestamps but failed dated-capture eligibility.
+  This is fail-safe reconnect evidence, not successful post-reconnect capture
+  or representative trading-session reliability. No runtime code was changed.
+
 - Connected conversational ranked results to the same two-alternative comparison
   used by the manual optimizer. Compare metrics and charts without changing
   holdings, then Inspect and explicitly Apply or Undo. Selection resets with
