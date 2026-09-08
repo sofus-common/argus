@@ -23,7 +23,7 @@ for (const corruption of [{ bundle_json: "null" }, { evaluated_at: "invalid" }, 
 const directory = mkdtempSync(join(tmpdir(), "argus-prompt-eval-"));
 const run = (file, args, env = process.env, capture = false) => execFileSync(process.execPath, [join(root, "node_modules", file), ...args], { cwd: root, env, ...(capture ? { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] } : { stdio: "inherit" }) });
 try {
-  // Freeze bytes before testing; edits to the original file cannot race activation.
+  // Freeze bytes before testing; the full suite checks baseline contracts and explicit candidate loading/transport.
   const frozen = join(directory, "candidate.json");
   writeFileSync(frozen, json);
   run("vitest/vitest.mjs", ["run", "--maxWorkers=1"], { ...process.env, ARGUS_PROMPT_CANDIDATE: frozen, ARGUS_PROMPT_EXPECTED_DIGEST: digest });

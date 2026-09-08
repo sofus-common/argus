@@ -8,6 +8,7 @@
 // --intraday-date-control runs two verifier calls on a reconstructed observed date-confusion pair; --isolated-date uses a minimal pair instead.
 // --leg-iv-baseline: at most three paid calls; --replay-observed only one verifier call; --self-check stays offline.
 // --candidate-coverage: at most three paid calls with --run; --self-check stays offline. Legacy --candidate-search modes are unchanged.
+// --european-discovery: five frozen synthetic cases, at most three calls each / fifteen total; --self-check stays offline.
 // --long-call-loss-control: one paid verifier with --run; --positive-control selects the correction; --self-check tests both paths offline.
 // --contract-terms-control uses that same harness for contract exercise style versus numerical valuation model.
 // Either frozen control accepts --compact-unchanged-verification for an evaluation-only facts reference; production payloads stay unchanged.
@@ -540,6 +541,101 @@ if (process.argv.includes('--long-call-loss-control') || process.argv.includes('
     assert.ok(passed, 'Long-call loss control failed; offline mocks check wiring, not semantic quality');
   }
   assert.equal(paidCalls, offline ? 0 : 1);
+  process.exit(0);
+}
+
+if (process.argv.includes('--european-discovery')) {
+  const flags = process.argv.slice(2), live = flags.includes('--run');
+  assert.ok(flags.every(flag => ['--european-discovery', '--self-check', '--run'].includes(flag)) && new Set(flags).size === flags.length);
+  assert.notEqual(live, flags.includes('--self-check'));
+  registerHooks({ resolve(specifier, context, next) { return next(specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier) ? new URL(`${specifier}.ts`, context.parentURL).href : specifier, context); } });
+  const { createMarketStrategy, searchCandidates, validateMarketStrategy } = await import('../src/options.ts');
+  const { spar, MODEL } = await import('../src/sparring.ts');
+  const { readAnalysisPrompts, defaultAnalysisPrompts } = await import('../src/analysis-prompts.ts');
+  const prompts = readAnalysisPrompts(process.env.ARGUS_PROMPT_CANDIDATE ? JSON.parse(readFileSync(resolve(process.env.ARGUS_PROMPT_CANDIDATE), 'utf8')) : defaultAnalysisPrompts);
+  const promptDigest = createHash('sha256').update(JSON.stringify(prompts)).digest('hex');
+  const retrievedAt = new Date().toISOString();
+  const expiries = [14, 42].map(days => { const date = new Date(Date.parse(retrievedAt) + days * 86400000); date.setUTCHours(20, 0, 0, 0); return date.toISOString(); });
+  const snapshot = {
+    id: 'synthetic-european-discovery', underlying: 'XSP', underlyingKind: 'cash-index', source: 'Synthetic evaluation', retrievedAt, spot: 100, spotAsOf: retrievedAt, indexSourceTime: retrievedAt,
+    contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, availableExpiries: expiries.map(date => date.slice(0, 10)),
+    contracts: expiries.flatMap((expiry, index) => [95, 100, 105].flatMap(strike => ['call', 'put'].map(type => {
+      const mid = (type === 'call' ? { 95: 6, 100: 2, 105: 1 }[strike] : { 95: 1, 100: 2, 105: 6 }[strike]) + index * 2;
+      return { contractId: `XSP   ${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100, bid: mid - .1, ask: mid + .1, iv: .25, quoteAsOf: retrievedAt };
+    }))),
+  };
+  const input = (type, objective) => ({ targetSpot: type === 'put' ? 95 : 105, targetDate: expiries[0], maxLoss: 2000, feeAllowance: 5, basis: 'natural', objective, domain: { families: [`${type}-calendar`, `${type}-diagonal`], maxEntryOutlay: 1500 } });
+  const explicit = args => `Search only ${args.domain.families.join(' and ')} new trades. Target index level ${args.targetSpot} at ${args.targetDate}, ${args.objective} objective. Maximum conservative first-expiry loss $2000, maximum net entry outlay $1500, total fee allowance $5 per candidate, natural pricing.`;
+  const puts = input('put', 'target-pnl'), calls = input('call', 'return-on-risk');
+  const cases = [
+    { id: 'european-put-discovery', q: .02, expected: puts, content: explicit(puts) },
+    { id: 'european-zero-yield-call-discovery', q: 0, expected: calls, content: explicit(calls) },
+    { id: 'european-positive-yield-call-refusal', q: .02, content: explicit(calls) },
+    { id: 'european-ambiguous-clarification', q: .02, content: 'Find me a good put calendar.' },
+    { id: 'european-mixed-probability-refusal', q: .02, content: explicit({ ...puts, objective: 'expiry-probability' }) },
+  ];
+  let key = 'offline-not-a-key', paidCalls = 0, failures = 0;
+  if (live) {
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim();
+    key = parseEnv(readFileSync(resolve(dirname(resolve(common)), '.env'), 'utf8')).OPENROUTER_API_KEY;
+    assert.ok(key, 'OpenRouter configuration missing');
+  }
+  console.log(JSON.stringify({ mode: 'european-discovery', promptVersion: prompts.version, promptDigest, requestedModel: MODEL, snapshot, rubric: 'Exact explicit tool arguments and deterministic oracle for two supported cases; no tool calls for three refusal/clarification cases; all replies read-only; independent semantic review required. This does not qualify selected-candidate comparison or general model quality.' }));
+  for (const item of cases) {
+    const state = { ...createMarketStrategy('long-call', snapshot, 'natural'), rate: .05, dividendYield: item.q };
+    const original = structuredClone(state), originalSnapshot = structuredClone(snapshot);
+    assert.deepEqual(validateMarketStrategy(state, snapshot), []);
+    const oracle = item.expected ? searchCandidates(state, snapshot, (({ domain, ...args }) => args)(item.expected), item.expected.domain) : undefined;
+    if (oracle) { assert.ok(oracle.candidates.length > 0); assert.equal(oracle.evaluated, 9); }
+    const request = { request_id: `probe-${item.id}`, base_state_version: state.version, state, conversation: [{ role: 'user', content: `${item.content} These are synthetic evaluation quotes, not live data or fills. Retain the selected European model and dividend yield ${item.q}. Read-only: do not modify my position.` }] };
+    const validate = (result, stages) => {
+      assert.deepEqual(stages.map(stage => stage.phase), item.expected ? ['draft', 'continuation', 'verification'] : ['draft', 'verification']);
+      const tools = stages.flatMap(stage => stage.output?.tool_calls ?? []);
+      if (item.expected) {
+        assert.equal(tools.length, 1); assert.equal(tools[0].function.name, 'search_candidates');
+        assert.deepEqual(JSON.parse(tools[0].function.arguments), item.expected, 'Frozen tool arguments changed');
+        assert.deepEqual(result.calculated.candidateSearch, oracle);
+      } else { assert.deepEqual(tools, []); assert.equal(result.calculated.candidateSearch, null); }
+      assert.deepEqual(result.reply.operations, []);
+      assert.deepEqual(result.next_state, { ...original, version: original.version + 1 });
+      assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
+    };
+    for (const altered of live || !item.expected ? [false] : [false, true]) {
+      const stages = [], started = performance.now();
+      let passed = false, reply, failure;
+      try {
+        const result = await spar(request, key, async (url, init) => {
+          assert.ok(stages.length < 3, 'Per-case call ceiling exceeded');
+          const body = JSON.parse(init.body), index = stages.length;
+          assert.equal(body.model, MODEL);
+          const stage = { phase: body.response_format?.json_schema?.name === 'analysis_verification' ? 'verification' : index ? 'continuation' : 'draft', requestedModel: body.model };
+          stages.push(stage);
+          let response;
+          if (live) {
+            assert.ok(++paidCalls <= 15, 'Total paid call ceiling exceeded');
+            response = await fetch(url, init);
+            const metadata = await response.clone().json().catch(() => null);
+            stage.resolvedModel = metadata?.model ?? 'unknown'; stage.provider = metadata?.provider ?? 'unknown';
+            stage.finishReason = metadata?.choices?.[0]?.finish_reason ?? 'unknown';
+          } else {
+            const message = index === 0 && item.expected ? { tool_calls: [{ id: 'synthetic-search', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify({ ...item.expected, ...(altered ? { maxLoss: 1900 } : {}) }) } }] }
+              : { content: JSON.stringify(stage.phase === 'verification' ? { valid: true } : { text: item.expected ? 'Synthetic conditional search results, not fills, lifetime bounds or expected returns.' : 'Please clarify the request or use a supported objective and domain; no search or position change was made.', assumptions: [], objections: [], operations: [], suggested_prompts: [], risk_classification: 'bounded', evidence_ids: [] }) };
+            response = Response.json({ choices: [{ message }] }); stage.mocked = true;
+          }
+          stage.status = response.status;
+          return traceResponse(response, stage, started, true);
+        }, undefined, snapshot, prompts);
+        reply = result.reply;
+        if (altered) assert.throws(() => validate(result, stages), error => error instanceof assert.AssertionError && error.message.includes('Frozen tool arguments changed'));
+        else validate(result, stages);
+        passed = true;
+      } catch (error) { failure = error instanceof Error ? error.message : 'Unknown failure'; failures++; }
+      assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
+      console.log(JSON.stringify({ case: item.id, mocked: !live, alteredArgumentsControl: altered, expected: item.expected ?? 'no-tool-call', state, oracle, promptVersion: prompts.version, promptDigest, stages, reply, passed, failure, elapsedMs: Math.round(performance.now() - started), paidCalls }).split(key).join('[REDACTED]'));
+    }
+  }
+  assert.equal(failures, 0, 'European discovery qualification failed; inspect recorded stages.');
+  console.log(JSON.stringify({ mode: 'european-discovery', passedCases: cases.length, paidCalls, semanticQualityVerified: false }));
   process.exit(0);
 }
 

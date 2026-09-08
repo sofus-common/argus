@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Fixed local prompt qualification targeting an obsolete v1 import. Baseline
+  regressions remain pinned; the canonical candidate bundle now passes digest,
+  D1 selection/readback and generation/verifier/tool-description transport checks.
+  Added a bounded synthetic European discovery evaluation with exact argument and
+  calculation checks plus deliberately altered-argument controls. Full offline
+  suite: 692 tests passed; TypeScript/build and independent review passed.
+  Live v14 qualification did not pass: two required refusals timed out, and the
+  clarification response misdescribed natural pricing. Active v13 is unchanged.
+  This does not verify pre-Apply conversational candidate comparison or live data.
+
 - Extended direct calendar/diagonal discovery to European puts and nonpositive-
   yield European calls, using discounted option-value floors for conservative
   first-expiry loss budgets. Positive-yield European calls remain excluded as

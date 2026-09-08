@@ -23,11 +23,9 @@ export default defineConfig(({ mode, command, isPreview }) => {
     }
   }
   return {
-    // Candidate text runs through the same offline contracts before local activation.
-    resolve: mode === "test" && process.env.ARGUS_PROMPT_CANDIDATE ? { alias: [{ find: /.*prompts\/analysis-v1\.json$/, replacement: resolve(process.env.ARGUS_PROMPT_CANDIDATE) }] } : undefined,
     plugins:
     mode === "test"
-      ? [cloudflareTest({ wrangler: { configPath: "wrangler.jsonc" }, remoteBindings: false, miniflare: { d1Databases: ["DB"], bindings: { ARGUS_PROMPT_EXPECTED_DIGEST: process.env.ARGUS_PROMPT_EXPECTED_DIGEST ?? "" } } })]
+      ? [cloudflareTest({ wrangler: { configPath: "wrangler.jsonc" }, remoteBindings: false, miniflare: { d1Databases: ["DB"], bindings: { ARGUS_PROMPT_EXPECTED_DIGEST: process.env.ARGUS_PROMPT_EXPECTED_DIGEST ?? "", ARGUS_PROMPT_CANDIDATE_JSON: process.env.ARGUS_PROMPT_CANDIDATE ? readFileSync(resolve(process.env.ARGUS_PROMPT_CANDIDATE), "utf8") : "" } } })]
       : [react(), cloudflare(localDev ? {
         remoteBindings: false,
         config: config => ({

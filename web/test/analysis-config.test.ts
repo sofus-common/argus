@@ -5,7 +5,8 @@ import traceMigration from "../migrations/0005_analysis_traces.sql?raw";
 import { ANALYSIS_ENGINE_VERSION, loadAnalysisPrompts, promptDigest } from "../src/analysis-config";
 import { defaultAnalysisPrompts, readAnalysisPrompts, type AnalysisPrompts } from "../src/analysis-prompts";
 import { createApp } from "../src/worker";
-import { createStrategy } from "../src/options";
+import { createMarketStrategy, createStrategy, type MarketSnapshot } from "../src/options";
+import { spar } from "../src/sparring";
 import previous from "../prompts/analysis-v12.json";
 
 const db = (env as { DB: D1Database }).DB;
@@ -31,9 +32,33 @@ it("requires explicit discovery domains and keeps candidate risk horizons separa
       expect(prompt, `${key} missing ${term}`).toContain(term);
   }
 });
-it("binds candidate evaluation to the exact imported prompt bytes", async () => {
-  const expected = (env as { ARGUS_PROMPT_EXPECTED_DIGEST?: string }).ARGUS_PROMPT_EXPECTED_DIGEST;
-  if (expected) expect(await promptDigest(defaultAnalysisPrompts)).toBe(expected);
+it("qualifies exact candidate bytes through storage and provider boundaries without replacing the baseline", async () => {
+  const { ARGUS_PROMPT_EXPECTED_DIGEST: expected, ARGUS_PROMPT_CANDIDATE_JSON: json } = env as { ARGUS_PROMPT_EXPECTED_DIGEST?: string; ARGUS_PROMPT_CANDIDATE_JSON?: string };
+  expect(Boolean(json)).toBe(Boolean(expected));
+  if (!json) return;
+  const bundle = readAnalysisPrompts(JSON.parse(json));
+  expect(await promptDigest(bundle)).toBe(expected);
+  await insert(bundle);
+  await select(bundle.version);
+  vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime("2026-09-08T12:00:00.000Z");
+  try {
+    const selected = await loadAnalysisPrompts(db), systems: string[] = [];
+    expect(selected).toEqual(bundle);
+    expect(await promptDigest(selected)).toBe(expected);
+    const fetcher: typeof fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); systems.push(body.messages[0].content);
+      if (systems.length === 1 && bundle.prompts.CANDIDATE_TOOL_DESCRIPTION) expect(body.tools.find((tool: { function: { name: string } }) => tool.function.name === "search_candidates").function.description).toBe(bundle.prompts.CANDIDATE_TOOL_DESCRIPTION);
+      const draft = { text: "Synthetic reply.", assumptions: [], objections: [], suggested_prompts: [], operations: [], risk_classification: "bounded", evidence_ids: [] };
+      return Response.json({ choices: [{ message: { content: JSON.stringify(systems.length === 1 ? draft : { valid: true }) } }] });
+    };
+    const snapshot: MarketSnapshot = { id: "candidate-qualification", source: "Tastytrade", underlying: "SPY", spot: 650, retrievedAt: new Date().toISOString(), spotAsOf: new Date().toISOString(), availableExpiries: ["2026-09-15"], contracts: [{ contractId: "SPY   260915C00650000", type: "call", strike: 650, expiry: "2026-09-15T20:15:00.000Z", multiplier: 100, bid: 2, ask: 3, iv: 0.25, quoteAsOf: new Date().toISOString() }] };
+    await spar({ request_id: "candidate-qualification", base_state_version: 1, state: createMarketStrategy("long-call", snapshot), conversation: [{ role: "user", content: "Explain" }] }, "test", fetcher, undefined, snapshot, selected);
+    expect(systems).toEqual([bundle.prompts.SYSTEM_PROMPT, bundle.prompts.VERIFICATION_PROMPT]);
+    expect(defaultAnalysisPrompts.version).toBe("analysis-v13");
+  } finally {
+    vi.useRealTimers();
+    await db.prepare("DELETE FROM analysis_prompt_active WHERE singleton = 1").run();
+  }
 });
 beforeAll(async () => { await db.batch([...migration.split(/;\s*(?=CREATE|$)/), ...traceMigration.split(/;\s*(?=CREATE|$)/)].filter(sql => sql.trim()).map(sql => db.prepare(sql))); });
 const candidate = (version: string) => readAnalysisPrompts({ ...defaultAnalysisPrompts, version });
