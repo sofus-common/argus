@@ -10,6 +10,7 @@
 // --candidate-coverage: at most three paid calls with --run; --self-check stays offline. Legacy --candidate-search modes are unchanged.
 // --european-discovery: five frozen synthetic cases, at most three calls each / fifteen total; --self-check stays offline.
 // --named-family-discovery: six frozen synthetic tasks, at most sixteen calls with --run; explicit candidate required; --self-check stays offline.
+// --discovery-intent: ten synthetic tasks/eleven messages, one call each, at most eleven paid calls; pinned v18 required.
 // --inspected-comparison without --comparison-intent and --comparison-controls are archived offline-only protocols; paid execution is refused.
 // Add --inspected-comparison --comparison-intent for ten v16 intent tasks, one call each; old freeform comparison modes are archived protocols.
 // Archived --comparison-controls retains twelve frozen claim/correction fixtures; current runtime guards are not bypassed for replay.
@@ -545,6 +546,138 @@ if (process.argv.includes('--long-call-loss-control') || process.argv.includes('
     assert.ok(passed, 'Long-call loss control failed; offline mocks check wiring, not semantic quality');
   }
   assert.equal(paidCalls, offline ? 0 : 1);
+  process.exit(0);
+}
+
+if (process.argv.includes('--discovery-intent')) {
+  const flags = process.argv.slice(2), live = flags.includes('--run');
+  assert.ok(flags.every(flag => ['--discovery-intent', '--self-check', '--run'].includes(flag)) && new Set(flags).size === flags.length);
+  assert.notEqual(live, flags.includes('--self-check'));
+  assert.ok(process.env.ARGUS_PROMPT_CANDIDATE, 'Discovery qualification requires an explicit candidate');
+  registerHooks({ resolve(specifier, context, next) { return next(specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier) ? new URL(`${specifier}.ts`, context.parentURL).href : specifier, context); } });
+  const { createMarketStrategy, searchCandidates, validateMarketStrategy } = await import('../src/options.ts');
+  const { spar, MODEL } = await import('../src/sparring.ts');
+  const { DISCOVERY_INTENT_SCHEMA, renderDiscovery } = await import('../src/discovery.ts');
+  const { readAnalysisPrompts } = await import('../src/analysis-prompts.ts');
+  const prompts = readAnalysisPrompts(JSON.parse(readFileSync(resolve(process.env.ARGUS_PROMPT_CANDIDATE), 'utf8')));
+  const promptDigest = createHash('sha256').update(JSON.stringify(prompts)).digest('hex');
+  assert.equal(prompts.version, 'analysis-v18');
+  assert.equal(promptDigest, 'b79a796dce345ede51e7ada542a1c7519d65c12d8d04e126ebc0550c1b0b2b9c');
+  const retrievedAt = new Date().toISOString(), expiry = '2027-10-09T20:00:00.000Z';
+  const snapshot = { id: 'synthetic-discovery-intent', underlying: 'SPY', source: 'Synthetic evaluation', retrievedAt, spot: 100, spotAsOf: retrievedAt, availableExpiries: [expiry.slice(0, 10)],
+    contracts: [90, 95, 100, 105, 110].flatMap(strike => ['call', 'put'].map(type => {
+      const mid = Math.max(0, type === 'call' ? 100 - strike : strike - 100) + 2;
+      return { contractId: `SPY   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100, bid: mid - .1, ask: mid + .1, iv: .25, quoteAsOf: retrievedAt };
+    })) };
+  const constraints = `Target SPY at $103 on ${expiry}. Rank by target P/L, with a maximum loss of $2000, total fee allowance $5 and natural quote pricing.`;
+  const suffix = ' These are synthetic evaluation quotes, not live data or fills. Do not modify my position; I will inspect and Apply separately.';
+  const normalized = family => ({ scope: 'search', families: [family], targetSpot: 103, targetDate: expiry, maxLoss: 2000, feeAllowance: 5, basis: 'natural', objective: 'target-pnl', maxEntryOutlay: 1500 });
+  const evidence = (quote, message = 0) => ({ message, quote });
+  const extracted = family => ({ scope: 'search', families: [evidence(family)], targetSpot: evidence('Target SPY at $103'), targetDate: evidence(`on ${expiry}`), maxLoss: evidence('maximum loss of $2000'), feeAllowance: evidence('total fee allowance $5'), basis: evidence('natural quote pricing'), objective: evidence('Rank by target P/L'), maxEntryOutlay: evidence('Maximum net entry outlay is $1500') });
+  const complete = family => `Find new ${family} only. ${constraints} Maximum net entry outlay is $1500.`;
+  const cases = [
+    ...[['iron-condor', 'standard iron condors'], ['inverse-iron-condor', 'inverse iron condors'], ['bull-put', 'bull put spreads'], ['bear-put', 'bear put spreads']].map(([id, family]) => ({ id, content: complete(family), expected: normalized(id), mock: extracted(family), search: true })),
+    { id: 'missing-outlay', content: `Find new standard iron condors only. ${constraints}`, expected: { ...normalized('iron-condor'), maxEntryOutlay: null }, mock: { ...extracted('standard iron condors'), maxEntryOutlay: null }, question: /maximum net entry outlay/i },
+    { id: 'ambiguous-butterfly', content: `Find a butterfly. ${constraints} Maximum net entry outlay is $1500.`, expected: { ...normalized('iron-condor'), families: null }, mock: { ...extracted('standard iron condors'), families: null }, question: /call-butterfly.*put-butterfly.*iron-butterfly/ },
+    { id: 'outlay-followup', content: 'net entry outlay is $1500', expected: normalized('iron-condor'), mock: { ...extracted('standard iron condors'), maxEntryOutlay: evidence('net entry outlay is $1500', 2) }, search: true, dependent: true },
+    { id: 'wrong-symbol', content: complete('standard iron condors').replace('Target SPY', 'Target NVDA'), mock: { ...extracted('standard iron condors'), targetSpot: evidence('Target NVDA at $103') }, absent: 'targetSpot' },
+    { id: 'foreign-currency', content: complete('standard iron condors').replace('maximum loss of $2000', 'maximum loss of $2000 CAD'), mock: extracted('standard iron condors'), absent: 'maxLoss' },
+    { id: 'unsupported-structure', content: complete('broken wing butterfly'), mock: { ...extracted('standard iron condors'), scope: 'unsupported', families: null }, absent: 'families' },
+    { id: 'negated-budget', content: complete('standard iron condors').replace('maximum loss of $2000', 'not maximum loss of $2000'), mock: extracted('standard iron condors'), absent: 'maxLoss' },
+  ];
+  assert.equal(cases.length, 11);
+  let key = 'offline-not-a-key', paidCalls = 0, failures = 0, completedMessages = 0, followupConversation;
+  if (live) {
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim();
+    key = parseEnv(readFileSync(resolve(dirname(resolve(common)), '.env'), 'utf8')).OPENROUTER_API_KEY;
+    assert.ok(key, 'OpenRouter configuration missing');
+  }
+  console.log(JSON.stringify({ mode: 'discovery-intent', promptVersion: prompts.version, promptDigest, requestedModel: MODEL, maxPaidCalls: 11, tasks: 10, messages: 11, retries: 0, snapshot, cases, rubric: 'Original six tasks plus actual outlay follow-up and four adversarial controls. One evidence extraction per message; deterministic admission, results and clarification. Synthetic quotes only; no activation or general trading judgment claim.' }));
+  for (const item of cases) {
+    if (item.dependent && !followupConversation) { failures++; console.log(JSON.stringify({ case: item.id, passed: false, skipped: 'Required preceding clarification did not pass', paidCalls })); continue; }
+    const state = createMarketStrategy('long-call', snapshot, 'natural');
+    state.pricing.entryMode = 'fixed'; state.legs[0].entryPrice = 8;
+    const original = structuredClone(state), originalSnapshot = structuredClone(snapshot);
+    assert.deepEqual(validateMarketStrategy(state, snapshot), []);
+    const request = { request_id: `discovery-${item.id}`, base_state_version: state.version, state, discovery: true, conversation: item.dependent ? [...followupConversation, { role: 'user', content: item.content }] : [{ role: 'user', content: item.content + suffix }] };
+    const oracle = item.search ? searchCandidates(state, snapshot, (({ scope, families, maxEntryOutlay, ...search }) => search)(item.expected), { families: item.expected.families, maxEntryOutlay: item.expected.maxEntryOutlay }) : null;
+    if (oracle) {
+      assert.ok(oracle.candidates.length > 0);
+      for (const candidate of oracle.candidates) {
+        const position = candidate.state;
+        const debit = position.legs.reduce((sum, leg) => sum + (leg.side === 'long' ? 1 : -1) * leg.contracts * 100 * leg.entryPrice, 0);
+        assert.equal(position.legs.filter(leg => leg.type === 'call').reduce((sum, leg) => sum + (leg.side === 'long' ? 1 : -1) * leg.contracts, 0), 0, 'Frozen strategy requires a flat upper tail');
+        const pnl = spot => position.legs.reduce((sum, leg) => sum + (leg.side === 'long' ? 1 : -1) * leg.contracts * 100 * Math.max(0, leg.type === 'call' ? spot - leg.strike : leg.strike - spot), 0) - debit - 5;
+        const values = [0, ...position.legs.map(leg => leg.strike), 1000].map(pnl);
+        assert.ok(Math.abs(candidate.metrics.scenarioPnl - pnl(103)) < 1e-7);
+        assert.ok(Math.abs(candidate.metrics.maxProfit - Math.max(0, ...values)) < 1e-7);
+        assert.ok(Math.abs(candidate.metrics.maxLoss - Math.max(0, -Math.min(...values))) < 1e-7);
+        assert.ok(Math.abs(candidate.metrics.entryAccounting.netEntryCashFlowAfterAllowance + debit + 5) < 1e-7);
+      }
+    }
+    const stages = [], events = [], started = performance.now(); let passed = false, reply, intent, failure, failureReason;
+    const validate = result => {
+      assert.equal(stages.length, 1, 'Exactly one extraction call required');
+      assert.deepEqual(stages.flatMap(stage => stage.output?.tool_calls ?? []), []);
+      const { evidence: bound, ...actual } = result.calculated.discoveryIntent;
+      if (item.expected) assert.deepEqual(actual, item.expected, 'Normalized intent changed');
+      else {
+        assert.equal(actual[item.absent], null, 'Unsupported constraint was admitted');
+        assert.match(result.reply.text, /please|provide|choose|which|what/i, 'A usable clarification is required');
+      }
+      if (item.question) assert.match(result.reply.text, item.question);
+      assert.deepEqual(result.calculated.candidateSearch, oracle, 'Candidate oracle changed');
+      assert.deepEqual(result.reply, { ...renderDiscovery(result.calculated.discoveryIntent, oracle), operations: [], evidence_ids: [], risk_classification: result.calculated.lossClassification }, 'Deterministic reply changed');
+      assert.deepEqual(result.next_state, { ...original, version: original.version + 1 });
+    };
+    try {
+      const result = await spar(request, key, async (url, init) => {
+        assert.equal(stages.length, 0, 'No second call or retry');
+        const body = JSON.parse(init.body);
+        assert.equal(body.model, MODEL); assert.equal(body.tools, undefined); assert.equal(body.tool_choice, undefined);
+        assert.deepEqual(body.response_format, { type: 'json_schema', json_schema: DISCOVERY_INTENT_SCHEMA });
+        assert.deepEqual(body.reasoning, { effort: 'low', exclude: true });
+        assert.deepEqual(body.provider, { allow_fallbacks: false, data_collection: 'deny', require_parameters: true });
+        assert.equal(body.messages[0].content, prompts.prompts.DISCOVERY_INTENT_PROMPT);
+        assert.equal(body.messages.length, 2); assert.equal(body.messages[1].role, 'user');
+        assert.equal(JSON.parse(body.messages[1].content).underlying, 'SPY');
+        assert.deepEqual(JSON.parse(body.messages[1].content).conversation, request.conversation);
+        const stage = { phase: 'intent', requestedModel: MODEL, mocked: !live }; stages.push(stage);
+        let response;
+        if (live) { assert.ok(++paidCalls <= 11, 'Paid ceiling exceeded'); response = await fetch(url, init); }
+        else response = Response.json({ choices: [{ message: { content: JSON.stringify(item.mock) } }] });
+        stage.status = response.status;
+        stage.rawContentCapture = 'incomplete'; stage.resolvedModel = 'unknown'; stage.provider = 'unknown'; stage.finishReason = 'unknown';
+        let bytes = 0, captured = ''; const decoder = new TextDecoder();
+        const streamed = response.body ? new Response(response.body.pipeThrough(new TransformStream({
+          transform(chunk, controller) { bytes += chunk.byteLength; if (bytes <= 65536) captured += decoder.decode(chunk, { stream: true }); else { captured = ''; stage.rawContentCapture = 'oversized'; } controller.enqueue(chunk); },
+          flush() {
+            if (bytes > 65536) return;
+            try {
+              const metadata = JSON.parse(captured + decoder.decode()), content = metadata?.choices?.[0]?.message?.content;
+              stage.resolvedModel = metadata?.model ?? 'unknown'; stage.provider = metadata?.provider ?? 'unknown'; stage.finishReason = metadata?.choices?.[0]?.finish_reason ?? 'unknown';
+              if (typeof content === 'string') { stage.rawModelContent = content; stage.rawContentCapture = 'complete'; } else stage.rawContentCapture = 'invalid_output';
+            } catch { stage.rawContentCapture = 'invalid_output'; }
+          },
+        })), { status: response.status, statusText: response.statusText, headers: response.headers }) : response;
+        return traceResponse(streamed, stage, started, true);
+      }, { retrievedAt, sources: [] }, snapshot, prompts, event => events.push(event));
+      validate(result); reply = result.reply; intent = result.calculated.discoveryIntent;
+      if (!live) {
+        const changedReply = structuredClone(result); changedReply.reply.text += ' Invented financial claim.'; assert.throws(() => validate(changedReply), /Deterministic reply changed/);
+        if (item.search) {
+          const changedFamily = structuredClone(result); changedFamily.calculated.candidateSearch.domain.families = ['options']; assert.throws(() => validate(changedFamily), /Candidate oracle changed/);
+          const changedAmount = structuredClone(result); changedAmount.calculated.discoveryIntent.maxLoss += 1; assert.throws(() => validate(changedAmount), /Normalized intent changed/);
+        }
+      }
+      if (item.id === 'missing-outlay') followupConversation = [...request.conversation, { role: 'assistant', content: reply.text }];
+      passed = true; completedMessages++;
+    } catch (error) { failures++; failure = error instanceof Error ? error.message : 'Unknown failure'; if (typeof error?.reason === 'string') failureReason = error.reason; }
+    assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
+    console.log(JSON.stringify({ case: item.id, request, expected: item.expected ?? { absent: item.absent, search: false }, oracle, intent, reply, stages, events, passed, failure, failureReason, paidCalls, elapsedMs: Math.round(performance.now() - started) }).split(key).join('[REDACTED]'));
+  }
+  assert.equal(failures, 0, 'Discovery qualification failed'); assert.equal(completedMessages, 11); assert.equal(paidCalls, live ? 11 : 0);
+  console.log(JSON.stringify({ mode: 'discovery-intent', passedMessages: completedMessages, passedTasks: 10, paidCalls, semanticQualityVerified: false }));
   process.exit(0);
 }
 

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Qualified the inactive V18 discovery workflow on 10 frozen synthetic tasks
+  spanning 11 messages: 11/11 passed using exactly 11 OpenRouter calls, no retries,
+  29,668 tokens and USD 0.03269376. All resolved to Gemini 3.8 Flash through Google.
+  Independent review reconciled 83 user-evidence references, 25 candidates,
+  rendered monetary figures and held-cost preservation. The new opt-in harness
+  also passes offline tampering controls; the legacy V17 offline protocol remains
+  6/6. Syntax and TypeScript checks pass. V16 remains active; no activation or
+  deployment occurred. Wrong-symbol, currency and unsupported-structure inputs
+  fail safe but still receive generic clarification; this narrow qualification
+  does not establish useful recovery conversations or general trading judgment.
+
 - Added a gated strategy-discovery conversation workflow: one structured
   evidence-extraction call followed by deterministic clarification, bounded search
   and numerical rendering. Explicit mode selection isolates conversation context;
@@ -13,7 +24,7 @@
   guard. No orders, new dependencies or autonomous loop were added.
   V18 is an inactive qualification candidate; V16 remains selected. Ordinary
   discussion under V18 retains the V16 provider request. Live complete-task
-  qualification is still required; literal validation does not prove arbitrary
+  qualification was required at this checkpoint; literal validation does not prove arbitrary
   natural-language intent alignment or general trading judgment.
   Verified: 762 tests, TypeScript/build, independent integration review and 45/45
   synthetic browser workflows on desktop and 390px mobile. Checks include
