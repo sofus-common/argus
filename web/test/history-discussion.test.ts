@@ -41,6 +41,7 @@ it('shares frozen normalized display units with generation and verification with
 
 function intradayFacts(full = false, days = 1) {
   const state = createStrategy(full ? 'iron-condor' : 'bull-call');
+  if (full) state.legs.push(...state.legs.map((leg, i) => ({ ...leg, id: `extra-${i}` })));
   state.pricing = { mode: 'market', snapshotId: 'intraday-snapshot', basis: 'mid' };
   state.legs.forEach((leg, i) => { leg.type = 'call'; leg.strike = 770 + i * 5; leg.expiry = '2026-10-09T20:00:00.000Z'; leg.contractId = `SPY   261009C00${leg.strike}000`; });
   const start = Date.parse(days > 1 ? '2026-08-28T00:00:00Z' : '2026-09-04T00:00:00Z');
@@ -92,21 +93,20 @@ it('withholds failed intraday verification and rejects malformed facts before in
   expect(calls).toBe(2);
 });
 
-it('retains all 288 four-leg intraday buckets within a bounded inference payload', async () => {
+it('retains all 288 eight-leg intraday buckets within a bounded inference payload', async () => {
   const input = intradayFacts(true), bytes = new TextEncoder().encode(JSON.stringify(input)).length, bodies: any[] = [];
   expect(bytes).toBeGreaterThan(64 * 1024);
   const fetcher = vi.fn<typeof fetch>(async (_url, init) => { bodies.push(JSON.parse(String(init!.body))); return response({ content: JSON.stringify(bodies.length === 1 ? draft : { valid: true }) }); });
   await discussIntradayHistory(input, conversation, 'test', fetcher);
   for (const body of bodies) {
     const facts = JSON.parse(body.messages[1].content).facts;
-    expect(facts.history.rows).toHaveLength(288); expect(facts.history.rows.every((row: any) => row.legs.length === 4)).toBe(true);
+    expect(facts.history.rows).toHaveLength(288); expect(facts.history.rows.every((row: any) => row.legs.length === 8)).toBe(true);
     expect(facts).toEqual(readableFacts(input)); expect(new TextEncoder().encode(body.messages[1].content).length).toBeLessThanOrEqual(256 * 1024);
     expect(JSON.parse(body.messages[1].content).historyDisplay.selectedPrice).toBeCloseTo(input.history.rows.at(-1)!.value! / 100);
   }
-  console.log(`Synthetic four-leg 288-bucket facts: ${bytes} bytes`);
 });
 
-it('retains all 2016 four-leg weekly buckets in both bounded AI passes', async () => {
+it('retains all 2016 eight-leg weekly buckets in both bounded AI passes', async () => {
   const input = intradayFacts(true, 7), bodies: any[] = [];
   await discussIntradayHistory(input, conversation, 'test', async (_url, init) => {
     bodies.push(JSON.parse(String(init!.body)));
@@ -117,6 +117,7 @@ it('retains all 2016 four-leg weekly buckets in both bounded AI passes', async (
     const data = JSON.parse(body.messages[1].content);
     expect(data.facts).toEqual(readableFacts(input));
     expect(data.facts.history.rows).toHaveLength(2016);
+    expect(data.facts.history.rows.every((row: any) => row.legs.length === 8)).toBe(true);
     expect(new TextEncoder().encode(body.messages[1].content).length).toBeGreaterThan(256 * 1024);
     expect(new TextEncoder().encode(body.messages[1].content).length).toBeLessThan(2 * 1024 * 1024);
   }
@@ -150,6 +151,30 @@ it('discusses validated frozen daily facts without tools and independently check
   expect(JSON.parse(bodies[1].messages[1].content).reply).toEqual(draft);
   expect(bodies[1].messages[0].content).toContain('Independently verify');
   expect(bodies[1].messages[0].content).toContain('A later disclaimer does not cure');
+});
+
+it('retains 31 complete dates for eight legs and stock in both daily discussion passes', async () => {
+  const state = facts().state;
+  state.legs = Array.from({ length: 8 }, (_, i) => ({ ...state.legs[i % 2], id: `leg-${i}`, strike: 770 + i * 5, contractId: `SPY   261009C00${770 + i * 5}000` }));
+  state.stock = { shares: -100, entryPrice: 750 };
+  const range = { start: '2026-08-06', end: '2026-09-05' };
+  const marks = (bid: number) => Array.from({ length: 31 }, (_, i) => {
+    const date = new Date(Date.parse(range.start) + i * 86400000).toISOString().slice(0, 10);
+    return { bid, ask: bid + .02, created: `${date}T17:15:00.000`, last_trade: `${date}T16:00:00.000` };
+  });
+  const history = buildPriceHistory(state, state.legs.map((leg, i) => ({ response: [{ contract: { symbol: 'SPY', expiration: '2026-10-09', right: 'CALL', strike: leg.strike }, data: marks(i + 1.23456789) }] })), { response: marks(770.23) }, range, new Date('2026-09-06T12:00:00Z'));
+  const input = { state, range, history, selectedDate: range.end }, bodies: any[] = [];
+  await discussPriceHistory(input, conversation, 'test', async (_url, init) => {
+    bodies.push(JSON.parse(String(init!.body)));
+    return response({ content: JSON.stringify(bodies.length === 1 ? draft : { valid: true }) });
+  });
+  expect(bodies).toHaveLength(2);
+  for (const body of bodies) {
+    expect(JSON.parse(body.messages[1].content).facts).toEqual(input);
+    expect(new TextEncoder().encode(body.messages[1].content).length).toBeLessThanOrEqual(64 * 1024);
+  }
+  expect(history.rows).toHaveLength(31);
+  expect(history.rows.every(row => row.legs.length === 8 && row.value !== null)).toBe(true);
 });
 
 it('rejects invalid or oversized facts before inference and withholds tool calls and unverifiable output', async () => {

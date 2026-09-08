@@ -4,6 +4,32 @@ import { readWorkspaceDraft, recoverWorkspaceDraft, type WorkspaceDraft } from '
 
 afterEach(() => vi.useRealTimers());
 
+it.each(['界', '\u0000'])('recovers eight held legs across four expiries with 200 quotes and maximum-length %j draft text', text => {
+  const value = draft(true), state = value.state, snapshot = value.snapshot!;
+  const dates = ['2026-10-09', '2026-10-16', '2026-10-23', '2026-10-30'];
+  snapshot.availableExpiries = dates;
+  snapshot.contracts = Array.from({ length: 200 }, (_, i) => {
+    const expiry = `${dates[Math.floor(i / 50)]}T20:00:00.000Z`, strike = 700 + i % 50;
+    return { contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry, multiplier: 100, bid: 1.12345678, ask: 2.12345678, iv: .23456789, quoteAsOf: state.valuationTimestamp, volume: 100000, openInterest: 100000 };
+  });
+  state.legs = Array.from({ length: 8 }, (_, i) => {
+    const quote = snapshot.contracts[Math.floor(i / 2) * 50 + i % 2];
+    return { ...state.legs[i % 2], id: `held-${i}`, contractId: quote.contractId, strike: quote.strike, expiry: quote.expiry, iv: quote.iv };
+  });
+  state.expiryIvShifts = dates.map(date => ({ expiry: `${date}T20:00:00.000Z`, ivShift: .01 }));
+  state.excludedLegIds = [state.legs[7].id];
+  value.title = text.repeat(120); value.thesis = text.repeat(12000); value.composer = text.repeat(12000);
+  const serialized = JSON.stringify(value);
+  expect(new TextEncoder().encode(serialized).length).toBeLessThanOrEqual(256 * 1024);
+  const recovered = recoverWorkspaceDraft(readWorkspaceDraft(serialized));
+  expect(recovered.state.legs).toEqual(state.legs);
+  expect(recovered.state.expiryIvShifts).toEqual(state.expiryIvShifts);
+  expect(recovered.state.excludedLegIds).toEqual(state.excludedLegIds);
+  expect(recovered.snapshot!.contracts).toEqual(snapshot.contracts);
+  expect([recovered.title, recovered.thesis, recovered.composer]).toEqual([value.title, value.thesis, value.composer]);
+  expect(recovered.state.pricing).toMatchObject({ entryMode: 'fixed', historical: true });
+});
+
 it('round-trips excluded inventory and empty constructions without discarding held costs', () => {
   for (const market of [false, true]) {
     const value = draft(market);
@@ -78,7 +104,7 @@ it('rejects corrupted draft identity, source, dates, costs, quantities and overs
     value => { value.state.pricing.mode = 'sample'; },
   ];
   for (const mutate of mutations) { const value = draft(true); mutate(value); expect(() => readWorkspaceDraft(JSON.stringify(value))).toThrow(); }
-  expect(() => readWorkspaceDraft(' '.repeat(131073))).toThrow();
+  expect(() => readWorkspaceDraft(' '.repeat(256 * 1024 + 1))).toThrow();
   expect(() => readWorkspaceDraft('{')).toThrow();
   const sample = draft(); sample.snapshot = draft(true).snapshot;
   expect(() => readWorkspaceDraft(JSON.stringify(sample))).toThrow();

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Qualified eight-leg history payloads: all 2,016 weekly buckets and all 31 daily
+  dates (including stock) survive both discussion passes without truncation.
+  Existing discussion limits remain sufficient for these fixtures. Draft recovery
+  preserves eight held legs, four expiries, 200 quotes, exclusions and fixed costs
+  with maximum-length Unicode/JSON-escaped text. A reproduced size rejection
+  required raising only the total draft envelope from 128 to 256 KiB; field,
+  identity and market-validation guards remain unchanged. Verified 26 focused
+  offline checks and TypeScript. This is payload qualification, not live-data,
+  model-quality or complete wider-builder proof.
+
 - Added the backend foundation for eight option legs across four expiries:
   shared admission limits, 200-contract snapshots, retained-cost/selection
   validation, owner-isolated restore and eight-contract capture. Option quotes

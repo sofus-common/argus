@@ -4,7 +4,7 @@ import { timestamp, validatedSnapshot } from './market-snapshot';
 export type WorkspaceDraft = { schemaVersion: 1; state: StrategyState; snapshot: MarketSnapshot | null; title: string; thesis: string; composer: string; savedAt: string };
 
 export function readWorkspaceDraft(raw: string): WorkspaceDraft {
-  if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > 131072) throw new Error('Draft is too large');
+  if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > 256 * 1024) throw new Error('Draft is too large');
   const value = JSON.parse(raw);
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join() !== 'composer,savedAt,schemaVersion,snapshot,state,thesis,title' || value.schemaVersion !== 1) throw new Error('Invalid draft');
   for (const [field, limit] of [['title', 120], ['thesis', 12000], ['composer', 12000]] as const) if (typeof value[field] !== 'string' || value[field].length > limit) throw new Error('Invalid draft text');

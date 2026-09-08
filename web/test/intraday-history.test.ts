@@ -168,16 +168,17 @@ it('reads genuine zero values and permits absent underlying only for options-onl
   expect(() => readIntradayHistory(envelope, state, range)).toThrow();
 });
 
-it('round-trips a dense seven-day four-leg inventory and preserves interior gaps without forward filling', () => {
+it('round-trips a dense seven-day eight-leg inventory and preserves interior gaps without forward filling', () => {
   const { state, raw } = fixture(), week = { start: Date.parse('2026-08-31T00:00:00Z'), end: Date.parse('2026-09-07T00:00:00Z') };
-  state.legs = [...state.legs, ...state.legs.map((leg, i) => ({ ...leg, id: `extra-${i}`, strike: 780 + i * 5, contractId: `SPY   261009C00${780 + i * 5}000` }))];
+  state.legs = Array.from({ length: 8 }, (_, i) => ({ ...state.legs[i % 2], id: `leg-${i}`, strike: 770 + i * 5, contractId: `SPY   261009C00${770 + i * 5}000` }));
   state.stock = { shares: -100, entryPrice: 123 }; state.feeAllowance = 99;
   const bars = (close: number) => Array.from({ length: 2016 }, (_, index) => ({ time: week.start + index * 300000, count: 1, open: close, high: close, low: close, close, volume: null }));
   raw.underlying.bars = bars(770);
   raw.contracts = state.legs.map((leg, index) => ({ contractId: leg.contractId, basis: 'midpoint', bars: bars(index % 2 ? 1.75 : 3.01) }));
   const history = buildIntradayHistory(state, week, raw);
   expect(history.rows).toHaveLength(2016); expect(history.rows.every(row => row.value !== null)).toBe(true);
-  expect(history.rows[0].value).toBeCloseTo(-76748);
+  expect(history.rows.every(row => row.legs.length === 8)).toBe(true);
+  expect(history.rows[0].value).toBeCloseTo(-76496);
   const envelope = { history, range: week, snapshotId: state.pricing!.snapshotId, positionVersion: state.version };
   expect(readIntradayHistory(envelope, state, week)).toEqual(history);
   raw.contracts[2].bars.splice(1000, 1);
