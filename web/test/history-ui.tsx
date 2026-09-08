@@ -10,7 +10,7 @@ import type { SavedStrategy } from '../src/saved-strategies'
 import { buildPositionPerformance } from '../src/position-performance'
 import { createPosition } from '../src/position-lifecycle'
 import { projectPositionLots, recordLotTransaction, upgradePositionLots } from '../src/position-lots'
-import { calculateStrategy, createMarketStrategy, createStrategy, type MarketSnapshot } from '../src/options'
+import { calculateStrategy, createMarketStrategy, createStrategy, projectAnalysisPosition, searchCandidates, type MarketSnapshot } from '../src/options'
 import { buildIntradayHistory, buildIvHistory } from '../src/intraday-history'
 import { buildPriceHistory } from '../src/price-history'
 import '../src/styles.css'
@@ -479,6 +479,81 @@ async function run() {
           assert(!fixture.querySelector('.proposal-card') && inputs() === original && fixture.querySelector('[role="alert"]'), `Untrusted ${attack} candidate pricing was promoted to held costs`);
         }
       } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket; window.Worker = priorWorker }
+    });
+    await test('Direct optimizer ranks without AI, applies quoted candidates and rejects stale or altered results', async () => {
+      await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
+      const stamp = new Date(fixedNow - 120000).toISOString(), expiry = '2027-10-09T20:00:00.000Z';
+      const snapshot: MarketSnapshot = { id: 'direct-window', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2027-10-09'], contracts: [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp }))) };
+      const held = createMarketStrategy('bull-call', snapshot);
+      held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.excludedLegIds = [held.legs[0].id];
+      const seed = { id: 'direct-seed', title: 'Direct optimizer fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
+      let activeSnapshot = snapshot, saved: typeof seed | undefined, searches = 0, aiCalls = 0;
+      let mode: 'normal' | 'deferred' | 'altered' = 'normal', release: (() => void) | undefined;
+      let ranked: ReturnType<typeof searchCandidates> | undefined;
+      window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Direct optimizer', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies' && init?.method === 'POST') { const body = JSON.parse(String(init.body)); saved = { ...seed, id: 'direct-saved', state: body.state, snapshot: activeSnapshot }; return Response.json({ record: saved }, { status: 201 }); }
+        if (url === '/api/strategies') return Response.json({ strategies: [seed] });
+        if (url === '/api/strategies/direct-seed') return Response.json({ record: seed });
+        if (String(url).startsWith('/api/chain?')) { activeSnapshot = { ...snapshot, id: 'direct-refreshed', availableExpiries: ['2027-10-09', '2027-10-16'], contracts: snapshot.contracts.flatMap(contract => [{ ...contract, bid: 4, ask: 5 }, { ...contract, contractId: contract.contractId.replace('271009', '271016'), expiry: '2027-10-16T20:00:00.000Z', bid: 4, ask: 5 }]) }; return Response.json({ snapshot: activeSnapshot }); }
+        if (url === '/api/sparring') { aiCalls++; throw new Error('Direct optimizer must not call AI'); }
+        if (url === '/api/candidates') {
+          searches++; const body = JSON.parse(String(init?.body)); ranked = searchCandidates(body.state, activeSnapshot, body.search);
+          assert(ranked.candidates.length > 0, 'Deterministic fixture yielded no ranked candidates');
+          const response = structuredClone(ranked);
+          if (mode === 'altered') response.candidates[0].state.legs[0].entryPrice = .01;
+          if (mode === 'deferred') return await new Promise<Response>(resolve => { release = () => resolve(Response.json({ search: response })); });
+          return Response.json({ search: response });
+        }
+        throw new Error(`Unexpected direct optimizer request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean, stage: string) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), `Direct optimizer ${stage} did not settle: ${[...fixture.querySelectorAll('[role="alert"], .workspace-error')].map(element => element.textContent).join(' | ')}; searches=${searches}; optimizer=${fixture.querySelector('[aria-label="Strategy optimizer"]')?.textContent ?? 'missing'}`) };
+      const inputs = () => [...fixture.querySelectorAll<HTMLInputElement>('.leg-list input:not([type="checkbox"]), .leg-list select')].map(input => input.value).join();
+      const configure = async () => { await change('Optimizer target price', '120'); await change('Optimizer target date UTC', expiry.slice(0, 19)); await change('Optimizer maximum loss', '1000'); await change('Optimizer fee allowance', '0'); await change('Optimizer quote basis', 'mid'); await change('Optimizer objective', 'target-pnl'); };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !!fixture.querySelector('option[value="direct-seed"]'), 'seed');
+        await change('Saved positions', seed.id); await click('Load');
+        await waitFor(() => !!fixture.querySelector('.leg-list input[type="checkbox"]:not(:checked)'), 'load');
+        const scenario = () => ['Scenario spot', 'Scenario date UTC'].map(label => (fixture.querySelector(`[aria-label="${label}"]`) as HTMLInputElement).value).join();
+        const original = inputs(), originalScenario = scenario(); await configure(); await click('Find strategies');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'ranking');
+        const chosen = ranked!.candidates[0];
+        await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspection');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), 'comparison chart');
+        const expectedBaseline = calculateStrategy({ ...projectAnalysisPosition(held)!, scenarioSpot: 120, scenarioDate: expiry });
+        const pnlLabel = [...fixture.querySelectorAll('.comparison-metrics span')].find(element => element.textContent === 'Scenario P/L');
+        const expectedMoney = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(expectedBaseline.scenarioPnl);
+        assert(pnlLabel?.nextElementSibling?.textContent === expectedMoney, 'Optimizer did not reprice held baseline at the search target');
+        assert(inputs() === original && scenario() === originalScenario, 'Inspect changed held inputs or workspace scenario');
+        await click('Keep current');
+        assert(!fixture.querySelector('.proposal-card') && inputs() === original && scenario() === originalScenario, 'Cancel changed held inputs or workspace scenario');
+        await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'reinspection');
+        await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, 'save');
+        assert(saved!.state.pricing?.entryMode === 'fixed' && saved!.state.excludedLegIds?.join() === held.excludedLegIds!.join(), 'Direct transfer lost fixed costs or exclusions');
+        assert(JSON.stringify(saved!.state.legs[0]) === JSON.stringify(held.legs[0]), 'Direct transfer changed excluded held cost');
+        assert(saved!.state.legs.slice(1).map(leg => leg.contractId).join() === chosen.state.legs.map(leg => leg.contractId).join(), 'Applied holdings differ from inspected deterministic result');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        assert(inputs() === original, 'Direct candidate Undo changed original construction');
+        mode = 'deferred'; await configure(); await click('Find strategies'); await waitFor(() => !!release, 'deferred version search');
+        await click('Include all legs'); await act(async () => release!()); release = undefined;
+        await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'Late optimizer result survived position version change');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click());
+        await configure(); await click('Find strategies'); await waitFor(() => !!release, 'deferred snapshot search');
+        await click('Refresh prices'); await waitFor(() => fixture.querySelector('.contract-quote')?.textContent?.includes('Bid $4.00') === true, 'refresh');
+        await act(async () => release!()); release = undefined;
+        await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'Late optimizer result survived snapshot replacement');
+        mode = 'altered'; await configure(); const unchanged = inputs(); await click('Find strategies');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Strategy optimizer"] [role="alert"]'), 'tamper rejection');
+        assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && !fixture.querySelector('.proposal-card') && inputs() === unchanged, 'Altered candidate reached inspection or changed holdings');
+        mode = 'normal'; await change('Optimizer target date UTC', '2027-10-16T20:00:00'); await click('Find strategies');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Deterministic quoted candidates"]'), 'later-date ranking');
+        await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'later-date inspection');
+        assert(fixture.querySelector('[aria-label="Optimizer comparison unavailable"]')?.textContent?.includes('beyond the first held option expiry') && !fixture.querySelector('[aria-label="Optimizer target comparison"]'), 'Unsupported held horizon produced a fabricated target comparison');
+        await click('Keep current'); assert(inputs() === unchanged, 'Horizon-unavailable inspection changed holdings');
+        assert(searches === 5 && aiCalls === 0, 'Direct optimizer skipped an acceptance path or used AI');
+      } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
     });
     await test('One-to-four expiry windows support eight-leg construction, saved selection, held refresh and Undo', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;

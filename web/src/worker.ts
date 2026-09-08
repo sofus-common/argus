@@ -12,7 +12,7 @@ import { loadPositionPerformance, preparePositionPerformance, validatePerformanc
 import { buildIntradayHistory, buildIvHistory } from "./intraday-history";
 import { createOptionChainStore, OptionChainLoadError } from "./option-chain";
 import { MAX_OPTION_LEGS, MAX_OPTION_EXPIRIES } from "./options";
-import { TEMPLATES, CandidateSearchLimitError, calculateStrategy, validateStrategy, validateMarketStrategy, validateConstruction, validateMarketConstruction, type StrategyState } from "./options";
+import { TEMPLATES, CandidateSearchLimitError, calculateStrategy, searchCandidates, validateStrategy, validateMarketStrategy, validateConstruction, validateMarketConstruction, type StrategyState } from "./options";
 import {
   AnalysisVerificationError,
   InvalidProposalError,
@@ -537,6 +537,26 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     });
   });
 
+  app.post("/api/candidates", async c => {
+    let body: { state: StrategyState; search: Parameters<typeof searchCandidates>[2] };
+    try {
+      body = await readJson(c.req.raw) as typeof body;
+      if (!body || Object.keys(body).sort().join() !== "search,state") throw new Error();
+    } catch (error) { return c.json({ error: { code: error instanceof Error && error.message === "too_large" ? "request_too_large" : "invalid_request" } }, error instanceof Error && error.message === "too_large" ? 413 : 400); }
+    if (validateStrategy(body.state).length || body.state.pricing?.mode !== "market") return c.json({ error: { code: "invalid_market_state" } }, 422);
+    const owner = c.get("session").owner;
+    const limited = await c.env.SPARRING_RATE_LIMITER?.limit({ key: owner });
+    if (limited && !limited.success) return c.json({ error: { code: "rate_limited" } }, 429);
+    const snapshot = await chains.get(body.state.pricing.snapshotId, c.env, owner);
+    if (!snapshot) return c.json({ error: { code: "snapshot_expired", message: "Load current option quotes before searching." } }, 409);
+    if (snapshot.historical || ![snapshot.retrievedAt, snapshot.spotAsOf, ...snapshot.contracts.map(quote => quote.quoteAsOf)].every(value => { const at = Date.parse(value); return Number.isFinite(at) && at <= Date.now() && Date.now() - at <= 300000; })) return c.json({ error: { code: "stale_quotes", message: "Candidate search requires all source quotes within five minutes. Refresh prices." } }, 409);
+    if (validateMarketStrategy(body.state, snapshot).length) return c.json({ error: { code: "invalid_market_state" } }, 422);
+    try { return c.json({ search: searchCandidates(body.state, snapshot, body.search) }); }
+    catch (error) {
+      if (error instanceof CandidateSearchLimitError) return c.json({ error: { code: "candidate_search_limit", message: "Candidate search exceeds 300,000 structures; narrow the quoted strike/expiry window. Your position is unchanged." } }, 422);
+      return c.json({ error: { code: "invalid_request" } }, 400);
+    }
+  });
   app.post("/api/calculate", async (c) => {
     try {
       const state = (await readJson(c.req.raw)) as StrategyState;

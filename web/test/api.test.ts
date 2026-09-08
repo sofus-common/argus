@@ -16,6 +16,35 @@ import { createSavedStore } from "../src/saved-strategies";
 
 const local = { ARGUS_LOCAL_DEV: "true" };
 const traceDB = (env as { DB: D1Database }).DB;
+it("searches quoted candidates directly without inference and rejects stale or foreign inputs", async () => {
+  await traceDB.batch(snapshotMigration.split(";").filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
+  const now = Date.now(), at = new Date(now).toISOString(), expiry = new Date(now + 30 * 86400000).toISOString();
+  const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: "SPY", source: "Tastytrade", spot: 100, retrievedAt: at, spotAsOf: at, availableExpiries: [expiry.slice(0, 10)], contracts: [95, 100, 105].map(strike => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll("-", "")}C${String(strike * 1000).padStart(8, "0")}`, type: "call", strike, expiry, multiplier: 100, bid: 2, ask: 3, iv: .25, quoteAsOf: at })) };
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([undefined, undefined, undefined])));
+  const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  await traceDB.prepare("INSERT INTO quote_snapshots (id, owner, credential_fingerprint, expires_at, snapshot_json) VALUES (?, ?, ?, ?, ?)").bind(snapshot.id, "local-development", fingerprint, now + 600000, JSON.stringify(snapshot)).run();
+  const state = createMarketStrategy("long-call", snapshot), original = structuredClone(state);
+  const search = { targetSpot: 105, targetDate: at, maxLoss: 1000, feeAllowance: 5, basis: "natural" as const, objective: "target-pnl" as const };
+  const provider = vi.fn<typeof fetch>(), app = createApp(provider), bindings: Bindings = { ...local, DB: traceDB };
+  const request = (body: unknown, settings = bindings, origin = "http://localhost") => app.request("http://localhost/api/candidates", { method: "POST", headers: { "content-type": "application/json", Origin: origin, "X-ARGUS-Request": "1" }, body: JSON.stringify(body) }, settings);
+  const result = await request({ state, search });
+  expect(result.status).toBe(200); expect(await result.json()).toEqual({ search: searchCandidates(state, snapshot, search) });
+  expect(result.headers.get("Cache-Control")).toBe("no-store"); expect(state).toEqual(original);
+  for (const body of [{ state, search, extra: true }, { state, search: { ...search, maxLoss: -1 } }, { state, search: { ...search, maxCost: 10 } }]) expect((await request(body)).status).toBe(400);
+  expect((await request({ state: { ...state, legs: [] }, search })).status).toBe(422);
+  expect((await request({ state: { ...state, legs: state.legs.map(leg => ({ ...leg, iv: leg.iv + .1 })) }, search })).status).toBe(422);
+  expect((await request({ state: { ...state, pricing: { ...state.pricing, snapshotId: "missing" } }, search })).status).toBe(409);
+  expect((await request({ state, search }, { ...bindings, SPARRING_RATE_LIMITER: { limit: async () => ({ success: false }) } })).status).toBe(429);
+  expect((await request({ state, search }, bindings, "https://evil.example")).status).toBe(403);
+  expect((await request({ state, search }, { DB: traceDB })).status).toBe(503);
+  for (const changed of [{ ...snapshot, spotAsOf: new Date(now - 300001).toISOString() }, { ...snapshot, contracts: snapshot.contracts.map(quote => ({ ...quote, quoteAsOf: new Date(now - 300001).toISOString() })) }, { ...snapshot, retrievedAt: new Date(now - 300001).toISOString() }, { ...snapshot, spotAsOf: new Date(now + 60000).toISOString() }, { ...snapshot, historical: true }]) {
+    await traceDB.prepare("UPDATE quote_snapshots SET snapshot_json = ? WHERE id = ?").bind(JSON.stringify(changed), snapshot.id).run();
+    expect((await request({ state, search })).status).toBe(409);
+  }
+  await traceDB.prepare("UPDATE quote_snapshots SET snapshot_json = ?, owner = ? WHERE id = ?").bind(JSON.stringify(snapshot), "another-owner", snapshot.id).run();
+  expect((await request({ state, search })).status).toBe(409);
+  expect(provider).not.toHaveBeenCalled();
+});
 beforeAll(async () => { await traceDB.batch([...promptMigration.split(/;\s*(?=CREATE|$)/), ...traceMigration.split(/;\s*(?=CREATE|$)/)].filter(sql => sql.trim()).map(sql => traceDB.prepare(sql))); });
 beforeAll(async () => { await traceDB.batch((savedMigration + lifecycleMigration).split(";").filter(sql => sql.trim()).map(sql => traceDB.prepare(sql))); });
 it("binds daily performance to the owner and saved revision before provider access", async () => {
@@ -349,6 +378,11 @@ describe("sparring API", () => {
     const state = createMarketStrategy("long-call", snapshot, "natural"), before = structuredClone(state);
     const search = { targetSpot: 105, targetDate: retrievedAt, maxLoss: 1000, feeAllowance: 5, basis: "natural" as const, objective: "target-pnl" as const };
     expect(() => searchCandidates(state, snapshot, search)).toThrow("Candidate search exceeds 300,000 structures");
+    const unused = vi.fn<typeof fetch>();
+    const direct = await createApp(unused).request("http://localhost/api/candidates", { method: "POST", headers: browserHeaders, body: JSON.stringify({ state, search }) }, { ...local, DB: traceDB });
+    expect(direct.status).toBe(422);
+    expect(await direct.json()).toMatchObject({ error: { code: "candidate_search_limit" } });
+    expect(unused).not.toHaveBeenCalled();
     const provider = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "wide-search", type: "function", function: { name: "search_candidates", arguments: JSON.stringify(search) } }] } }] }));
     const response = await post(createApp(provider), { ...input(), state }, { OPENROUTER_API_KEY: "test" });
     expect(response.status).toBe(422);

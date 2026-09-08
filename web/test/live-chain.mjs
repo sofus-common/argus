@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { createMarketStrategy, calculateStrategy, evaluateScenario, marketLeg, validateMarketStrategy } from '../src/options.ts';
+import { createMarketStrategy, calculateStrategy, evaluateScenario, marketLeg, validateMarketStrategy, searchCandidates } from '../src/options.ts';
 
-if (!process.argv.includes('--run')) throw new Error('Pass --run for real quote retrieval and up to four paid generation/verification requests; --wide uses one scenario task with at most three paid requests.');
+if (!process.argv.includes('--run')) throw new Error('Pass --run for real quote retrieval and up to four paid generation/verification requests; --wide uses at most three; --optimizer makes no inference requests.');
 const base = 'http://127.0.0.1:5173';
+const optimizer = process.argv.includes('--optimizer');
 const wide = process.argv.includes('--wide');
+assert.ok(!optimizer || !wide && !process.argv.includes('--trace-readonly'), 'Optimizer mode is separate from inference checks');
 const traceReadonly = wide || process.argv.includes('--trace-readonly');
 const symbol = process.argv.find(arg => arg.startsWith('--symbol='))?.slice(9) ?? 'SPY';
 assert.match(symbol, /^[A-Z]{1,6}$/);
@@ -42,6 +44,22 @@ if (wide) forged.legs[0].iv += 1;
 else forged.legs[0].entryPrice += 1;
 assert.equal((await post('/api/calculate', forged)).status, 422);
 assert.equal((await post('/api/calculate', { ...state, pricing: { ...state.pricing, snapshotId: 'unknown' } })).status, 409);
+if (optimizer) {
+  const search = { targetSpot: state.spot * 1.02, targetDate: state.scenarioDate, maxLoss: 1000, feeAllowance: 5, basis: 'mid', objective: 'target-pnl' };
+  const response = await post('/api/candidates', { state, search });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body.error));
+  assert.deepEqual(body.search, searchCandidates(state, snapshot, search));
+  assert.ok(body.search.candidates.length > 0);
+  for (const candidate of body.search.candidates) {
+    assert.deepEqual(candidate.metrics, calculateStrategy(candidate.state));
+    assert.deepEqual(validateMarketStrategy(candidate.state, snapshot), []);
+    assert.ok(candidate.metrics.maxLoss <= search.maxLoss);
+  }
+  assert.deepEqual(state, original);
+  console.log(JSON.stringify({ passed: true, contracts: snapshot.contracts.length, retrievedAt: snapshot.retrievedAt, spotAsOf: snapshot.spotAsOf, oldestQuote: snapshot.contracts.map(c => c.quoteAsOf).sort()[0], evaluated: body.search.evaluated, eligible: body.search.eligible, returned: body.search.candidates.length, inferenceRequests: 0, sourceUnchanged: true, coverage: body.search.coverage }));
+  process.exit(0);
+}
 const target = { scenarioDate: state.scenarioDate, scenarioSpot: state.spot, ivShift: 0, legIvShifts: state.legs.map((leg, i) => ({ legId: leg.id, ivShift: (i + 1) / 100 })) };
 const prompts = wide ? [`Read-only: price exactly this one hypothetical scenario with evaluate_scenarios: ${JSON.stringify(target)}. Include every listed leg adjustment exactly once. Explain the scenario P/L versus the current baseline, with the first-expiry horizon and mixed-expiry limitations. These fixed analysis entries are not confirmed fills. Do not search, change the builder or claim execution.`] : traceReadonly ? ['Explain this quoted long call read-only. State the quote dates separately from retrieval time; do not claim fresh or executable prices. Explain gross entry cost, the $5 modeled allowance, net cost and intact-expiry risk using supplied facts. Do not search alternatives, request additional scenarios or change the position.'] : ['Explain the biggest risk in this quoted long call. Use its actual quote snapshot, not sample numbers. Do not change the builder.', 'Replace this position with a bull-call template using the loaded quote snapshot.'];
 for (const prompt of prompts) {

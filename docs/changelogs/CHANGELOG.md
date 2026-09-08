@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Added direct deterministic strategy discovery: target price/date, loss budget,
+  fee allowance, quote basis and ranking objective now work without AI. The
+  authenticated endpoint validates owned current quotes and bounds the existing
+  search domain. Results are locally reconciled before inspection; stale and
+  altered replies cannot change holdings. Inspection includes a read-only held
+  baseline repriced at the search target, with explicit unavailability beyond
+  its first expiry, followed by Apply and Undo preserving excluded entry costs.
+  Fresh real-data proof searched 100 SPY quotes and 64,102 structures, returning
+  five candidates without inference. API/calculation checks: 182 passed;
+  TypeScript, production build and 30 rendered workflow checks at desktop and
+  390px mobile width passed, including target accounting, cancellation and
+  unsupported-horizon disclosure. Actual local UI search, inspection, Apply and
+  Undo also passed with real quotes. Existing option-only family coverage
+  remains bounded: stock-backed and mixed-expiry discovery are not yet included.
+
 - Qualified the rendered lot-manager workflow from legacy holdings through roll
   preview/confirmation, revised historical P/L, close/revisit and final closure.
   Synthetic accounting reconciles $600 realized less $7 allowance to $593 net;
