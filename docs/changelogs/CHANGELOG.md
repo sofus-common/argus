@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Exercised local V18 activation and rollback through the existing checked tool.
+  Both full regression runs passed 762 tests. The actual application exposed
+  discovery, but a one-message clarification canary failed near the 20-second
+  generation deadline without captured provider output. V16 was restored and
+  verified in local storage and the running browser; holdings stayed unchanged.
+  No retry, timeout relaxation or deployment occurred. Frozen-case qualification
+  remains valid only for those cases; app-path reliability is not established.
+  Existing traces cannot distinguish a headers, body or parsing failure, so the
+  next diagnostic is transport-phase observation, not prompt tuning.
+
 - Qualified the inactive V18 discovery workflow on 10 frozen synthetic tasks
   spanning 11 messages: 11/11 passed using exactly 11 OpenRouter calls, no retries,
   29,668 tokens and USD 0.03269376. All resolved to Gemini 3.8 Flash through Google.
