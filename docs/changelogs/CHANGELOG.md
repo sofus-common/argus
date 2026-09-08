@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added cash-index option-price history without requesting stock EOD prices for
+  the index. Complete option quotes still produce signed inventory values and
+  bid/ask envelopes; missing dates remain gaps. Shared response validation rejects
+  stock-shaped index references. Index history uses premium-point units and marks
+  unavailable index context explicitly; unsupported intraday modes are omitted.
+  Historical inventory prices are not settlement, realized P/L or actual holdings.
+  Verified 30 focused tests, TypeScript/build, independent review and 38 browser
+  checks at both desktop and mobile sizes, including forged-reference rejection.
+  Live Theta history remains unverified because the local terminal listener is
+  unavailable. No terminal startup, inference changes or deployment.
+
 - Fixed cash-index builder transitions overwriting European valuation with the
   previous equity model. XSP templates retain index identity; stock templates are
   unavailable, share/American controls are removed, and stale American preview is

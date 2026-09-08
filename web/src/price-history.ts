@@ -62,6 +62,7 @@ export function buildPriceHistory(state: StrategyState, optionResponses: unknown
     return historicalMarks(item.data, range)
   })
   const stock = historicalMarks(record(stockResponse).response, range)
+  if (state.underlyingKind === 'cash-index' && stock.size) throw new Error('Historical index reference unavailable')
   const rows = Array.from({ length: days }, (_, index) => {
     const date = new Date(Date.parse(start) + index * 86_400_000).toISOString().slice(0, 10)
     const underlying = stock.get(date) ?? null
@@ -115,7 +116,8 @@ export async function loadPriceHistory(state: StrategyState, range: HistoricalRa
   buildPriceHistory(state, state.legs.map(() => ({ response: [] })), { response: [] }, range)
   const common = { symbol: state.underlying, start_date: range.start.replaceAll('-', ''), end_date: range.end.replaceAll('-', ''), format: 'json' }
   const paths = state.legs.map(leg => `/v3/option/history/eod?${new URLSearchParams({ ...common, expiration: leg.expiry.slice(0, 10).replaceAll('-', ''), strike: String(leg.strike), right: leg.type })}`)
-  paths.push(`/v3/stock/history/eod?${new URLSearchParams(common)}`)
+  const index = state.underlyingKind === 'cash-index'
+  if (!index) paths.push(`/v3/stock/history/eod?${new URLSearchParams(common)}`)
   const responses = await request(env, paths)
-  return buildPriceHistory(state, responses.slice(0, -1), responses.at(-1), range)
+  return buildPriceHistory(state, index ? responses : responses.slice(0, -1), index ? { response: [] } : responses.at(-1), range)
 }

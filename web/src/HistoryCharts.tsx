@@ -3,7 +3,7 @@ export type HistoryChartRow = { label: string; value: number | null; underlying:
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const dollars = (value: number) => currency.format(value)
 
-export function HistoryCharts({ rows, selected, onInspect, intraday = false, stockTrades = false, priceScale, ivLabel, performanceLabel }: { rows: HistoryChartRow[]; selected: number; onInspect: (index: number) => void; intraday?: boolean; stockTrades?: boolean; priceScale?: number | null; ivLabel?: string; performanceLabel?: string }) {
+export function HistoryCharts({ rows, selected, onInspect, intraday = false, stockTrades = false, cashIndex = false, priceScale, ivLabel, performanceLabel }: { rows: HistoryChartRow[]; selected: number; onInspect: (index: number) => void; intraday?: boolean; stockTrades?: boolean; cashIndex?: boolean; priceScale?: number | null; ivLabel?: string; performanceLabel?: string }) {
   const format = (value: number) => ivLabel ? value.toLocaleString('en-US', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 }) : dollars(value)
   const [priceMode, setPriceMode] = useState(false)
   const [preview, setPreview] = useState<number | null>(null)
@@ -13,6 +13,7 @@ export function HistoryCharts({ rows, selected, onInspect, intraday = false, sto
   const visible = useMemo(() => rows.slice(start, start + count), [rows, start, count])
   const divisor = !ivLabel && !performanceLabel && Number.isSafeInteger(priceScale) && priceScale! >= 100 ? priceScale! : null
   const scale = priceMode && divisor ? divisor : 1
+  const premium = (value: number) => cashIndex ? `${value.toFixed(2)} points` : dollars(value)
   const selection = Math.max(0, Math.min(rows.length - 1, Number.isFinite(selected) ? Math.round(selected) : 0))
   const index = preview === null ? selection : Math.max(0, Math.min(rows.length - 1, preview))
   const previewing = index !== selection
@@ -35,6 +36,7 @@ export function HistoryCharts({ rows, selected, onInspect, intraday = false, sto
   }
   const x = (i: number) => count < 2 ? 400 : 100 + i / (count - 1) * 600
   const plots = useMemo(() => (ivLabel || performanceLabel ? [false] : [false, true]).map(underlying => {
+    const plotFormat = (value: number) => cashIndex && !underlying && scale !== 1 ? premium(value) : format(value)
     const values = visible.map(row => { const value = underlying ? row.underlying : row.value; return value === null ? null : { mid: underlying ? value : value / scale, envelope: ivLabel || performanceLabel || underlying || intraday || !row.envelope ? undefined : { low: row.envelope.low / scale, high: row.envelope.high / scale } } })
     const available = values.flatMap(value => value ? [value.mid, ...(value.envelope ? [value.envelope.low, value.envelope.high] : [])] : [])
     const low = available.length ? Math.min(...available) : 0, high = available.length ? Math.max(...available) : 1
@@ -49,28 +51,28 @@ export function HistoryCharts({ rows, selected, onInspect, intraday = false, sto
       }
     })
     return { values, y, content: <>
-        {available.length > 0 && [minimum, (minimum + maximum) / 2, maximum].map((tick, i) => <g key={i}><line className="history-grid" x1="100" x2="700" y1={y(tick)} y2={y(tick)} /><text x="90" y={y(tick) + 4} textAnchor="end">{format(tick)}</text></g>)}
+        {available.length > 0 && [minimum, (minimum + maximum) / 2, maximum].map((tick, i) => <g key={i}><line className="history-grid" x1="100" x2="700" y1={y(tick)} y2={y(tick)} /><text x="90" y={y(tick) + 4} textAnchor="end">{plotFormat(tick)}</text></g>)}
         {available.length > 0 && minimum < 0 && maximum > 0 && <line className="history-zero" x1="100" x2="700" y1={y(0)} y2={y(0)} />}
         {segments.map(segment => <g key={segment[0]} data-history-segment={segment[0]}>
           {segment.every(i => values[i]!.envelope) && <path className="history-envelope" d={segment.map((i, n) => `${n ? 'L' : 'M'}${x(i)},${y(values[i]!.envelope!.high)}`).join(' ') + ' ' + [...segment].reverse().map(i => `L${x(i)},${y(values[i]!.envelope!.low)}`).join(' ') + ' Z'} />}
           <path className="history-line" d={segment.map((i, n) => `${n ? 'L' : 'M'}${x(i)},${y(values[i]!.mid)}`).join(' ')} />
-          {segment.map(i => <g key={i}>{values[i]!.envelope && <line className="history-interval" x1={x(i)} x2={x(i)} y1={y(values[i]!.envelope!.low)} y2={y(values[i]!.envelope!.high)} />}<circle className="history-point" cx={x(i)} cy={y(values[i]!.mid)} r={intraday ? 1.5 : 2.5}><title>{`${visible[i].label}: ${format(values[i]!.mid)}`}</title></circle></g>)}
+          {segment.map(i => <g key={i}>{values[i]!.envelope && <line className="history-interval" x1={x(i)} x2={x(i)} y1={y(values[i]!.envelope!.low)} y2={y(values[i]!.envelope!.high)} />}<circle className="history-point" cx={x(i)} cy={y(values[i]!.mid)} r={intraday ? 1.5 : 2.5}><title>{`${visible[i].label}: ${plotFormat(values[i]!.mid)}`}</title></circle></g>)}
         </g>)}
         {!available.length && <text className="history-empty" x="400" y="90" textAnchor="middle">No reported values</text>}
         {count > 0 && <text x={x(0)} y="178" textAnchor={count === 1 ? 'middle' : 'start'}>{visible[0].label}</text>}
         {count > 1 && <text x={x(count - 1)} y="178" textAnchor="end">{visible.at(-1)!.label}</text>}
       </> }
-  }), [visible, scale, intraday, count, ivLabel, performanceLabel])
+  }), [visible, scale, intraday, count, ivLabel, performanceLabel, cashIndex])
   const chart = (underlying: boolean) => {
     const plot = plots[underlying ? 1 : 0], point = inView ? plot.values[index - start] : null
     return <section className={`history-chart${underlying ? ' history-underlying' : ''}`}>
-      <div className="history-chart-heading"><h3>{performanceLabel ?? (ivLabel ? 'Option implied volatility' : underlying ? 'Underlying' : scale !== 1 ? 'Strategy price' : 'Current inventory')}</h3><span>{performanceLabel ? 'Daily restated estimate · USD' : ivLabel ? 'Trade-candle IV · percent' : !underlying && scale !== 1 ? 'Normalized quote units · USD' : intraday ? underlying ? 'Last trade · 5-minute close · USD' : `${stockTrades ? 'Option marks + stock trades' : 'Option midpoint marks'} · USD` : underlying ? 'EOD midpoint · USD' : 'EOD value · USD'}</span></div>
-      <svg role="img" aria-label={performanceLabel ? `Historical ${performanceLabel}` : ivLabel ? 'Historical option implied volatility' : underlying ? 'Historical underlying price' : 'Historical strategy value'} viewBox="0 0 720 184" preserveAspectRatio="none" onPointerDown={event => {
+      <div className="history-chart-heading"><h3>{performanceLabel ?? (ivLabel ? 'Option implied volatility' : underlying ? cashIndex ? 'Index reference' : 'Underlying' : scale !== 1 ? 'Strategy price' : 'Current inventory')}</h3><span>{performanceLabel ? 'Daily restated estimate · USD' : ivLabel ? 'Trade-candle IV · percent' : underlying && cashIndex ? 'Unavailable · no index reference feed' : !underlying && scale !== 1 ? cashIndex ? 'Normalized premium · points' : 'Normalized quote units · USD' : intraday ? underlying ? 'Last trade · 5-minute close · USD' : `${stockTrades ? 'Option marks + stock trades' : 'Option midpoint marks'} · USD` : underlying ? 'EOD midpoint · USD' : 'EOD value · USD'}</span></div>
+      <svg role="img" aria-label={performanceLabel ? `Historical ${performanceLabel}` : ivLabel ? 'Historical option implied volatility' : underlying ? cashIndex ? 'Historical index reference' : 'Historical underlying price' : 'Historical strategy value'} viewBox="0 0 720 184" preserveAspectRatio="none" onPointerDown={event => {
         if (event.button !== 0) return
         const next = pointerIndex(event)
         if (next !== null) inspect(next)
       }} onPointerMove={event => { if (event.pointerType !== 'touch') setPreview(pointerIndex(event)) }} onPointerLeave={() => setPreview(null)} onPointerCancel={() => setPreview(null)}>
-        <title>{`${performanceLabel ? `${performanceLabel}, restated from dated executions and historical marks` : ivLabel ? `${ivLabel} historical candle IV` : underlying ? intraday ? 'Underlying last-trade candle close' : 'Underlying end-of-day midpoint' : scale !== 1 ? 'Normalized strategy price estimate' : intraday ? 'Signed current-inventory candle-close estimate' : 'Signed current-inventory value with quote-side envelope'}. Missing values are not interpolated.`}</title>
+        <title>{`${performanceLabel ? `${performanceLabel}, restated from dated executions and historical marks` : ivLabel ? `${ivLabel} historical candle IV` : underlying ? cashIndex ? 'Index reference unavailable, not a settlement value' : intraday ? 'Underlying last-trade candle close' : 'Underlying end-of-day midpoint' : scale !== 1 ? 'Normalized strategy price estimate' : intraday ? 'Signed current-inventory candle-close estimate' : 'Signed current-inventory value with quote-side envelope'}. Missing values are not interpolated.`}</title>
         {plot.content}
         {current && inView && <line className="history-guide" x1={x(index - start)} x2={x(index - start)} y1="18" y2="158" />}
         {point && <circle className="history-highlight" cx={x(index - start)} cy={plot.y(point.mid)} r="4" />}
@@ -84,9 +86,9 @@ export function HistoryCharts({ rows, selected, onInspect, intraday = false, sto
     {chart(false)}{!ivLabel && !performanceLabel && chart(true)}
     <label className="history-inspector">Inspect history {intraday ? 'interval' : 'date'} · full range<input type="range" aria-label={`Inspect history ${intraday ? 'interval' : 'date'}`} aria-valuetext={rows[selection]?.label ?? 'No values'} min="0" max={Math.max(0, rows.length - 1)} step="1" value={selection} disabled={!rows.length} onChange={event => inspect(Number(event.target.value))} /></label>
     {current && !inView && <p className="history-chart-note">Selected point is outside this view. Use the inspector or reset zoom to reveal it.</p>}
-    <output className="history-readout" aria-live={previewing ? 'off' : 'polite'}><strong>{previewing ? 'Preview' : 'Selected'} · {current?.label ?? 'No values'}</strong><span>{performanceLabel ?? (ivLabel ? `${ivLabel} · IV` : 'Inventory')} <b>{current?.value != null ? format(current.value) : 'Unavailable'}</b></span>{divisor && <span>Strategy price <b>{current?.value != null ? dollars(current.value / divisor) : 'Unavailable'}</b></span>}{!ivLabel && !performanceLabel && !intraday && <span>Quote sides · total <b>{current?.envelope ? `${dollars(current.envelope.low)} to ${dollars(current.envelope.high)}` : 'Unavailable'}</b></span>}{!ivLabel && !performanceLabel && <span>Underlying <b>{current?.underlying != null ? dollars(current.underlying) : 'Unavailable'}</b></span>}</output>
+    <output className="history-readout" aria-live={previewing ? 'off' : 'polite'}><strong>{previewing ? 'Preview' : 'Selected'} · {current?.label ?? 'No values'}</strong><span>{performanceLabel ?? (ivLabel ? `${ivLabel} · IV` : 'Inventory')} <b>{current?.value != null ? format(current.value) : 'Unavailable'}</b></span>{divisor && <span>Strategy price <b>{current?.value != null ? premium(current.value / divisor) : 'Unavailable'}</b></span>}{!ivLabel && !performanceLabel && !intraday && <span>Quote sides · total <b>{current?.envelope ? `${dollars(current.envelope.low)} to ${dollars(current.envelope.high)}` : 'Unavailable'}</b></span>}{!ivLabel && !performanceLabel && <span>{cashIndex ? 'Index reference' : 'Underlying'} <b>{current?.underlying != null ? dollars(current.underlying) : 'Unavailable'}</b></span>}</output>
     <p className="history-chart-note">Hover to preview. Click a chart or use the inspector to select {performanceLabel ? 'a dated accounting observation.' : ivLabel ? 'an interval.' : 'the point for discussion.'}</p>
-    {divisor && <p className="history-chart-note">Strategy price = total inventory ÷ {divisor}. Quantities reduce to the smallest whole-contract/whole-share ratio, then divide by the 100-share contract multiplier. Not an executable package quote. AI discussion retains total USD and this conversion.</p>}
+    {divisor && <p className="history-chart-note">Strategy price = total inventory ÷ {divisor}. {cashIndex ? 'Quantities reduce to the smallest whole-contract ratio, then divide by the $100-per-point contract multiplier.' : 'Quantities reduce to the smallest whole-contract/whole-share ratio, then divide by the 100-share contract multiplier.'} Not an executable package quote. AI discussion retains total USD and this conversion.</p>}
     <p className="history-chart-note">{performanceLabel ? 'Estimated restated P/L from recorded holdings and dated marks, not synchronized quotes or verified investment returns.' : ivLabel ? 'Provider IV observations on five-minute trade candles. Times identify bucket starts; precise IV observation time and aggregation within each bucket are unspecified.' : <>Fixed current holdings, not historical P/L or fills. {intraday ? 'Bucket-close estimates are not synchronized quotes. No bid/ask envelope is available.' : 'Shading shows quoted bid/ask sides, not a confidence interval.'}</>} Gaps mean no reported value.</p>
   </div>
 }

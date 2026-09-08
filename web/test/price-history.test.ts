@@ -1,6 +1,6 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createStrategy, validateStrategy } from "../src/options";
-import { buildPriceHistory, readPriceHistory, historyPriceScale } from "../src/price-history";
+import { buildPriceHistory, readPriceHistory, historyPriceScale, loadPriceHistory } from "../src/price-history";
 
 it('normalizes whole-position ratios with option and signed stock quantities without mutation', () => {
   const state = createStrategy('bull-call'); state.legs[0].contracts = 2; state.legs[1].contracts = 4;
@@ -51,6 +51,42 @@ function responses() {
   return [770, 775].map((strike, i) => ({ response: [{ contract: { symbol: "SPY", expiration: "2026-10-09", strike, right: "CALL" }, data: [mark(i ? 8.88 : 11.64, i ? 8.92 : 11.68)] }] }));
 }
 const stock = () => ({ response: [mark(770.23, 770.25)] });
+
+it('loads index option history without requesting or admitting stock-shaped index levels', async () => {
+  const state = strategy(); state.underlying = 'XSP'; state.underlyingKind = 'cash-index'; state.valuationModel = 'european-bsm-v1';
+  state.legs.forEach(leg => { leg.contractId = leg.contractId.replace('SPY', 'XSP'); });
+  const raw = responses(); raw.forEach(item => { item.response[0].contract.symbol = 'XSP'; });
+  const before = structuredClone(state);
+  const request = vi.fn(async (_env, paths: string[]) => {
+    expect(paths).toHaveLength(2);
+    expect(paths.every(path => path.startsWith('/v3/option/history/eod?') && new URL(path, 'http://theta.internal').searchParams.get('symbol') === 'XSP')).toBe(true);
+    return raw;
+  });
+  const history = await loadPriceHistory(state, range, {}, request);
+  expect(request).toHaveBeenCalledOnce();
+  expect(history.rows[0].value?.mid).toBeCloseTo(276);
+  expect(history.rows[0].value?.bidSide).toBeCloseTo(272);
+  expect(history.rows[0].value?.askSide).toBeCloseTo(280);
+  expect(history.rows.every(row => row.underlying === null)).toBe(true);
+  expect(history.rows[1].value).toBeNull();
+  expect(state).toEqual(before);
+  const body = { history, snapshotId: 'test', positionVersion: state.version, range, source: 'Theta EOD' };
+  expect(readPriceHistory(body, state, range, now)).toEqual(history);
+  expect(() => buildPriceHistory(state, raw, stock(), range, now)).toThrow();
+  body.history.rows[0].underlying = { bid: 770.23, ask: 770.25, mid: 770.24, created: mark(0, 1).created, lastTrade: mark(0, 1).last_trade };
+  expect(() => readPriceHistory(body, state, range, now)).toThrow();
+});
+
+it('retains the equity reference request and rejects incomplete index response sets', async () => {
+  const request = vi.fn(async (_env, paths: string[]) => {
+    expect(paths).toHaveLength(3); expect(paths[2]).toContain('/v3/stock/history/eod?');
+    return [...responses(), stock()];
+  });
+  expect((await loadPriceHistory(strategy(), range, {}, request)).rows[0].underlying?.mid).toBe(770.24);
+  const state = strategy(); state.underlying = 'XSP'; state.underlyingKind = 'cash-index'; state.valuationModel = 'european-bsm-v1';
+  state.legs.forEach(leg => { leg.contractId = leg.contractId.replace('SPY', 'XSP'); });
+  await expect(loadPriceHistory(state, range, {}, async () => [{ response: [] }])).rejects.toThrow();
+});
 
 it("validates returned history against captured position, dates and raw quote arithmetic", () => {
   const state = strategy();

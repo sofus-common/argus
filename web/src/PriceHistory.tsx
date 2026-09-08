@@ -53,6 +53,7 @@ function HistoryDiscussion(props: { state: StrategyState } & ({ iv?: false; intr
 
 export function PriceHistory({ state, onClose }: { state: StrategyState; onClose: () => void }) {
   const [captured] = useState(() => structuredClone(state))
+  const cashIndex = captured.underlyingKind === 'cash-index'
   const [lastDate] = useState(() => [dateOffset(historyToday(), -1), ...captured.legs.map(leg => leg.expiry.slice(0, 10))].sort()[0])
   const [range, setRange] = useState({ start: dateOffset(lastDate, -6), end: lastDate })
   const [history, setHistory] = useState<ReturnType<typeof buildPriceHistory> | null>(null)
@@ -88,7 +89,7 @@ export function PriceHistory({ state, onClose }: { state: StrategyState; onClose
     setRange(previous => ({ ...previous, [key]: value }))
   }
   async function load(requestedRange = range) {
-    if (busy || stale) return
+    if (busy || stale || (cashIndex && intraday)) return
     let bucketRange = { start: 0, end: 0 }
     try {
       if (intraday) {
@@ -134,7 +135,8 @@ export function PriceHistory({ state, onClose }: { state: StrategyState; onClose
   const ivObservation = (row: { time: string; iv: number | null } | null) => row && row.iv !== null ? `${(row.iv * 100).toFixed(2)}% · ${row.time.slice(0, 16).replace('T', ' ')} UTC` : 'Unavailable'
   const ivChange = (value: number | null) => value === null ? 'Unavailable' : `${value > 0 ? '+' : ''}${value.toFixed(2)} percentage points`
   const timeLabel = (time: number) => `${new Date(time).toISOString().slice(0, 16).replace('T', ' ')} UTC`
-  const quoteRow = (label: string, mark: HistoricalMark | null) => <tr key={label}><th scope="row">{label}</th><td>{mark ? `${dollars(mark.bid)} / ${dollars(mark.ask)}` : 'Not available'}</td><td>{mark?.created ?? '—'}</td><td>{mark?.lastTrade ?? '—'}</td></tr>
+  const premium = (value: number) => cashIndex ? value.toFixed(2) : dollars(value)
+  const quoteRow = (label: string, mark: HistoricalMark | null) => <tr key={label}><th scope="row">{label}</th><td>{mark ? `${premium(mark.bid)} / ${premium(mark.ask)}` : 'Not available'}</td><td>{mark?.created ?? '—'}</td><td>{mark?.lastTrade ?? '—'}</td></tr>
   return <dialog ref={dialog} className="lifecycle-dialog history-dialog" aria-label="Historical pricing" onCancel={event => { event.preventDefault(); dismiss() }}>
     <header><div><h2>Historical pricing</h2><small>{captured.underlying} · {captured.name} · current quantities</small></div><button type="button" autoFocus onClick={dismiss}>Close history</button></header>
     {!intraday && <div className="segmented" role="group" aria-label="Load daily history range">{[7, 14, 31].map(days => {
@@ -142,7 +144,7 @@ export function PriceHistory({ state, onClose }: { state: StrategyState; onClose
       return <button key={days} type="button" className={active ? 'active' : ''} aria-pressed={active} disabled={busy || stale} onClick={() => void load({ start, end: lastDate })}>{days} days</button>
     })}</div>}
     <form className="history-range" onSubmit={event => { event.preventDefault(); void load() }}>
-      <label>View<select aria-label="History resolution" value={resolution} disabled={stale} onChange={event => { resetHistory(); setResolution(event.target.value) }}><option value="daily">Daily EOD</option><option value="intraday">Intraday · 5 minutes</option><option value="iv">Historical IV · 5 minutes</option></select></label>
+      <label>View<select aria-label="History resolution" value={resolution} disabled={stale} onChange={event => { if (cashIndex && event.target.value !== 'daily') return; resetHistory(); setResolution(event.target.value) }}><option value="daily">Daily EOD</option><option value="intraday" disabled={cashIndex}>Intraday · 5 minutes</option><option value="iv" disabled={cashIndex}>Historical IV · 5 minutes</option></select></label>
       {intraday ? <><label>Span<select aria-label="Intraday span" value={span} disabled={stale} onChange={event => { resetHistory(); setSpan(Number(event.target.value)) }}><option value={1}>1 day</option><option value={7}>7 days</option></select></label><label>Through · UTC<input type="date" aria-label="Intraday date UTC" value={day} max={[new Date().toISOString().slice(0, 10), ...captured.legs.map(leg => leg.expiry.slice(0, 10))].sort()[0]} disabled={stale} onChange={event => { resetHistory(); setDay(event.target.value) }} /></label></> : <>
       <label>From<input type="date" aria-label="History start date" value={range.start} max={range.end || lastDate} onChange={event => changeRange('start', event.target.value)} disabled={stale} /></label>
       <label>Through<input type="date" aria-label="History end date" value={range.end} min={range.start} max={lastDate} onChange={event => changeRange('end', event.target.value)} disabled={stale} /></label>
@@ -150,6 +152,7 @@ export function PriceHistory({ state, onClose }: { state: StrategyState; onClose
       <button disabled={busy || stale}>{busy ? 'Loading history…' : 'Load history'}</button>
     </form>
     <p className="history-basis">{iv ? 'Tastytrade DXLink · historical IV for each listed option, from trade candles—not midpoint candles or aggregate underlying IV. Completed five-minute buckets, UTC. No portfolio-average IV, IV rank or forecast is implied.' : intraday ? `Tastytrade DXLink · five-minute option midpoint closes${captured.stock ? ' + stock last-trade closes' : '; underlying last trade is reference only'}. UTC calendar span, completed intervals only. Reload to include newly completed intervals. Not synchronized or executable prices.` : 'Theta EOD · daily midpoint estimates for the current inventory, not past holdings or P/L. Quote-side intervals are not executable package prices.'} No model substitution or forward filling.</p>
+    {cashIndex && <p className="history-basis">Index reference unavailable: this history contains option quotes only, not an official settlement value. Option premiums are quoted in points, with $100 per point per contract. Intraday price and IV history are not supported for cash indices.</p>}
     {stale && <p role="alert">Position changed. Close and reopen history to inspect the new inventory.</p>}
     {error && <p role="alert">{error}</p>}
     {busy && <p role="status">{intraday ? 'Loading completed intervals from the shared market feed…' : 'Loading paced requests from the local terminal…'}</p>}
@@ -173,9 +176,9 @@ export function PriceHistory({ state, onClose }: { state: StrategyState; onClose
       <HistoryDiscussion key={JSON.stringify([ivLeg, selected, ivHistory])} iv intraday state={captured} range={intradayRange} history={ivHistory} contractId={captured.legs[ivLeg].contractId!} selectedTime={ivHistory.rows[selected].time} />
     </>}
     {history && !stale && <>
-      <HistoryCharts rows={history.rows.map(row => ({ label: row.date, value: row.value?.mid ?? null, underlying: row.underlying?.mid ?? null, ...(row.value ? { envelope: { low: row.value.bidSide, high: row.value.askSide } } : {}) }))} selected={selected} onInspect={setSelected} priceScale={historyPriceScale(captured)} />
+      <HistoryCharts rows={history.rows.map(row => ({ label: row.date, value: row.value?.mid ?? null, underlying: row.underlying?.mid ?? null, ...(row.value ? { envelope: { low: row.value.bidSide, high: row.value.askSide } } : {}) }))} selected={selected} onInspect={setSelected} priceScale={historyPriceScale(captured)} cashIndex={cashIndex} />
       <p className="history-basis">{history.rows.filter(row => row.value !== null).length} complete strategy dates / {history.rows.length} requested calendar dates. Report timestamps are timezone-less provider strings, not synchronized quote times; last trades may be older.</p>
-      {current && <details className="history-quotes"><summary>Quotes and report times · {current.date}</summary><div className="leg-risk-scroll" role="region" aria-label="Historical quote details" tabIndex={0}><table><thead><tr><th scope="col">Constituent</th><th scope="col">Bid / ask per share</th><th scope="col">Report created · provider time</th><th scope="col">Last trade · provider time</th></tr></thead><tbody>{current.legs.map((leg, i) => quoteRow(`${captured.legs[i].side} ${captured.legs[i].contracts} × ${leg.contractId}`, leg.mark))}{quoteRow(`${captured.underlying}${captured.stock ? ` · ${captured.stock.shares} shares` : ' · reference only'}`, current.underlying)}</tbody></table></div></details>}
+      {current && <details className="history-quotes"><summary>Quotes and report times · {current.date}</summary><div className="leg-risk-scroll" role="region" aria-label="Historical quote details" tabIndex={0}><table><thead><tr><th scope="col">Constituent</th><th scope="col">{cashIndex ? 'Bid / ask · premium points' : 'Bid / ask per share'}</th><th scope="col">Report created · provider time</th><th scope="col">Last trade · provider time</th></tr></thead><tbody>{current.legs.map((leg, i) => quoteRow(`${captured.legs[i].side} ${captured.legs[i].contracts} × ${leg.contractId}`, leg.mark))}{quoteRow(`${captured.underlying}${captured.stock ? ` · ${captured.stock.shares} shares` : ' · reference only'}`, current.underlying)}</tbody></table></div></details>}
       {current && <HistoryDiscussion key={JSON.stringify([current.date, history])} state={captured} range={range} history={history} selectedDate={current.date} />}
     </>}
     {intradayHistory && !stale && <>

@@ -79,6 +79,28 @@ it('loads history only for an owned matching snapshot and preserves state', asyn
   expect(provider).toHaveBeenCalledTimes(2)
 }, 15000)
 
+it('loads owner-bound index option history without a stock reference or state changes', async () => {
+  const stamp = new Date().toISOString();
+  const index: MarketSnapshot = { ...snapshot, underlying: 'XSP', underlyingKind: 'cash-index', spotAsOf: stamp, indexSourceTime: stamp, retrievedAt: stamp,
+    contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' },
+    contracts: snapshot.contracts.map(contract => ({ ...contract, contractId: contract.contractId.replace('SPY', 'XSP'), quoteAsOf: stamp })) };
+  const provider = vi.fn<typeof fetch>(async url => {
+    const path = new URL(String(url));
+    expect(path.origin).toBe('http://127.0.0.1:25503'); expect(path.pathname).toBe('/v3/option/history/eod');
+    expect(path.searchParams.get('symbol')).toBe('XSP');
+    return Response.json({ response: [{ contract: { symbol: 'XSP', expiration: '2099-09-18', strike: 100, right: 'CALL' }, data: [{ created: '2026-09-04T17:15:00', last_trade: '2026-09-04T16:00:00', bid: 2, ask: 3 }] }] });
+  });
+  const store = createOptionChainStore(provider), owned = await store.restore(index, bindings, 'local-development');
+  const state = createMarketStrategy('long-call', owned), before = structuredClone(state), app = createApp(provider);
+  const foreign = await store.restore(index, bindings, 'foreign');
+  expect((await app.fetch(request(createMarketStrategy('long-call', foreign)), bindings)).status).toBe(409);
+  expect(provider).not.toHaveBeenCalled();
+  const response = await app.fetch(request(state), bindings);
+  expect(response.status).toBe(200);
+  expect((await response.json() as any).history.rows[0]).toMatchObject({ underlying: null, value: { mid: 250, bidSide: 200, askSide: 300 } });
+  expect(provider).toHaveBeenCalledOnce(); expect(state).toEqual(before);
+});
+
 it('rejects foreign snapshots and unauthenticated requests before Theta access', async () => {
   const provider = vi.fn<typeof fetch>(async () => { throw new Error('No provider access expected') })
   const foreign = await createOptionChainStore(provider).restore(snapshot, bindings, 'another-owner')

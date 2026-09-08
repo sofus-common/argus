@@ -87,6 +87,31 @@ async function run() {
     finally { await unmount() }
   }
   try {
+    await test('Index daily option values retain gaps and reject stock-shaped index references', async () => {
+      await unmount();
+      const index = structuredClone(state);
+      index.underlying = 'XSP'; index.underlyingKind = 'cash-index'; index.valuationModel = 'european-bsm-v1';
+      index.legs.forEach(leg => { leg.contractId = leg.contractId!.replace('SPY', 'XSP'); });
+      root = createRoot(fixture); await act(async () => root!.render(<Host position={index} />)); await settleTimers();
+      const complete = (body: any) => {
+        body.history = buildPriceHistory(index, index.legs.map((leg, i) => ({ response: [{ contract: { symbol: 'XSP', strike: leg.strike, right: leg.type.toUpperCase(), expiration: leg.expiry.slice(0, 10) }, data: [{ created: `${body.range.end}T16:00:00`, last_trade: `${body.range.end}T15:59:00`, bid: i ? 1 : 3, ask: i ? 2 : 4 }] }] })), { response: [] }, body.range);
+      };
+      await daily().finish(complete);
+      assert(fixture.textContent?.includes('Index reference unavailable') && fixture.textContent.includes('not an official settlement value'), 'Index reference limitation missing');
+      assert(fixture.textContent?.includes('1 complete strategy dates / 7') && fixture.querySelector('.history-readout')?.textContent?.includes('$200.00'), 'Valid index option composite missing');
+      assert(!fixture.textContent?.includes('per share') && !fixture.textContent?.includes('100-share'), 'Index premiums labeled as shares');
+      const modes = fixture.querySelector('[aria-label="History resolution"]')!;
+      assert([...modes.querySelectorAll('option')].filter(option => option.value !== 'daily').every(option => option.disabled), 'Unsupported index intraday mode selectable');
+      assert(fixture.querySelector('[aria-label="Historical index reference"]')?.querySelectorAll('.history-point').length === 0, 'Index reference invented');
+      await click('Strategy price');
+      assert(fixture.querySelector('.history-readout')?.textContent?.includes('2.00 points') && fixture.querySelector('.history-readout')?.textContent?.includes('$200.00'), 'Index premium conversion changed total USD or mislabeled points');
+      assert(fixture.querySelector('[aria-label="Historical strategy value"] .history-point title')?.textContent?.includes('2.00 points'), 'Normalized index plot not in points');
+      const before = requests; await change('History resolution', 'intraday');
+      assert(requests === before && (modes as unknown as { value: string }).value === 'daily', 'Programmatic unsupported index mode admitted');
+      await click('Load history');
+      await daily().finish(body => { complete(body); body.history.rows.at(-1).underlying = { bid: 770, ask: 771, mid: 770.5, created: `${body.range.end}T16:00:00`, lastTrade: `${body.range.end}T15:59:00` }; });
+      assert(fixture.querySelector('[role="alert"]') && !fixture.querySelector('.history-charts'), 'Stock-shaped index history rendered');
+    });
     await test('Performance discussion refreshes accounting and rejects altered or stale responses', async () => {
       await unmount(); const priorFetch = window.fetch;
       const stamp = '2026-09-01T12:00:00.000Z', expiry = '2026-10-09T20:00:00.000Z', range = { start: '2026-09-01', end: '2026-09-03' };
