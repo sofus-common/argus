@@ -96,6 +96,7 @@ export interface StrategyState {
   ivShift: number;
   expiryIvShifts?: Array<{ expiry: string; ivShift: number }>;
   legs: OptionLeg[];
+  excludedLegIds?: string[];
   stock?: { shares: number; entryPrice: number };
   feeAllowance?: number;
   pricing?: { mode: "market"; snapshotId: string; basis: PricingBasis; historical?: true; entryMode?: "fixed" };
@@ -519,6 +520,25 @@ export function pruneExpiryIvShifts(state: StrategyState): StrategyState {
 }
 
 export function validateStrategy(state: StrategyState): string[] {
+  return validatePosition(state, false);
+}
+
+export function validateConstruction(state: StrategyState): string[] {
+  return validatePosition(state, true);
+}
+
+export function projectAnalysisPosition(state: StrategyState): StrategyState | null {
+  const errors = validateConstruction(state);
+  if (errors.length) throw new Error(errors.join("; "));
+  const { excludedLegIds = [], ...position } = structuredClone(state);
+  position.legs = position.legs.filter(leg => !excludedLegIds.includes(leg.id));
+  if (!position.legs.length && !position.stock) return null;
+  const projected = pruneExpiryIvShifts(position);
+  assertValid(projected);
+  return projected;
+}
+
+function validatePosition(state: StrategyState, construction: boolean): string[] {
   const errors: string[] = [];
   if (!state || typeof state !== "object") return ["strategy must be an object"];
   if (state.valuationModel !== undefined && state.valuationModel !== "european-bsm-v1" && state.valuationModel !== "american-crr-1024-v1") errors.push("unsupported valuation model");
@@ -542,11 +562,15 @@ export function validateStrategy(state: StrategyState): string[] {
   if (!Number.isFinite(valuation) || !Number.isFinite(scenario)) errors.push("valuation and scenario dates must be valid timestamps");
   if (Number.isFinite(valuation) && Number.isFinite(scenario) && scenario < valuation) errors.push("scenario date cannot precede valuation");
 
-  if (!Array.isArray(state.legs) || (!state.legs.length && !state.stock) || state.legs.length > 4) {
+  if (!Array.isArray(state.legs) || (!construction && !state.legs.length && !state.stock) || state.legs.length > 4) {
     errors.push(state.legs?.length > 4 ? "strategy must contain one to four legs" : "strategy must contain one to four legs or a nonzero stock holding");
     return errors;
   }
 
+  const excluded = state.excludedLegIds;
+  if (excluded !== undefined && (!Array.isArray(excluded) || Array.from(excluded).some(id => typeof id !== "string" || !id || !state.legs.some(leg => leg?.id === id)) || new Set(excluded).size !== excluded.length)) errors.push("excluded leg ids must be unique existing leg ids");
+  if (!construction && Array.isArray(excluded) && excluded.length) errors.push("project included holdings before pricing");
+  const excludedIds = new Set(Array.isArray(excluded) ? excluded : []);
   const ids = new Set<string>();
   if (state.expiryIvShifts !== undefined) {
     const shifts = state.expiryIvShifts;
@@ -577,7 +601,7 @@ export function validateStrategy(state: StrategyState): string[] {
     if (item.multiplier !== 100) errors.push(`${item.id}: only standard 100-share contracts are supported`);
     const expiry = timestamp(item.expiry);
     if (!Number.isFinite(expiry) || (Number.isFinite(valuation) && expiry <= valuation)) errors.push(`${item.id}: expiry must follow valuation`);
-    else earliest = Math.min(earliest, expiry);
+    else if (!construction || !excludedIds.has(item.id)) earliest = Math.min(earliest, expiry);
     expiries.add(item.expiry);
   }
   if (expiries.size > 2) errors.push("at most two expiries are supported");
@@ -669,6 +693,7 @@ function entryCost(state: StrategyState): number {
 export type PnlDisplayMode = "pnl" | "position-value" | "risk-percent";
 
 export function pnlDisplayBasis(state: StrategyState, mode: PnlDisplayMode): { label: string; unit: "USD" | "%"; scale: number; offset: number; denominator: number | null } | null {
+  assertValid(state);
   if (mode === "pnl") return { label: "P/L", unit: "USD", scale: 1, offset: 0, denominator: null };
   if (mode === "position-value") return { label: "Position value", unit: "USD", scale: 1, offset: entryCost(state) + (state.feeAllowance ?? 0), denominator: null };
   if (state.legs.length && new Set(state.legs.map(leg => leg.expiry)).size !== 1) return null;

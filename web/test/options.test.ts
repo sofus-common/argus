@@ -24,6 +24,8 @@ import {
   validateMarketStrategy,
   type MarketSnapshot,
   validateStrategy,
+  validateConstruction,
+  projectAnalysisPosition,
   effectiveIv,
   pruneExpiryIvShifts,
   type OptionLeg,
@@ -32,6 +34,57 @@ import {
 } from "../src/options";
 
 const IDS = TEMPLATES.map((template) => template.id);
+describe('construction analysis selection', () => {
+  it('preserves canonical inventory and costs while projecting only included legs', () => {
+    const state = createStrategy('bull-call');
+    state.excludedLegIds = [state.legs[1].id];
+    state.feeAllowance = 7;
+    const before = structuredClone(state);
+    expect(validateConstruction(state)).toEqual([]);
+    expect(validateStrategy(state)).toContain('project included holdings before pricing');
+    expect(() => calculateStrategy(state)).toThrow('project included holdings');
+    expect(() => pnlDisplayBasis(state, 'position-value')).toThrow('project included holdings');
+    const projected = projectAnalysisPosition(state)!;
+    expect(projected.legs).toEqual([state.legs[0]]);
+    expect(projected).not.toHaveProperty('excludedLegIds');
+    expect(projected.feeAllowance).toBe(7);
+    expect(calculateStrategy(projected).scenarioPnl).toBe(calculateStrategy({ ...projected, feeAllowance: 0 }).scenarioPnl - 7);
+    expect(state).toEqual(before);
+  });
+  it('admits empty construction but never fabricates a priced empty position', () => {
+    const state = { ...createStrategy('bull-call'), legs: [], feeAllowance: 7 };
+    expect(validateConstruction(state)).toEqual([]);
+    expect(validateStrategy(state).length).toBeGreaterThan(0);
+    expect(projectAnalysisPosition(state)).toBeNull();
+    const full = createStrategy('bull-call');
+    full.excludedLegIds = full.legs.map(leg => leg.id);
+    expect(projectAnalysisPosition(full)).toBeNull();
+    expect(projectAnalysisPosition({ ...full, stock: { shares: 100, entryPrice: 95 } })?.legs).toEqual([]);
+  });
+  it('rejects malformed selections and still validates excluded inventory', () => {
+    const state = createStrategy('bull-call');
+    for (const excludedLegIds of [['missing'], [state.legs[0].id, state.legs[0].id], 'bad', null, Array(1)]) {
+      const invalid = { ...state, excludedLegIds } as StrategyState;
+      expect(validateConstruction(invalid).length).toBeGreaterThan(0);
+      expect(() => projectAnalysisPosition(invalid)).toThrow();
+    }
+    state.excludedLegIds = [state.legs[1].id];
+    state.legs[1].contracts = 0;
+    expect(validateConstruction(state)).toContain(`${state.legs[1].id}: contracts must be a positive integer`);
+  });
+  it('uses included expiry for the scenario limit and prunes only projected IV shifts', () => {
+    const state = createStrategy('call-calendar');
+    const early = state.legs.reduce((a, b) => a.expiry < b.expiry ? a : b);
+    const late = state.legs.find(leg => leg.expiry !== early.expiry)!;
+    state.excludedLegIds = [early.id];
+    state.scenarioDate = late.expiry;
+    state.expiryIvShifts = [{ expiry: early.expiry, ivShift: .01 }, { expiry: late.expiry, ivShift: .02 }];
+    expect(validateConstruction(state)).toEqual([]);
+    expect(projectAnalysisPosition(state)?.expiryIvShifts).toEqual([state.expiryIvShifts[1]]);
+    expect(state.expiryIvShifts).toHaveLength(2);
+    expect(validateConstruction({ ...state, excludedLegIds: [] })).toContain('scenario date cannot follow the earliest expiry');
+  });
+});
 describe('inverse template families', () => {
   const pairs = [['inverse-iron-butterfly', 'iron-butterfly'], ['inverse-iron-condor', 'iron-condor'], ['short-call-butterfly', 'call-butterfly'], ['short-put-butterfly', 'put-butterfly']] as const;
   it.each(pairs)('reverses %s without mutating its base', (inverse, base) => {

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added the reversible-exclusion calculation foundation: canonical inventory
+  validation, empty construction admission and an explicit included-leg projection.
+  Priced analysis rejects empty or unprojected excluded holdings. Costs, order and
+  saved inventory remain untouched; scenario limits use included expiries.
+  Regression checks cover malformed selections, all-excluded and stock-only
+  projection, allowance accounting and calendar re-inclusion. UI, persistence and
+  full-inventory ledger integration are still pending; no exclusion feature claim.
+
 - Prepared the first buildable web-source baseline for the product branch,
   excluding credentials, local state, screenshots and generated compiler caches.
   Corrected import documentation and disclosed optional browser-harness setup.
