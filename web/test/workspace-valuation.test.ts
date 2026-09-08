@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createMarketStrategy, searchCandidates, compareSearchCandidate, type MarketSnapshot } from '../src/options';
 import { calculateStrategy, createStrategy, evaluateScenario, firstExpiryRange, firstExpiryBreakevens, payoffSeries, scenarioSeries, scenarioCurve, scenarioHeatmap, scenarioFacts, scenarioTable, scenarioSpotAttribution, isChartRange, type ChartRange, TEMPLATES } from "../src/options";
 import { calculateWorkspaceValuation } from "../src/workspace-valuation";
 import { assertRemainingLotInventory, calculateLotScenarioComparison } from "../src/lot-scenarios";
@@ -7,6 +8,37 @@ import { createPosition } from "../src/position-lifecycle";
 import { projectPositionLots, upgradePositionLots, recordLotTransaction, recordLotOpeningPriceCorrection } from "../src/position-lots";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('reconstructs candidate comparisons in the cancellable worker and rejects mismatched selection replies', async () => {
+  class FakeWorker {
+    static latest: FakeWorker;
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onerror = null; onmessageerror = null;
+    sent!: { id: number };
+    terminate = vi.fn();
+    constructor() { FakeWorker.latest = this; }
+    postMessage(data: typeof this.sent) { this.sent = data; }
+  }
+  vi.stubGlobal('Worker', FakeWorker);
+  const at = new Date().toISOString(), expiry = new Date(Date.now() + 86400000 * 14).toISOString();
+  const snapshot: MarketSnapshot = { id: 'worker-candidate', underlying: 'SPY', source: 'Tastytrade', retrievedAt: at, spotAsOf: at, spot: 100, availableExpiries: [expiry.slice(0, 10)], contracts: [95, 100, 105].map(strike => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry, multiplier: 100, bid: 2, ask: 3, iv: .25, quoteAsOf: at })) };
+  const state = createMarketStrategy('long-call', snapshot), request = { targetSpot: 105, targetDate: expiry, maxLoss: 1000, feeAllowance: 5, basis: 'natural' as const, objective: 'target-pnl' as const };
+  const selection = { id: searchCandidates(state, snapshot, request).candidates[0].id, request }, view = { kind: 'candidate-comparison' as const, snapshot, selection };
+  for (const corruption of ['none', 'missing', 'id', 'abort']) {
+    const controller = new AbortController(), pending = requestWorkspaceValuation(state, controller.signal, view);
+    const worker = FakeWorker.latest, result = calculateWorkspaceValuation(state, view);
+    expect(result.candidateComparison).toEqual(compareSearchCandidate(state, snapshot, selection));
+    if (corruption === 'abort') { controller.abort(); await expect(pending).rejects.toMatchObject({ name: 'AbortError' }); }
+    else {
+      if (corruption === 'missing') delete result.candidateComparison;
+      if (corruption === 'id') result.candidateComparison!.candidate.id = 'not-selected';
+      worker.onmessage!({ data: { id: worker.sent.id, result } });
+      if (corruption === 'none') await expect(pending).resolves.toEqual(result);
+      else await expect(pending).rejects.toThrow('Invalid workspace valuation result');
+    }
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  }
+});
 
 it("admits stock-only worker views but rejects fabricated option horizons", async () => {
   class FakeWorker {

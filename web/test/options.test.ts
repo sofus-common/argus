@@ -24,6 +24,11 @@ import {
   translateStrikes,
   marketLeg,
   searchCandidates,
+  compareSearchCandidate,
+  COMPARISON_TOPICS,
+  parseComparisonIntent,
+  renderCandidateComparison,
+  type ComparisonIntent,
   firstExpirySpreadLossBound,
   validateMarketStrategy,
   type MarketSnapshot,
@@ -39,6 +44,124 @@ import {
 } from "../src/options";
 
 const IDS = TEMPLATES.map((template) => template.id);
+describe('inspected candidate comparison', () => {
+  const asOf = '2026-09-01T12:00:00.000Z', now = Date.parse(asOf);
+  const snapshot: MarketSnapshot = { id: 'comparison', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: asOf, spotAsOf: asOf, availableExpiries: ['2026-10-09', '2026-11-20'], contracts: ['2026-10-09', '2026-11-20'].flatMap((date, index) => [95, 105].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   ${date.slice(2).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: `${date}T20:00:00.000Z`, multiplier: 100 as const, bid: 1 + index, ask: 3 + index, iv: .2, quoteAsOf: asOf })))) };
+  const search = { targetSpot: 103, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 100000, feeAllowance: 5, basis: 'natural' as const, objective: 'target-pnl' as const };
+  it('parses only strict bounded comparison intent with independent copies', () => {
+    const intent: ComparisonIntent = { topics: ['target-pnl', 'delta'], scope: 'supplied-comparison', requestedScenario: { spot: 103, date: search.targetDate, ivShift: 0 } };
+    const parsed = parseComparisonIntent(intent);
+    expect(parsed).toEqual(intent); expect(parsed).not.toBe(intent); expect(parsed?.topics).not.toBe(intent.topics);
+    for (const invalid of [null, [], {}, { ...intent, text: 'invented answer' }, { ...intent, scope: 'guess' }, { ...intent, topics: [] }, { ...intent, topics: ['delta', 'delta'] }, { ...intent, topics: ['suitability'] }, { ...intent, topics: ['delta', 'gamma', 'theta', 'vega', 'rho', 'structure'] }, { ...intent, requestedScenario: undefined }, { ...intent, requestedScenario: { spot: null, date: null } }, ...[0, -1, 1000001, NaN, Infinity, '103'].map(spot => ({ ...intent, requestedScenario: { ...intent.requestedScenario, spot } })), ...['2026-10-09', '2026-10-09T20:00:00Z', '2026-02-30T20:00:00.000Z'].map(date => ({ ...intent, requestedScenario: { ...intent.requestedScenario, date } })), ...[NaN, Infinity, 10.01, '0'].map(ivShift => ({ ...intent, requestedScenario: { ...intent.requestedScenario, ivShift } }))]) expect(parseComparisonIntent(invalid)).toBeNull();
+    expect(parseComparisonIntent({ ...intent, requestedScenario: null })).not.toBeNull();
+  });
+  it('renders only supplied target metrics, input costs and explicit read-only status', () => {
+    const held = createMarketStrategy('long-put', snapshot); held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 8;
+    held.feeAllowance = 11; held.ivShift = .03; held.expiryIvShifts = [{ expiry: held.legs[0].expiry, ivShift: .04 }];
+    const selected = searchCandidates(held, snapshot, search).candidates[0];
+    const compared = compareSearchCandidate(held, snapshot, { id: selected.id, request: search }, now), original = structuredClone(compared);
+    const intent: ComparisonIntent = { topics: ['target-pnl', 'cost-basis', 'delta', 'structure', 'apply-status'], scope: 'supplied-comparison', requestedScenario: null };
+    const reply = renderCandidateComparison(compared, intent);
+    expect(reply.text).toContain(compared.baseline.metrics.scenarioPnl.toFixed(2)); expect(reply.text).toContain(compared.metrics.scenarioPnl.toFixed(2));
+    expect(reply.text).toContain(`candidate minus held USD ${(compared.metrics.scenarioPnl - compared.baseline.metrics.scenarioPnl).toFixed(2)}`);
+    expect(reply.text).toContain(compared.baseline.metrics.delta.toFixed(4)); expect(reply.text).toContain(compared.metrics.delta.toFixed(4));
+    expect(reply.text).toContain('supplied fixed'); expect(reply.text).toContain('quoted'); expect(reply.text).toContain('outside this discussion');
+    expect(reply.text).toContain('Positive = received; negative = paid'); expect(reply.assumptions.join(' ')).toContain('not margin or maximum risk');
+    for (const leg of [...compared.baseline.state.legs, ...compared.state.legs]) expect(reply.text).toContain(`${leg.side} ${leg.contracts} ${leg.type} ${leg.strike} exp ${leg.expiry.slice(0, 10)}`);
+    expect(reply.assumptions.join(' ')).toContain('expiry IV shifts'); expect(reply.assumptions.join(' ')).not.toContain('historical');
+    expect(reply.text.length).toBeLessThanOrEqual(1500); expect(compared).toEqual(original);
+    for (const requestedScenario of [{ spot: 104, date: null, ivShift: null }, { spot: null, date: snapshot.retrievedAt, ivShift: null }, { spot: null, date: null, ivShift: .04 }]) {
+      const unavailable = renderCandidateComparison(compared, { ...intent, requestedScenario });
+      expect(unavailable.text).toContain('new calculation'); expect(unavailable.text).not.toContain(compared.baseline.metrics.scenarioPnl.toFixed(2));
+    }
+    expect(renderCandidateComparison(compared, { ...intent, scope: 'unclear' }).text).toContain('Which part');
+    const action = renderCandidateComparison(compared, { ...intent, scope: 'action' });
+    expect(action.objections.join(' ')).toContain('cannot change holdings');
+    expect(action.objections.join(' ')).not.toContain('Use the');
+    expect(() => renderCandidateComparison(compared, { ...intent, topics: ['invent'] } as unknown as ComparisonIntent)).toThrow();
+  });
+  it('renders index units, mixed conservative bounds and unavailable probability without scope inflation', () => {
+    const index: MarketSnapshot = { ...snapshot, underlying: 'XSP', underlyingKind: 'cash-index', contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, contracts: snapshot.contracts.map(c => ({ ...c, contractId: c.contractId.replace('SPY', 'XSP') })) };
+    const held = createMarketStrategy('put-calendar', index), domain = { families: ['put-calendar' as const], maxEntryOutlay: 10000 };
+    const selected = searchCandidates(held, index, search, domain).candidates[0], compared = compareSearchCandidate(held, index, { id: selected.id, request: search, domain }, now);
+    const reply = renderCandidateComparison(compared, { topics: ['target-pnl', 'delta', 'gamma', 'loss-bound', 'probability'], scope: 'supplied-comparison', requestedScenario: null });
+    expect(reply.text).toContain('103 index points'); expect(reply.text).not.toContain('$103'); expect(reply.text).toContain('USD per index point');
+    expect(reply.text).toContain(compared.candidate.lossBound!.amount.toFixed(2)); expect(reply.text).toContain('not proof of an attained maximum');
+    expect(reply.text).toContain('Mixed-expiry probability is unavailable'); expect(reply.text).not.toContain('larger losses');
+    expect(reply.text.length).toBeLessThanOrEqual(1500);
+    const sensitivities = renderCandidateComparison(compared, { topics: ['theta', 'vega', 'rho'], scope: 'supplied-comparison', requestedScenario: null });
+    expect(sensitivities.text).toContain('USD per day'); expect(sensitivities.text).toContain('volatility percentage point'); expect(sensitivities.text).toContain('rate percentage point');
+    const stock = createMarketStrategy('covered-call', snapshot); stock.excludedLegIds = stock.legs.map(leg => leg.id);
+    const stockCandidate = searchCandidates(projectAnalysisPosition(stock)!, snapshot, search).candidates[0];
+    const stockReply = renderCandidateComparison(compareSearchCandidate(stock, snapshot, { id: stockCandidate.id, request: search }, now), { topics: ['structure', 'loss-bound', 'probability'], scope: 'supplied-comparison', requestedScenario: null });
+    expect(stockReply.text).toContain('Held: 100 shares'); expect(stockReply.text).toContain('no option expiry');
+    expect(stockReply.text).toContain(`${(100 * stockCandidate.probability.probability!).toFixed(2)}%`);
+    expect(stockReply.text).toContain(snapshot.retrievedAt); expect(stockReply.text).toContain(stockCandidate.probability.expiry!);
+    expect(stockReply.text).toContain('not a held-target probability comparison');
+  });
+  it('keeps all five-topic answers within display limits without dropping wide position legs', () => {
+    const held = createMarketStrategy('long-put', snapshot);
+    held.legs = snapshot.contracts.map((quote, index) => marketLeg(quote, index % 2 ? 'short' : 'long', index + 1, quote.contractId, 'mid'));
+    const domain = { families: ['put-calendar' as const, 'put-diagonal' as const], maxEntryOutlay: 10000 };
+    const candidate = searchCandidates(held, snapshot, search, domain).candidates[0];
+    const compared = compareSearchCandidate(held, snapshot, { id: candidate.id, request: search, domain }, now);
+    for (let a = 0; a < COMPARISON_TOPICS.length; a++) for (let b = a + 1; b < COMPARISON_TOPICS.length; b++) for (let c = b + 1; c < COMPARISON_TOPICS.length; c++) for (let d = c + 1; d < COMPARISON_TOPICS.length; d++) for (let e = d + 1; e < COMPARISON_TOPICS.length; e++) {
+      const topics = [a, b, c, d, e].map(index => COMPARISON_TOPICS[index]);
+      const rendered = renderCandidateComparison(compared, { topics, scope: 'supplied-comparison', requestedScenario: null });
+      expect(rendered.text.length, topics.join(', ')).toBeLessThanOrEqual(1500);
+      expect(rendered.assumptions.every(line => line.length <= 300)).toBe(true);
+      if (topics.includes('structure')) for (const leg of held.legs) expect(rendered.text).toContain(`${leg.side} ${leg.contracts} ${leg.type} ${leg.strike} exp ${leg.expiry.slice(0, 10)}`);
+    }
+  });
+  it('retains held cashflows and volatility while reproducing single and mixed candidates', () => {
+    const held = createMarketStrategy('long-put', snapshot);
+    held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 8; held.feeAllowance = 11; held.ivShift = .03;
+    held.expiryIvShifts = [{ expiry: held.legs[0].expiry, ivShift: .04 }];
+    const original = structuredClone(held);
+    for (const families of [['options'], ['put-calendar', 'put-diagonal']] as const) {
+      const domain = { families: [...families], maxEntryOutlay: 10000 };
+      const found = searchCandidates(held, snapshot, search, domain);
+      expect(found.candidates.length).toBeGreaterThan(0);
+      for (const candidate of found.candidates) {
+        const comparison = compareSearchCandidate(held, snapshot, { id: candidate.id, request: search, domain }, now);
+        expect(comparison.state).toEqual(candidate.state); expect(comparison.metrics).toEqual(candidate.metrics);
+        expect(comparison.baseline.state).toEqual({ ...held, scenarioSpot: search.targetSpot, scenarioDate: search.targetDate });
+        expect(comparison.baseline.metrics).toEqual(calculateStrategy(comparison.baseline.state));
+        expect(comparison.candidate).not.toHaveProperty('state');
+        expect(comparison.lossClassification).toBe(candidate.metrics.mode === 'first-expiry' ? 'not-exact' : 'bounded');
+        expect(comparison.candidate.lossBound).toEqual(candidate.lossBound);
+        expect(comparison.candidate.probability).toEqual(candidate.probability);
+      }
+    }
+    expect(held).toEqual(original);
+  });
+  it('supports stock-only included baselines and excludes rather than closes hidden holdings', () => {
+    const held = createMarketStrategy('covered-call', snapshot);
+    held.stock = { shares: 200, entryPrice: 70 }; held.feeAllowance = 9; held.excludedLegIds = held.legs.map(leg => leg.id);
+    const included = projectAnalysisPosition(held)!;
+    expect(included.legs).toEqual([]);
+    const candidate = searchCandidates(included, snapshot, search).candidates[0];
+    const comparison = compareSearchCandidate(included, snapshot, { id: candidate.id, request: search }, now);
+    expect(evaluateScenario(comparison.baseline.state).pnl).toBe(6591);
+    expect(compareSearchCandidate(held, snapshot, { id: candidate.id, request: search }, now)).toEqual(comparison);
+    expect(comparison.baseline.state.stock).toEqual(held.stock);
+    expect(comparison.baseline.state.legs).toEqual([]);
+    expect(held.excludedLegIds).toHaveLength(1);
+  });
+  it('rejects unknown, tampered, stale, unsupported-horizon and unbounded descriptors', () => {
+    const held = createMarketStrategy('long-put', snapshot), candidate = searchCandidates(held, snapshot, search).candidates[0];
+    const selection = { id: candidate.id, request: search };
+    for (const invalid of [null, [], {}, { ...selection, id: '' }, { ...selection, id: 'x'.repeat(1025) }, { ...selection, id: 'unknown' }, { ...selection, state: candidate.state }, { ...selection, request: { ...search, maximum: 3 } }, { ...selection, domain: { families: ['call-calendar'], maxEntryOutlay: 10000 } }]) {
+      expect(() => compareSearchCandidate(held, snapshot, invalid as typeof selection, now)).toThrow();
+    }
+    for (const invalid of [{ ...snapshot, historical: true as const }, { ...snapshot, spotAsOf: new Date(now + 1).toISOString() }, { ...snapshot, indexSourceTime: new Date(now - 300001).toISOString() }, { ...snapshot, spotSourceTimes: { bid: asOf, ask: new Date(now + 1).toISOString() } }]) expect(() => compareSearchCandidate(held, invalid, selection, now)).toThrow();
+    expect(() => compareSearchCandidate(held, snapshot, selection, now + 300001)).toThrow();
+    const lateRequest = { ...search, targetDate: '2026-11-20T20:00:00.000Z' };
+    const late = searchCandidates(held, snapshot, lateRequest).candidates[0];
+    expect(() => compareSearchCandidate(held, snapshot, { id: late.id, request: lateRequest }, now)).toThrow('Unsupported candidate comparison');
+    expect(() => compareSearchCandidate({ ...held, underlyingKind: 'cash-index' }, snapshot, selection, now)).toThrow();
+  });
+});
 describe('cash-index durable state', () => {
   const snapshot: MarketSnapshot = { id: 'index', underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', indexSourceTime: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09'], contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, contracts: [95, 100, 105].map(strike => ({ contractId: `XSP   261009C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100, bid: 1, ask: 3, iv: .2, quoteAsOf: '2026-09-01T12:00:00.000Z' })) };
   it('preserves index kind through construction and search and enforces its model without a snapshot', () => {

@@ -127,9 +127,9 @@ export function requestWorkspaceValuation(state: StrategyState, signal: AbortSig
   const max = range?.max ?? Math.max(state.spot * 1.24, state.scenarioSpot, ...state.legs.map(leg => leg.strike));
   const tableSpots = view === "table" ? scenarioSpots(state, range) : [];
   const start = Date.parse(state.valuationTimestamp), end = Math.min(...state.legs.map(leg => Date.parse(leg.expiry)));
-  const curveView = typeof view === "object" ? { min: view.min, max: view.max, metric: view.metric, comparisonVersion: view.comparison?.version ?? null, comparisonModel: view.comparison ? view.comparison.valuationModel ?? "european-bsm-v1" : null } : null;
+  const curveView = typeof view === "object" && view.kind === 'curve' ? { min: view.min, max: view.max, metric: view.metric, comparisonVersion: view.comparison?.version ?? null, comparisonModel: view.comparison ? view.comparison.valuationModel ?? "european-bsm-v1" : null } : null;
   const anchors = [state.scenarioSpot, ...state.legs.map(leg => leg.strike)];
-  const comparisonAnchors = typeof view === "object" && view.comparison ? [view.comparison.scenarioSpot, ...view.comparison.legs.map(leg => leg.strike)] : [];
+  const comparisonAnchors = typeof view === "object" && view.kind === 'curve' && view.comparison ? [view.comparison.scenarioSpot, ...view.comparison.legs.map(leg => leg.strike)] : [];
   const expectedSpots = (anchors: number[]) => curveView ? [...new Set([
     ...Array.from({ length: 161 }, (_, index) => { const spot = curveView.min + (curveView.max - curveView.min) * index / 160; return Math.abs(spot) < 1e-9 ? 0 : Number(spot.toFixed(8)); }),
     ...anchors.filter(spot => spot > 0 && spot >= curveView.min && spot <= curveView.max),
@@ -145,6 +145,14 @@ export function requestWorkspaceValuation(state: StrategyState, signal: AbortSig
       cleanup();
       if (event.data?.id === id && event.data.error) { reject(new Error("Workspace valuation unavailable for these inputs.")); return; }
       const result = event.data?.result, metrics = result?.metrics;
+      const comparisonView = typeof view === 'object' && view.kind === 'candidate-comparison' ? view : null;
+      const comparison = result?.candidateComparison;
+      const validComparison = comparisonView ? comparison && comparison.candidate?.id === comparisonView.selection.id
+        && JSON.stringify(comparison.candidate.request) === JSON.stringify(comparisonView.selection.request)
+        && JSON.stringify(comparison.candidate.domain) === JSON.stringify(comparisonView.selection.domain)
+        && comparison.state?.pricing?.snapshotId === comparisonView.snapshot.id
+        && (comparison.state?.valuationModel ?? 'european-bsm-v1') === sourceModel
+        && comparison.baseline?.state?.version === sourceVersion : comparison === undefined;
       const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value);
       const validSeries = (points: unknown, spots: number[]) => Array.isArray(points) && points.length === spots.length
         && points.every((point, index) => point && point.spot === spots[index] && finite(point.value));
@@ -169,7 +177,7 @@ export function requestWorkspaceValuation(state: StrategyState, signal: AbortSig
           && point.spot === (range && index % 44 === 43 ? max : min + (max - min) * (index % 44) / 43)
           && point.date === new Date(start + (end - start) * Math.floor(index / 44) / 17).toISOString());
       if (event.data?.id !== id || result?.baseVersion !== sourceVersion || result?.model !== sourceModel
-        || !validTable || !validHeatmap || !validCurve
+        || !validTable || !validHeatmap || !validCurve || !validComparison
         || !metrics || !["Debit", "Credit"].includes(metrics.entryLabel) || metrics.mode !== expectedMode
         || !["entryAmount", "delta", "gamma", "theta", "vega", "rho", "modeledLow", "modeledHigh", "scenarioPnl"].every(key => finite(metrics[key]))
         || !["maxProfit", "maxLoss"].every(key => metrics[key] === null || finite(metrics[key]))

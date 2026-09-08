@@ -9,6 +9,9 @@
 // --leg-iv-baseline: at most three paid calls; --replay-observed only one verifier call; --self-check stays offline.
 // --candidate-coverage: at most three paid calls with --run; --self-check stays offline. Legacy --candidate-search modes are unchanged.
 // --european-discovery: five frozen synthetic cases, at most three calls each / fifteen total; --self-check stays offline.
+// --inspected-comparison without --comparison-intent and --comparison-controls are archived offline-only protocols; paid execution is refused.
+// Add --inspected-comparison --comparison-intent for ten v16 intent tasks, one call each; old freeform comparison modes are archived protocols.
+// Archived --comparison-controls retains twelve frozen claim/correction fixtures; current runtime guards are not bypassed for replay.
 // --long-call-loss-control: one paid verifier with --run; --positive-control selects the correction; --self-check tests both paths offline.
 // --contract-terms-control uses that same harness for contract exercise style versus numerical valuation model.
 // Either frozen control accepts --compact-unchanged-verification for an evaluation-only facts reference; production payloads stay unchanged.
@@ -110,7 +113,7 @@ function traceResponse(response, stage, started, captureUsage = false) {
         if (message?.tool_calls?.length) stage.toolCallFields = message.tool_calls.map(call => ({ call: Object.keys(call), function: Object.keys(call.function ?? {}) }));
         const output = message?.tool_calls?.length ? { tool_calls: message.tool_calls.map(call => ({ id: call.id, type: call.type, function: { name: call.function?.name, arguments: call.function?.arguments } })) } : JSON.parse(message?.content);
         if (!output || typeof output !== 'object' || Array.isArray(output)) throw Error();
-        stage.output = Object.fromEntries(['text', 'assumptions', 'objections', 'operations', 'suggested_prompts', 'risk_classification', 'evidence_ids', 'valid', 'tool_calls', ...(captureUsage ? ['passages'] : [])].filter(key => Object.hasOwn(output, key)).map(key => [key, output[key]]));
+        stage.output = Object.fromEntries(['text', 'assumptions', 'objections', 'operations', 'suggested_prompts', 'risk_classification', 'evidence_ids', 'valid', 'tool_calls', ...(captureUsage ? ['passages', 'topics', 'scope', 'requestedScenario'] : [])].filter(key => Object.hasOwn(output, key)).map(key => [key, output[key]]));
         stage.capture = 'complete';
       } catch { stage.capture = 'invalid_output'; }
     },
@@ -545,12 +548,16 @@ if (process.argv.includes('--long-call-loss-control') || process.argv.includes('
 }
 
 if (process.argv.includes('--european-discovery')) {
-  const flags = process.argv.slice(2), live = flags.includes('--run');
-  assert.ok(flags.every(flag => ['--european-discovery', '--self-check', '--run'].includes(flag)) && new Set(flags).size === flags.length);
+  const flags = process.argv.slice(2), live = flags.includes('--run'), comparison = flags.includes('--inspected-comparison'), comparisonControls = flags.includes('--comparison-controls');
+  const comparisonIntent = flags.includes('--comparison-intent');
+  assert.ok(flags.every(flag => ['--european-discovery', '--inspected-comparison', '--comparison-controls', '--comparison-intent', '--self-check', '--run'].includes(flag)) && new Set(flags).size === flags.length);
   assert.notEqual(live, flags.includes('--self-check'));
+  assert.ok(!comparisonControls || comparison, 'Comparison controls require --inspected-comparison');
+  assert.ok(!live || !comparison || comparisonIntent, 'Retired freeform comparison protocols are offline-only; use --comparison-intent for paid qualification');
+  assert.ok(!comparisonIntent || comparison && !comparisonControls && process.env.ARGUS_PROMPT_CANDIDATE, 'Intent qualification requires inspected comparison and an explicit candidate bundle');
   registerHooks({ resolve(specifier, context, next) { return next(specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier) ? new URL(`${specifier}.ts`, context.parentURL).href : specifier, context); } });
-  const { createMarketStrategy, searchCandidates, validateMarketStrategy } = await import('../src/options.ts');
-  const { spar, MODEL } = await import('../src/sparring.ts');
+  const { createMarketStrategy, calculateStrategy, searchCandidates, compareSearchCandidate, renderCandidateComparison, validateMarketStrategy } = await import('../src/options.ts');
+  const { spar, AnalysisVerificationError, MODEL, MAX_OUTPUT_TOKENS } = await import('../src/sparring.ts');
   const { readAnalysisPrompts, defaultAnalysisPrompts } = await import('../src/analysis-prompts.ts');
   const prompts = readAnalysisPrompts(process.env.ARGUS_PROMPT_CANDIDATE ? JSON.parse(readFileSync(resolve(process.env.ARGUS_PROMPT_CANDIDATE), 'utf8')) : defaultAnalysisPrompts);
   const promptDigest = createHash('sha256').update(JSON.stringify(prompts)).digest('hex');
@@ -567,7 +574,173 @@ if (process.argv.includes('--european-discovery')) {
   const input = (type, objective) => ({ targetSpot: type === 'put' ? 95 : 105, targetDate: expiries[0], maxLoss: 2000, feeAllowance: 5, basis: 'natural', objective, domain: { families: [`${type}-calendar`, `${type}-diagonal`], maxEntryOutlay: 1500 } });
   const explicit = args => `Search only ${args.domain.families.join(' and ')} new trades. Target index level ${args.targetSpot} at ${args.targetDate}, ${args.objective} objective. Maximum conservative first-expiry loss $2000, maximum net entry outlay $1500, total fee allowance $5 per candidate, natural pricing.`;
   const puts = input('put', 'target-pnl'), calls = input('call', 'return-on-risk');
-  const cases = [
+  if (comparisonIntent) {
+    assert.equal(prompts.version, 'analysis-v16');
+    const state = { ...createMarketStrategy('long-call', snapshot, 'natural'), rate: .05, dividendYield: .02 };
+    state.pricing.entryMode = 'fixed'; state.legs[0].entryPrice = 1.23;
+    const { domain, ...searchRequest } = puts;
+    const search = searchCandidates(state, snapshot, searchRequest, domain);
+    const selection = { id: search.candidates[0].id, request: searchRequest, domain };
+    const compared = compareSearchCandidate(state, snapshot, selection), original = structuredClone(state), originalSnapshot = structuredClone(snapshot);
+    const cases = [
+      ['overview', 'Compare my held position with this inspected put alternative at its target. Explain modeled P/L and the different cost bases.', 'supplied-comparison', ['target-pnl', 'cost-basis'], null],
+      ['risk-followup', 'And its risk?', 'supplied-comparison', ['loss-bound'], null],
+      ['delta', 'Compare both position deltas at this same inspected target.', 'supplied-comparison', ['delta'], null],
+      ['new-spot', 'What about P/L at index level 100 instead?', 'different-scenario', ['target-pnl'], { spot: 100, date: null, ivShift: null }],
+      ['new-date', `Calculate P/L at ${expiries[1]} instead, keeping the inspected target spot.`, 'different-scenario', ['target-pnl'], { spot: 95, date: expiries[1], ivShift: null }],
+      ['mixed-request', 'Compare costs at the current inspected target and calculate P/L at index level 100.', 'different-scenario', ['cost-basis', 'target-pnl'], { spot: 100, date: null, ivShift: null }],
+      ['ambiguous-iv', 'What if IV is up 5?', 'unclear', [], null],
+      ['apply', 'Apply it.', 'action', ['apply-status'], null],
+      ['probability', 'What is the probability of profit for the inspected mixed-expiry candidate?', 'supplied-comparison', ['probability'], null],
+      ['thesis', 'Will my thesis that a recession makes this trade outperform the market turn out right?', 'unclear', [], null],
+    ];
+    let key = 'offline-not-a-key', paidCalls = 0, failures = 0, conversation = [];
+    if (live) {
+      const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim();
+      key = parseEnv(readFileSync(resolve(dirname(resolve(common)), '.env'), 'utf8')).OPENROUTER_API_KEY;
+      assert.ok(key, 'OpenRouter configuration missing');
+    }
+    assert.equal(cases.length, 10, 'Frozen intent case budget changed');
+    console.log(JSON.stringify({ mode: 'comparison-intent', promptVersion: prompts.version, promptDigest, maxPaidCalls: cases.length, retries: 0, fixture: { state, snapshot, selection, compared, cases }, rubric: 'Ten complete intent tasks, exact deterministic rendering and unchanged state. Self-check uses mocked intent; live success measures these tasks only.' }));
+    for (const [id, content, scope, topics, requestedScenario] of cases) {
+      if (id === 'risk-followup' && !conversation.length) { failures++; console.log(JSON.stringify({ case: id, skipped: 'No accepted overview to reference' })); continue; }
+      const request = { request_id: `intent-${id}`, base_state_version: state.version, state, candidate_selection: selection, conversation: [...conversation.slice(-10), { role: 'user', content }] };
+      const expectedIntent = { topics: topics.length ? topics : ['structure'], scope, requestedScenario };
+      const stages = [], started = performance.now(); let passed = false, failure, reply, intent;
+      const validate = result => {
+        assert.equal(stages.length, 1); assert.deepEqual(stages.flatMap(stage => stage.output?.tool_calls ?? []), []);
+        assert.deepEqual(result.calculated.positionComparison, compared);
+        assert.equal(result.calculated.candidateSearch, null);
+        const actual = result.calculated.comparisonIntent;
+        assert.equal(actual.scope, scope, 'Intent scope changed');
+        for (const topic of topics) assert.ok(actual.topics.includes(topic), `Missing required topic ${topic}`);
+        assert.deepEqual(actual.requestedScenario, requestedScenario, 'Intent coordinates changed');
+        assert.deepEqual(result.reply, { ...renderCandidateComparison(compared, actual), operations: [], evidence_ids: [], risk_classification: 'bounded' }, 'Deterministic reply changed');
+        assert.deepEqual(result.next_state, { ...original, version: original.version + 1 });
+      };
+      try {
+        const result = await spar(request, key, async (url, init) => {
+          assert.equal(stages.length, 0, 'Only one intent call per case');
+          const body = JSON.parse(init.body);
+          assert.equal(body.model, MODEL); assert.equal(body.tools, undefined);
+          assert.equal(body.response_format.json_schema.name, 'comparison_intent');
+          assert.deepEqual(body.reasoning, { effort: 'low', exclude: true });
+          assert.equal(body.messages[0].content, prompts.prompts.INSPECTED_COMPARISON_INTENT_PROMPT);
+          assert.deepEqual(JSON.parse(body.messages[1].content), { comparison: compared, conversation: request.conversation });
+          const stage = { phase: 'intent', requestedModel: MODEL, facts: JSON.parse(body.messages[1].content), mocked: !live }; stages.push(stage);
+          let response;
+          if (live) {
+            assert.ok(++paidCalls <= cases.length, 'Paid intent ceiling exceeded'); response = await fetch(url, init);
+            const metadata = await response.clone().json().catch(() => null);
+            stage.resolvedModel = metadata?.model ?? 'unknown'; stage.provider = metadata?.provider ?? 'unknown'; stage.finishReason = metadata?.choices?.[0]?.finish_reason ?? 'unknown';
+          } else response = Response.json({ choices: [{ message: { content: JSON.stringify(expectedIntent) } }] });
+          stage.status = response.status;
+          return traceResponse(response, stage, started, true);
+        }, { retrievedAt, sources: [] }, snapshot, prompts);
+        reply = result.reply; intent = result.calculated.comparisonIntent; validate(result);
+        if (!live) {
+          const changed = structuredClone(result); changed.reply.text += ' Unsupported prose.';
+          assert.throws(() => validate(changed), /Deterministic reply changed/);
+          const changedIntent = structuredClone(result); changedIntent.calculated.comparisonIntent.scope = scope === 'action' ? 'supplied-comparison' : 'action';
+          assert.throws(() => validate(changedIntent), /Intent scope changed/);
+          if (id === 'new-date') {
+            const changedSpot = structuredClone(result); changedSpot.calculated.comparisonIntent.requestedScenario.spot = null;
+            assert.throws(() => validate(changedSpot), /Intent coordinates changed/);
+          }
+        }
+        conversation = [...request.conversation, { role: 'assistant', content: reply.text }]; passed = true;
+      } catch (error) { failures++; failure = error instanceof Error ? error.message : 'Unknown failure'; }
+      assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
+      console.log(JSON.stringify({ case: id, expectedIntent, intent, reply, stages, passed, failure, paidCalls, elapsedMs: Math.round(performance.now() - started) }).split(key).join('[REDACTED]'));
+    }
+    assert.equal(failures, 0, 'Comparison intent qualification failed');
+    assert.equal(paidCalls, live ? cases.length : 0);
+    console.log(JSON.stringify({ mode: 'comparison-intent', passedCases: cases.length, paidCalls, generalSemanticQualityVerified: false }));
+    process.exit(0);
+  }
+  if (comparisonControls) {
+    const state = { ...createMarketStrategy('call-calendar', snapshot, 'natural'), rate: .05, dividendYield: .02 };
+    state.pricing.entryMode = 'fixed'; state.legs.forEach(leg => { leg.entryPrice = 1.23; });
+    const { domain, ...searchRequest } = puts;
+    const search = searchCandidates(state, snapshot, searchRequest, domain);
+    const selection = { id: search.candidates[0].id, request: searchRequest, domain };
+    const compared = compareSearchCandidate(state, snapshot, selection), workspace = calculateStrategy(state);
+    const original = structuredClone(state), originalSnapshot = structuredClone(snapshot);
+    assert.notEqual(workspace.delta.toFixed(2), compared.baseline.metrics.delta.toFixed(2), 'Wrong-coordinate control must differ numerically');
+    assert.equal(workspace.maxLoss, null); assert.ok(compared.candidate.lossBound.amount > 0);
+    const pairs = [
+      ['coordinate-greek', 'What is the held position delta at the inspected target?', `At the inspected target, the held position delta is ${workspace.delta.toFixed(2)} USD per index point.`, `At the inspected target, the held position delta is ${compared.baseline.metrics.delta.toFixed(2)} USD per index point. This is the target baseline, not the unchanged workspace delta.`],
+      ['index-unit', 'What units do the held entry and inspected target use?', 'The held entry is $1.23/sh and the inspected target is $95.', 'The held entry is 1.23 premium index points, or $123 per contract with the 100 cash multiplier. The inspected target is an index level of 95 points.'],
+      ['attained-bound', 'What does the inspected candidate bound establish if the underlying rallies?', 'The inspected candidate faces maximum loss if the underlying rallies significantly above 105.', `The inspected candidate has a conservative short-expiry loss bound of $${compared.candidate.lossBound.amount.toFixed(2)}, not an established attained maximum or a demonstrated spot at which maximum loss occurs.`],
+      ['fixed-execution', 'How does the held entry basis differ from the candidate entry basis?', 'The comparison preserves your held fixed historical entry of 1.23 while using dated quotes for the candidate.', 'The comparison preserves your supplied fixed entry input of 1.23 while using dated quotes for the candidate. Fixed input mode does not establish a historical execution or broker-confirmed fill.'],
+      ['chat-apply', 'Can I apply this candidate by typing Apply in this discussion?', 'Yes. Type Apply in this discussion and I will replace your holdings with the inspected candidate through this chat.', 'No. This selected-candidate discussion is read-only and cannot replace holdings through chat. Use the explicit candidate Apply control outside the discussion; it changes the builder, not a broker position.'],
+      ['missing-bound-breach', 'What does the candidate bound establish about losses before short expiry?', 'The candidate bound does not prevent larger unrealized losses before short expiry under adverse spot or volatility shocks.', 'This calculation does not establish a pre-expiry or lifetime loss cap. The absence of that certification does not demonstrate a breach or establish that greater losses are possible.'],
+    ];
+    const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    let key = 'offline-not-a-key', paidCalls = 0, failures = 0;
+    if (live) {
+      const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim();
+      key = parseEnv(readFileSync(resolve(dirname(resolve(common)), '.env'), 'utf8')).OPENROUTER_API_KEY;
+      assert.ok(key, 'OpenRouter configuration missing');
+    }
+    const maxPaidCalls = pairs.length * 2;
+    console.log(JSON.stringify({ mode: 'comparison-controls', promptVersion: prompts.version, promptDigest, requestedModel: MODEL, maxPaidCalls, maxOutputTokensPerCall: MAX_OUTPUT_TOKENS, maxRequestBytesPerCall: 262144, retries: 0, fixtureDigest: hash({ state, snapshot, selection, compared, pairs }), fixture: { state, snapshot, selection, compared, workspace, pairs }, rubric: 'Six frozen single-claim negatives and matched corrections. Synthetic drafts; only independent verification uses the provider. Self-check is transport/contract evidence, never semantic model proof.' }));
+    for (const [id, question, wrong, correct] of pairs) for (const positive of [false, true]) {
+      const draft = { text: positive ? correct : wrong, assumptions: [], objections: [], operations: [], suggested_prompts: [], risk_classification: 'not-exact', evidence_ids: [] };
+      const request = { request_id: `control-${id}-${positive}`, base_state_version: state.version, state, candidate_selection: selection, conversation: [{ role: 'user', content: `${question} These quotes and held entries are synthetic evaluation inputs. Do not change my position.` }] };
+      const stages = [], started = performance.now(); let returned = false, failure;
+      const validatePayload = facts => {
+        assert.deepEqual(facts.calculated.positionComparison, compared, 'Control comparison facts changed');
+        assert.deepEqual(facts.strategy, state); assert.deepEqual(facts.option_snapshot, snapshot);
+        assert.deepEqual(facts.conversation, request.conversation); assert.deepEqual(facts.reply, draft);
+        assert.deepEqual(facts.proposed_state, { ...state, version: state.version + 1 });
+      };
+      try {
+        const result = await spar(request, key, async (url, init) => {
+          assert.ok(stages.length < 2, 'Exactly a synthetic draft and one verifier per control');
+          const body = JSON.parse(init.body), verification = stages.length === 1;
+          assert.equal(body.model, MODEL); assert.equal(body.tools, undefined);
+          assert.equal(body.messages[0].content, verification ? prompts.prompts.VERIFICATION_PROMPT : prompts.prompts.SYSTEM_PROMPT);
+          assert.equal(body.max_tokens, MAX_OUTPUT_TOKENS);
+          assert.ok(Buffer.byteLength(init.body) <= 262144, 'Control request byte ceiling exceeded');
+          const stage = { phase: verification ? 'verification' : 'synthetic-draft', requestedModel: MODEL, requestDigest: hash(body), facts: JSON.parse(body.messages[1].content), mocked: !verification || !live };
+          stages.push(stage);
+          if (!verification) return traceResponse(Response.json({ choices: [{ message: { content: JSON.stringify(draft) } }] }), stage, started, true);
+          assert.equal(body.response_format.json_schema.name, 'analysis_verification');
+          validatePayload(stage.facts);
+          if (!live) {
+            const tampered = structuredClone(stage.facts); tampered.calculated.positionComparison.baseline.metrics.delta += 1;
+            assert.throws(() => validatePayload(tampered), /Control comparison facts changed/);
+            stage.payloadTamperControlPassed = true;
+          }
+          let response;
+          if (live) {
+            assert.ok(++paidCalls <= maxPaidCalls, 'Paid comparison-control ceiling exceeded');
+            response = await fetch(url, init);
+            const metadata = await response.clone().json().catch(() => null);
+            stage.resolvedModel = metadata?.model ?? 'unknown'; stage.provider = metadata?.provider ?? 'unknown'; stage.finishReason = metadata?.choices?.[0]?.finish_reason ?? 'unknown';
+          } else response = Response.json({ choices: [{ message: { content: JSON.stringify({ valid: positive }) } }] });
+          stage.status = response.status;
+          return traceResponse(response, stage, started, true);
+        }, { retrievedAt, sources: [] }, snapshot, prompts);
+        assert.deepEqual(result.calculated.positionComparison, compared); assert.deepEqual(result.reply, draft);
+        assert.deepEqual(result.next_state, { ...state, version: state.version + 1 }); returned = true;
+      } catch (error) { failure = error instanceof AnalysisVerificationError ? error.reason : error instanceof Error ? error.message : 'Unknown failure'; }
+      assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
+      const verifier = stages[1], passed = stages.length === 2 && verifier.status === 200 && verifier.output?.valid === positive && returned === positive && (positive || failure === 'rejected');
+      if (!passed) failures++;
+      const safeStages = stages.map(({ facts, ...stage }) => ({ ...stage, factsDigest: hash(facts), facts: { stateVersion: facts.strategy.version, snapshotId: facts.option_snapshot.id, comparisonId: facts.calculated.positionComparison.candidate.id, targetSpot: facts.calculated.positionComparison.baseline.state.scenarioSpot, targetDate: facts.calculated.positionComparison.baseline.state.scenarioDate, baselineDelta: facts.calculated.positionComparison.baseline.metrics.delta, candidateLossBound: facts.calculated.positionComparison.candidate.lossBound, conversation: facts.conversation } }));
+      console.log(JSON.stringify({ case: `${id}-${positive ? 'correct' : 'wrong'}`, expected: positive, mocked: !live, passed, returned, failure, promptVersion: prompts.version, promptDigest, draft, stages: safeStages, paidCalls, elapsedMs: Math.round(performance.now() - started) }).split(key).join('[REDACTED]'));
+    }
+    assert.equal(failures, 0, 'Selected-comparison verifier controls failed; failures are not successful rejections.');
+    assert.equal(paidCalls, live ? maxPaidCalls : 0);
+    console.log(JSON.stringify({ mode: 'comparison-controls', passedCases: maxPaidCalls, paidCalls, semanticQualityVerified: false, limitation: live ? 'These frozen claims only; not general semantic correctness or generation quality.' : 'All provider verdicts mocked; payload and positive/rejection paths checked only.' }));
+    process.exit(0);
+  }
+  const cases = comparison ? [
+    { id: 'inspected-put-comparison', q: .02, content: 'Compare my held position with the inspected put alternative at its selected target before I Apply it. Explain the modeled tradeoffs and different entry-cost bases; do not search for another candidate.' },
+    { id: 'inspected-put-followup', q: .02, content: 'Is that candidate loss bound exact, a lifetime limit, or a guarantee before short expiry? Have my holdings changed, or must I explicitly Apply the inspected candidate first?' },
+  ] : [
     { id: 'european-put-discovery', q: .02, expected: puts, content: explicit(puts) },
     { id: 'european-zero-yield-call-discovery', q: 0, expected: calls, content: explicit(calls) },
     { id: 'european-positive-yield-call-refusal', q: .02, content: explicit(calls) },
@@ -575,19 +748,26 @@ if (process.argv.includes('--european-discovery')) {
     { id: 'european-mixed-probability-refusal', q: .02, content: explicit({ ...puts, objective: 'expiry-probability' }) },
   ];
   let key = 'offline-not-a-key', paidCalls = 0, failures = 0;
+  let acceptedConversation = [];
   if (live) {
     const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim();
     key = parseEnv(readFileSync(resolve(dirname(resolve(common)), '.env'), 'utf8')).OPENROUTER_API_KEY;
     assert.ok(key, 'OpenRouter configuration missing');
   }
-  console.log(JSON.stringify({ mode: 'european-discovery', promptVersion: prompts.version, promptDigest, requestedModel: MODEL, snapshot, rubric: 'Exact explicit tool arguments and deterministic oracle for two supported cases; no tool calls for three refusal/clarification cases; all replies read-only; independent semantic review required. This does not qualify selected-candidate comparison or general model quality.' }));
+  const mode = comparison ? 'inspected-comparison' : 'european-discovery';
+  console.log(JSON.stringify({ mode, promptVersion: prompts.version, promptDigest, requestedModel: MODEL, snapshot, rubric: comparison ? 'Two-turn inspected-candidate discussion: exact deterministic comparison, unchanged held state, no offered or returned tools, two calls per turn. Independent semantic review required; not general model quality.' : 'Exact explicit tool arguments and deterministic oracle for two supported cases; no tool calls for three refusal/clarification cases; all replies read-only; independent semantic review required. This does not qualify selected-candidate comparison or general model quality.' }));
   for (const item of cases) {
     const state = { ...createMarketStrategy('long-call', snapshot, 'natural'), rate: .05, dividendYield: item.q };
+    if (comparison) { state.pricing.entryMode = 'fixed'; state.legs[0].entryPrice = 1.23; }
     const original = structuredClone(state), originalSnapshot = structuredClone(snapshot);
     assert.deepEqual(validateMarketStrategy(state, snapshot), []);
     const oracle = item.expected ? searchCandidates(state, snapshot, (({ domain, ...args }) => args)(item.expected), item.expected.domain) : undefined;
     if (oracle) { assert.ok(oracle.candidates.length > 0); assert.equal(oracle.evaluated, 9); }
-    const request = { request_id: `probe-${item.id}`, base_state_version: state.version, state, conversation: [{ role: 'user', content: `${item.content} These are synthetic evaluation quotes, not live data or fills. Retain the selected European model and dividend yield ${item.q}. Read-only: do not modify my position.` }] };
+    const search = comparison ? searchCandidates(state, snapshot, (({ domain, ...args }) => args)(puts), puts.domain) : undefined;
+    const selection = search ? { id: search.candidates[0].id, request: search.request, domain: search.domain } : undefined;
+    const expectedComparison = selection ? compareSearchCandidate(state, snapshot, selection) : undefined;
+    const request = { request_id: `probe-${item.id}`, base_state_version: state.version, state, ...(selection ? { candidate_selection: selection } : {}), conversation: [...acceptedConversation, { role: 'user', content: `${item.content} These are synthetic evaluation quotes, not live data or fills. Retain the selected European model and dividend yield ${item.q}. Read-only: do not modify my position.` }] };
+    if (comparison && item.id.endsWith('followup') && acceptedConversation.length !== 2) { failures++; console.log(JSON.stringify({ case: item.id, skipped: 'First turn did not produce an accepted reply; no invented conversation substituted.' })); continue; }
     const validate = (result, stages) => {
       assert.deepEqual(stages.map(stage => stage.phase), item.expected ? ['draft', 'continuation', 'verification'] : ['draft', 'verification']);
       const tools = stages.flatMap(stage => stage.output?.tool_calls ?? []);
@@ -596,46 +776,59 @@ if (process.argv.includes('--european-discovery')) {
         assert.deepEqual(JSON.parse(tools[0].function.arguments), item.expected, 'Frozen tool arguments changed');
         assert.deepEqual(result.calculated.candidateSearch, oracle);
       } else { assert.deepEqual(tools, []); assert.equal(result.calculated.candidateSearch, null); }
+      if (comparison) assert.deepEqual(result.calculated.positionComparison, expectedComparison, 'Selected comparison changed');
       assert.deepEqual(result.reply.operations, []);
       assert.deepEqual(result.next_state, { ...original, version: original.version + 1 });
       assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
     };
-    for (const altered of live || !item.expected ? [false] : [false, true]) {
+    for (const altered of live || !item.expected && !comparison ? [false] : [false, true]) {
       const stages = [], started = performance.now();
       let passed = false, reply, failure;
       try {
         const result = await spar(request, key, async (url, init) => {
-          assert.ok(stages.length < 3, 'Per-case call ceiling exceeded');
+          assert.ok(stages.length < (comparison ? 2 : 3), 'Per-case call ceiling exceeded');
           const body = JSON.parse(init.body), index = stages.length;
           assert.equal(body.model, MODEL);
+          if (comparison) assert.equal(body.tools, undefined, 'Inspected comparison must not offer tools');
           const stage = { phase: body.response_format?.json_schema?.name === 'analysis_verification' ? 'verification' : index ? 'continuation' : 'draft', requestedModel: body.model };
+          if (comparison) {
+            assert.equal(body.messages[0].content, stage.phase === 'verification' ? prompts.prompts.VERIFICATION_PROMPT : prompts.prompts.SYSTEM_PROMPT);
+            stage.facts = JSON.parse(body.messages[1].content);
+            assert.deepEqual(stage.facts.calculated.positionComparison, expectedComparison, 'Provider comparison changed');
+            assert.deepEqual(stage.facts.conversation, request.conversation);
+          }
           stages.push(stage);
           let response;
           if (live) {
-            assert.ok(++paidCalls <= 15, 'Total paid call ceiling exceeded');
+            assert.ok(++paidCalls <= (comparison ? 4 : 15), 'Total paid call ceiling exceeded');
             response = await fetch(url, init);
             const metadata = await response.clone().json().catch(() => null);
             stage.resolvedModel = metadata?.model ?? 'unknown'; stage.provider = metadata?.provider ?? 'unknown';
             stage.finishReason = metadata?.choices?.[0]?.finish_reason ?? 'unknown';
           } else {
             const message = index === 0 && item.expected ? { tool_calls: [{ id: 'synthetic-search', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify({ ...item.expected, ...(altered ? { maxLoss: 1900 } : {}) }) } }] }
-              : { content: JSON.stringify(stage.phase === 'verification' ? { valid: true } : { text: item.expected ? 'Synthetic conditional search results, not fills, lifetime bounds or expected returns.' : 'Please clarify the request or use a supported objective and domain; no search or position change was made.', assumptions: [], objections: [], operations: [], suggested_prompts: [], risk_classification: 'bounded', evidence_ids: [] }) };
+              : { content: JSON.stringify(stage.phase === 'verification' ? { valid: true } : { text: comparison ? 'The inspected alternative is uncommitted and uses quoted entries rather than held costs. Its conservative short-expiry bound is not exact maximum loss, lifetime risk or a pre-expiry guarantee. Apply is required to replace the included builder holdings; no trade is executed.' : item.expected ? 'Synthetic conditional search results, not fills, lifetime bounds or expected returns.' : 'Please clarify the request or use a supported objective and domain; no search or position change was made.', assumptions: [], objections: [], operations: [], suggested_prompts: [], risk_classification: 'bounded', evidence_ids: [] }) };
             response = Response.json({ choices: [{ message }] }); stage.mocked = true;
           }
           stage.status = response.status;
           return traceResponse(response, stage, started, true);
         }, undefined, snapshot, prompts);
         reply = result.reply;
-        if (altered) assert.throws(() => validate(result, stages), error => error instanceof assert.AssertionError && error.message.includes('Frozen tool arguments changed'));
+        if (altered && comparison) {
+          const changed = structuredClone(result);
+          changed.calculated.positionComparison.baseline.metrics.scenarioPnl += 1;
+          assert.throws(() => validate(changed, stages), error => error instanceof assert.AssertionError && error.message.includes('Selected comparison changed'));
+        } else if (altered) assert.throws(() => validate(result, stages), error => error instanceof assert.AssertionError && error.message.includes('Frozen tool arguments changed'));
         else validate(result, stages);
+        if (comparison && !altered) acceptedConversation = [...request.conversation, { role: 'assistant', content: reply.text }];
         passed = true;
       } catch (error) { failure = error instanceof Error ? error.message : 'Unknown failure'; failures++; }
       assert.deepEqual(state, original); assert.deepEqual(snapshot, originalSnapshot);
-      console.log(JSON.stringify({ case: item.id, mocked: !live, alteredArgumentsControl: altered, expected: item.expected ?? 'no-tool-call', state, oracle, promptVersion: prompts.version, promptDigest, stages, reply, passed, failure, elapsedMs: Math.round(performance.now() - started), paidCalls }).split(key).join('[REDACTED]'));
+      console.log(JSON.stringify({ case: item.id, mocked: !live, alteredArgumentsControl: altered, expected: item.expected ?? 'no-tool-call', state, oracle, ...(comparison ? { request, expectedComparison } : {}), promptVersion: prompts.version, promptDigest, stages, reply, passed, failure, elapsedMs: Math.round(performance.now() - started), paidCalls }).split(key).join('[REDACTED]'));
     }
   }
   assert.equal(failures, 0, 'European discovery qualification failed; inspect recorded stages.');
-  console.log(JSON.stringify({ mode: 'european-discovery', passedCases: cases.length, paidCalls, semanticQualityVerified: false }));
+  console.log(JSON.stringify({ mode, passedCases: cases.length, paidCalls, semanticQualityVerified: false }));
   process.exit(0);
 }
 

@@ -13,6 +13,9 @@ import { createApp, type Bindings } from "../src/worker";
 import { createPosition } from "../src/position-lifecycle";
 import { projectPositionLots, upgradePositionLots } from "../src/position-lots";
 import { createSavedStore } from "../src/saved-strategies";
+import comparisonBundle from '../prompts/analysis-v16.json';
+import { readAnalysisPrompts } from '../src/analysis-prompts';
+import { promptDigest, ANALYSIS_ENGINE_VERSION } from '../src/analysis-config';
 
 const local = { ARGUS_LOCAL_DEV: "true" };
 const traceDB = (env as { DB: D1Database }).DB;
@@ -108,6 +111,50 @@ it("searches quoted candidates directly without inference and rejects stale or f
   expect((await request({ state, search })).status).toBe(409);
   expect(provider).not.toHaveBeenCalled();
 });
+it('discusses an owner-scoped selected index candidate without external context or workspace mutation', async () => {
+  const bundle = readAnalysisPrompts(comparisonBundle);
+  await traceDB.prepare('INSERT INTO analysis_prompt_bundles (version,digest,engine_version,bundle_json,evaluated_at) VALUES (?,?,?,?,?)').bind(bundle.version, await promptDigest(bundle), ANALYSIS_ENGINE_VERSION, JSON.stringify(bundle), new Date().toISOString()).run();
+  await traceDB.prepare('INSERT INTO analysis_prompt_active (singleton,version) VALUES (1,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version').bind(bundle.version).run();
+  try {
+  await traceDB.batch(snapshotMigration.split(';').filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
+  const now = Date.now(), at = new Date(now).toISOString(), dates = [14, 42].map(days => new Date(now + days * 86400000).toISOString());
+  const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, indexSourceTime: at, contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap((expiry, index) => [95, 100, 105].map(strike => ({ contractId: `XSP   ${expiry.slice(2, 10).replaceAll('-', '')}P${String(strike * 1000).padStart(8, '0')}`, type: 'put' as const, strike, expiry, multiplier: 100 as const, bid: 2 + index, ask: 3 + index, iv: .25, quoteAsOf: at }))) };
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([undefined, undefined, undefined])));
+  const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  await traceDB.prepare('INSERT INTO quote_snapshots (id, owner, credential_fingerprint, expires_at, snapshot_json) VALUES (?, ?, ?, ?, ?)').bind(snapshot.id, 'local-development', fingerprint, now + 600000, JSON.stringify(snapshot)).run();
+  const state = createMarketStrategy('long-put', snapshot, 'natural');
+  state.pricing!.entryMode = 'fixed'; state.legs[0].entryPrice = 1.23;
+  const original = structuredClone(state), request = { targetSpot: 95, targetDate: dates[0], maxLoss: 2000, feeAllowance: 5, basis: 'natural' as const, objective: 'target-pnl' as const }, domain = { families: ['put-calendar' as const], maxEntryOutlay: 1500 };
+  const candidate = searchCandidates(state, snapshot, request, domain).candidates[0];
+  const bodies: any[] = [];
+  const provider = vi.fn<typeof fetch>(async (url, init) => {
+    expect(String(url)).toBe('https://openrouter.ai/api/v1/chat/completions');
+    const body = JSON.parse(String(init?.body)); bodies.push(body);
+    expect(body.tools).toBeUndefined();
+    expect(body.messages[0].content).toBe(bundle.prompts.INSPECTED_COMPARISON_INTENT_PROMPT);
+    const intent = { topics: ['target-pnl', 'cost-basis'], scope: 'supplied-comparison', requestedScenario: null };
+    return Response.json({ choices: [{ message: { content: JSON.stringify(intent) } }] });
+  });
+  const app = createApp(provider), bindings = { OPENROUTER_API_KEY: 'test', FRED_API_KEY: 'must-not-be-used' };
+  const body = { request_id: crypto.randomUUID(), base_state_version: state.version, state, conversation: [{ role: 'user', content: 'Explain this inspected candidate versus my held position. Do not apply it.' }], candidate_selection: { id: candidate.id, request, domain } };
+  const result = await post(app, body, bindings);
+  expect(result.status).toBe(200); expect(result.headers.get('X-ARGUS-Trace-Status')).toBe('complete');
+  const data = await result.json() as any;
+  expect(data.calculated.positionComparison).toMatchObject({ state: candidate.state, metrics: candidate.metrics, baseline: { state: { ...state, scenarioSpot: request.targetSpot, scenarioDate: request.targetDate }, metrics: calculateStrategy({ ...state, scenarioSpot: request.targetSpot, scenarioDate: request.targetDate }) }, candidate: { id: candidate.id, lossBound: candidate.lossBound } });
+  expect(data.next_state).toEqual({ ...state, version: state.version + 1 }); expect(data.reply.operations).toEqual([]); expect(state).toEqual(original);
+  expect(provider).toHaveBeenCalledOnce();
+  expect(JSON.parse(bodies[0].messages[1].content).comparison).toEqual(data.calculated.positionComparison);
+  expect(data.calculated.comparisonIntent).toEqual({ topics: ['target-pnl', 'cost-basis'], scope: 'supplied-comparison', requestedScenario: null });
+  expect(data.reply.text).toContain('95 index points');
+  for (const altered of [{ ...body, candidate_selection: { ...body.candidate_selection, id: 'not-ranked' } }, { ...body, candidate_selection: { ...body.candidate_selection, state: candidate.state } }, { ...body, state: { ...state, pricing: { ...state.pricing, snapshotId: 'foreign' } } }]) {
+    provider.mockClear(); expect((await post(app, altered, bindings)).status).toBeGreaterThanOrEqual(400); expect(provider).not.toHaveBeenCalled();
+  }
+  provider.mockClear(); expect((await post(app, body, { ...bindings, SPARRING_RATE_LIMITER: { limit: async () => ({ success: false }) } })).status).toBe(429); expect(provider).not.toHaveBeenCalled();
+  await traceDB.prepare('UPDATE quote_snapshots SET owner = ? WHERE id = ?').bind('another-owner', snapshot.id).run();
+  expect((await post(app, body, bindings)).status).toBe(409); expect(provider).not.toHaveBeenCalled();
+  } finally { await traceDB.prepare('DELETE FROM analysis_prompt_active WHERE singleton=1').run(); }
+});
+
 beforeAll(async () => { await traceDB.batch([...promptMigration.split(/;\s*(?=CREATE|$)/), ...traceMigration.split(/;\s*(?=CREATE|$)/)].filter(sql => sql.trim()).map(sql => traceDB.prepare(sql))); });
 beforeAll(async () => { await traceDB.batch((savedMigration + lifecycleMigration).split(";").filter(sql => sql.trim()).map(sql => traceDB.prepare(sql))); });
 it("binds daily performance to the owner and saved revision before provider access", async () => {

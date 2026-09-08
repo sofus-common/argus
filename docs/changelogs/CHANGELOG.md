@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added read-only conversation about inspected optimizer candidates, preserving
+  held entry costs and the pending proposal until explicit Apply or dismissal.
+  One bounded intent call selects topics; deterministic calculations and rendering
+  supply the figures, units and risk scope. Server and client reconstruct the
+  comparison independently; altered replies and late responses are rejected.
+  Unsupported scenarios and ambiguous requests do not invent new calculations.
+  Qualified v16 is the shipped default and locally activated; existing v13 prompt
+  strings are unchanged. Failed v14/v15 candidates remain inactive, and retired
+  comparison evaluation modes reject paid execution before loading credentials.
+  Verification: 704 tests, TypeScript/build, 40 desktop and 40 mobile workflow
+  checks, and independent review passed. Ten complete live intent tasks passed
+  using Google Gemini through OpenRouter. This qualifies this bounded comparison
+  workflow, not general trading judgment, continuous market data or hosted readiness.
+
 - Fixed local prompt qualification targeting an obsolete v1 import. Baseline
   regressions remain pinned; the canonical candidate bundle now passes digest,
   D1 selection/readback and generation/verifier/tool-description transport checks.

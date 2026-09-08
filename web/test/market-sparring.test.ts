@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import europeanPrompts from '../prompts/analysis-v14.json';
+import { defaultAnalysisPrompts } from '../src/analysis-prompts';
 
 it('pins European discovery to its opt-in bundle and rejects unsupported carry or ranking before continuation', async () => {
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
@@ -41,7 +42,7 @@ it('pins European discovery to its opt-in bundle and rejects unsupported carry o
     }
   } finally { vi.useRealTimers(); }
 }, 30000);
-import { calculateStrategy, evaluateScenario, scenarioFacts, scenarioTable, scenarioSpotAttribution, createMarketStrategy, createStrategy, marketLeg, validateMarketStrategy, validateMarketConstruction, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, type MarketSnapshot, type CandidateSearchDomain } from "../src/options";
+import { compareSearchCandidate, calculateStrategy, evaluateScenario, scenarioFacts, scenarioTable, scenarioSpotAttribution, createMarketStrategy, createStrategy, marketLeg, validateMarketStrategy, validateMarketConstruction, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, type MarketSnapshot, type CandidateSearchDomain } from "../src/options";
 import { AnalysisVerificationError, InvalidProposalError, RESPONSE_SCHEMA, parseSparringRequest, strategyFacts, spar, type SparringReply, type SparringRequest } from "../src/sparring";
 import type { MarketContext } from "../src/market-context";
 import { americanScenario } from "../src/american-surface";
@@ -84,6 +85,62 @@ it("supplies sampled range provenance without exact calendar risk claims", () =>
   expect(facts.metrics.conditionalTail?.basis).toContain('Not lifetime risk');
 });
 const request = (): SparringRequest => ({ request_id: "request", base_state_version: 1, state: createMarketStrategy("long-call", snapshot, "natural"), conversation: [{ role: "user", content: "Review this position" }] });
+it('reconstructs inspected candidates against the included held basis without granting tools or writes', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.retrievedAt);
+  try {
+    const fresh = { ...snapshot, spotAsOf: snapshot.retrievedAt, contracts: snapshot.contracts.map(c => ({ ...c, quoteAsOf: snapshot.retrievedAt })) };
+    const input = request(); input.state.feeAllowance = 7; input.state.ivShift = .02;
+    input.state.expiryIvShifts = [{ expiry: input.state.legs[0].expiry, ivShift: .03 }];
+    input.state.pricing!.entryMode = 'fixed'; input.state.legs[0].entryPrice = 8;
+    const search = { targetSpot: 655, targetDate: fresh.retrievedAt, maxLoss: 1000, feeAllowance: 5, basis: 'mid' as const, objective: 'target-pnl' as const };
+    const candidate = searchCandidates(input.state, fresh, search).candidates[0];
+    input.candidate_selection = { id: candidate.id, request: search };
+    const before = structuredClone(input), expected = compareSearchCandidate(input.state, fresh, input.candidate_selection);
+    expect(expected.baseline.state.legs[0].entryPrice).toBe(8);
+    expect(expected.baseline.state.expiryIvShifts).toEqual(input.state.expiryIvShifts);
+    expect(expected.baseline.state.feeAllowance).toBe(7);
+    expect(expected.state).toEqual(candidate.state);
+    expect(expected.candidate.id).toBe(candidate.id);
+    const intent = { topics: ['target-pnl', 'cost-basis'], scope: 'supplied-comparison', requestedScenario: null };
+    const bundle = { ...defaultAnalysisPrompts, prompts: { ...defaultAnalysisPrompts.prompts, INSPECTED_COMPARISON_INTENT_PROMPT: 'Synthetic comparison intent prompt' } };
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { content: JSON.stringify(intent) } }] }));
+    const missingPrompt = { ...defaultAnalysisPrompts, prompts: { ...defaultAnalysisPrompts.prompts } };
+    delete missingPrompt.prompts.INSPECTED_COMPARISON_INTENT_PROMPT;
+    await expect(spar(input, 'key', fetcher, context, fresh, missingPrompt)).rejects.toThrow('Comparison intent prompt is not configured');
+    expect(fetcher).not.toHaveBeenCalled();
+    const result = await spar(input, 'key', fetcher, context, fresh, bundle);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(result.calculated.comparisonIntent).toEqual(intent);
+    expect(result.reply.text).toContain('655');
+    expect(result.reply.operations).toEqual([]);
+    const outbound = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
+    expect(outbound.messages[0].content).toBe(bundle.prompts.INSPECTED_COMPARISON_INTENT_PROMPT);
+    expect(outbound.response_format.json_schema.name).toBe('comparison_intent');
+    expect(outbound.reasoning).toEqual({ effort: 'low', exclude: true });
+    expect(result.calculated.positionComparison).toEqual(expected);
+    for (const [, init] of fetcher.mock.calls) expect(JSON.parse(String(init?.body)).tools).toBeUndefined();
+    expect(result.next_state).toEqual({ ...input.state, version: input.state.version + 1 }); expect(input).toEqual(before);
+    for (const patch of [{ id: 'unknown' }, { extra: true }, { request: { ...search, injected: true } }]) {
+      await expect(spar({ ...input, candidate_selection: { ...input.candidate_selection, ...patch } } as SparringRequest, 'key', fetcher, context, fresh)).rejects.toBeInstanceOf(InvalidProposalError);
+    }
+    for (const scope of [{ chart_context: { view: 'curve', metric: 'pnl' } }, { probability_range: { lower: 630, upper: 660 } }, { first_expiry_range: { min: 630, max: 660 } }]) {
+      expect(parseSparringRequest({ ...input, ...scope })).toBeNull();
+      await expect(spar({ ...input, ...scope } as SparringRequest, 'key', fetcher, context, fresh)).rejects.toBeInstanceOf(InvalidProposalError);
+    }
+    const unsolicited = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { tool_calls: [{ id: 'call', type: 'function', function: { name: 'search_candidates', arguments: JSON.stringify(search) } }] } }] }));
+    await expect(spar(input, 'key', unsolicited, context, fresh, bundle)).rejects.toBeInstanceOf(InvalidProposalError);
+    expect(unsolicited).toHaveBeenCalledOnce();
+    for (const invalid of [reply(), { ...intent, text: 'Invented numerical claim' }, { ...intent, topics: ['unknown'] }, { ...intent, requestedScenario: { spot: '100', date: null, ivShift: null } }]) {
+      const malformed = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { content: JSON.stringify(invalid) } }] }));
+      await expect(spar(input, 'key', malformed, context, fresh, bundle)).rejects.toBeInstanceOf(InvalidProposalError);
+      expect(malformed).toHaveBeenCalledOnce();
+    }
+    expect(parseSparringRequest(input)?.candidate_selection).toEqual(input.candidate_selection);
+    expect(parseSparringRequest({ ...input, candidate_selection: { ...input.candidate_selection, state: candidate.state } })).toBeNull();
+    const stale = { ...fresh, contracts: fresh.contracts.map(c => ({ ...c, sourceTimes: { bid: '2026-09-04T00:00:00.000Z', ask: fresh.retrievedAt, iv: fresh.retrievedAt } })) };
+    await expect(spar(input, 'key', fetcher, context, stale)).rejects.toBeInstanceOf(InvalidProposalError);
+  } finally { vi.useRealTimers(); }
+});
 it("validates and independently captures explicit chart ranges", () => {
   const range = { min: 630, max: 660 };
   const input = { ...request(), chart_context: { view: "curve" as const, metric: "pnl" as const, range } };

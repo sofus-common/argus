@@ -648,7 +648,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
 
     try {
       return c.json(await withAnalysisTrace(c.env.DB, traceContext(c, "sparring", request.request_id), async (prompts, observe) => {
-        const context = await loadContext(c.env, request.state.underlying);
+        const context = request.candidate_selection ? { retrievedAt: snapshot?.retrievedAt ?? request.state.valuationTimestamp, sources: [] } : await loadContext(c.env, request.state.underlying);
         return spar(request, c.env.OPENROUTER_API_KEY!, providerFetch, context, snapshot, prompts, observe);
       }));
     } catch (error) {

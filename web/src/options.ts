@@ -1282,6 +1282,88 @@ export function firstExpirySpreadLossBound(state: StrategyState) {
 }
 
 export type CandidateSearchDomain = { families: Array<'options' | 'covered-call' | 'protective-put' | 'collar' | 'call-calendar' | 'put-calendar' | 'call-diagonal' | 'put-diagonal'>; maxEntryOutlay: number };
+export type CandidateSelection = { id: string; request: Parameters<typeof searchCandidates>[2]; domain?: CandidateSearchDomain };
+export const COMPARISON_TOPICS = ['target-pnl', 'cost-basis', 'structure', 'delta', 'gamma', 'theta', 'vega', 'rho', 'loss-bound', 'probability', 'apply-status'] as const;
+export type ComparisonIntent = {
+  topics: Array<typeof COMPARISON_TOPICS[number]>;
+  scope: 'supplied-comparison' | 'different-scenario' | 'action' | 'unclear';
+  requestedScenario: null | { spot: number | null; date: string | null; ivShift: number | null };
+};
+export function parseComparisonIntent(value: unknown): ComparisonIntent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join() !== 'requestedScenario,scope,topics') return null;
+  const intent = value as ComparisonIntent;
+  if (!['supplied-comparison', 'different-scenario', 'action', 'unclear'].includes(intent.scope) || !Array.isArray(intent.topics) || !intent.topics.length || intent.topics.length > 5 || new Set(intent.topics).size !== intent.topics.length || intent.topics.some(topic => !COMPARISON_TOPICS.includes(topic))) return null;
+  const scenario = intent.requestedScenario;
+  if (scenario !== null && (!scenario || typeof scenario !== 'object' || Array.isArray(scenario) || Object.keys(scenario).sort().join() !== 'date,ivShift,spot' || scenario.spot !== null && (!finite(scenario.spot) || scenario.spot <= 0 || scenario.spot > 1_000_000) || scenario.ivShift !== null && (!finite(scenario.ivShift) || Math.abs(scenario.ivShift) > 10) || scenario.date !== null && (typeof scenario.date !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(scenario.date) || !finite(Date.parse(scenario.date)) || new Date(scenario.date).toISOString() !== scenario.date))) return null;
+  return structuredClone(intent);
+}
+export function renderCandidateComparison(comparison: ReturnType<typeof compareSearchCandidate>, rawIntent: ComparisonIntent) {
+  const intent = parseComparisonIntent(rawIntent);
+  if (!intent) throw new Error('Invalid comparison intent');
+  const reply = { text: '', assumptions: [] as string[], objections: [] as string[], suggested_prompts: [] as string[] };
+  if (intent.scope === 'unclear') return { ...reply, text: 'Which part of the inspected comparison should I explain: target P/L, costs, structure, Greeks, loss bounds or Apply status?' };
+  if (intent.scope === 'action') reply.objections.push('This read-only discussion cannot change holdings or carry out actions. The separate candidate Apply control only replaces the builder with the inspected candidate; it does not place an order.');
+  const held = comparison.baseline.state, candidate = comparison.state, requested = intent.requestedScenario;
+  if (intent.scope === 'different-scenario' || requested && (requested.spot !== null && requested.spot !== held.scenarioSpot || requested.date !== null && Date.parse(requested.date) !== Date.parse(held.scenarioDate) || requested.ivShift !== null && requested.ivShift !== held.ivShift)) return { ...reply, text: 'The supplied comparison does not answer that scenario request. A new calculation is required; these existing target metrics must not be substituted for it.' };
+  const money = (amount: number) => `USD ${amount.toFixed(2)}`;
+  const index = held.underlyingKind === 'cash-index';
+  const spotUnit = index ? 'index point' : 'USD 1 underlying move';
+  const lines = [`At ${index ? `${held.scenarioSpot} index points` : `${money(held.scenarioSpot)} per share`} on ${held.scenarioDate}:`];
+  const structure = (state: StrategyState) => [...state.legs.map(leg => `${leg.side} ${leg.contracts} ${leg.type} ${leg.strike} exp ${leg.expiry.slice(0, 10)}`), ...(state.stock ? [`${state.stock.shares} shares`] : [])].join('; ');
+  for (const topic of intent.topics) {
+    if (topic === 'target-pnl') lines.push(`Conditional target P/L: held ${money(comparison.baseline.metrics.scenarioPnl)}; candidate ${money(comparison.metrics.scenarioPnl)}; candidate minus held ${money(comparison.metrics.scenarioPnl - comparison.baseline.metrics.scenarioPnl)}. Not realized returns.`);
+    else if (topic === 'cost-basis') {
+      lines.push(`Net entry cashflow after allowance: held ${money(comparison.baseline.metrics.entryAccounting.netEntryCashFlowAfterAllowance)} (${held.pricing?.entryMode === 'fixed' ? 'supplied fixed inputs' : 'quoted inputs'}); candidate ${money(comparison.metrics.entryAccounting.netEntryCashFlowAfterAllowance)} (${candidate.pricing!.basis} quoted estimates). Positive = received; negative = paid.`);
+      reply.assumptions.push('Held entries and base/global/expiry IV shifts remain. Candidate entries/base IV use quotes; global shift remains, expiry IV shifts reset. Each allowance is deducted once. Entry outlay is not margin or maximum risk. Neither input mode proves execution.');
+    } else if (topic === 'structure') lines.push(`Held: ${structure(held)}. Candidate: ${structure(candidate)}. Not a roll.`);
+    else if (topic === 'loss-bound') {
+      const bound = comparison.candidate.lossBound;
+      lines.push(bound ? `Candidate conservative loss bound: ${money(bound.amount)} at short expiry ${bound.date}; not proof of an attained maximum. It does not establish a pre-expiry/lifetime cap.` : `Candidate intact-expiry maximum loss: ${comparison.metrics.maxLoss === null ? 'unbounded in this model' : money(comparison.metrics.maxLoss)}.`);
+      lines.push(!held.legs.length ? 'The held stock-only position has no option expiry; no held intact-option-expiry bound is compared.' : comparison.baseline.metrics.mode === 'first-expiry' ? 'Held mixed-expiry maximum loss is not exact; missing certification establishes no breach or greater-loss possibility.' : `Held model maximum loss: ${comparison.baseline.metrics.maxLoss === null ? 'unbounded in this model' : money(comparison.baseline.metrics.maxLoss)}.`);
+    } else if (topic === 'probability') {
+      const probability = comparison.candidate.probability;
+      if (probability.probability === null) lines.push('Mixed-expiry probability is unavailable. No forecast win rate or expected-return edge is established.');
+      else {
+        lines.push(`Candidate probability of positive intact-expiry P/L: ${(100 * probability.probability).toFixed(2)}%, from snapshot ${probability.from} at ${index ? `${probability.spot} index points` : money(probability.spot)} to ${probability.expiry}. This is not a held-target probability comparison.`);
+        reply.assumptions.push('Candidate probability uses the shared nearest-spot quoted IV per expiry plus global IV shift: a risk-neutral lognormal model after its allowance, not a forecast win rate or expected-return edge. Held probability is not compared.');
+      }
+    }
+    else if (topic === 'apply-status') lines.push('This comparison leaves holdings unchanged. Apply requires the explicit candidate control outside this discussion; it changes the builder, not a broker position.');
+    else {
+      const unit = { delta: `USD per ${spotUnit}`, gamma: `change in position delta per ${spotUnit}`, theta: 'USD per day', vega: 'USD per +1 volatility percentage point', rho: 'USD per +1 rate percentage point' }[topic];
+      lines.push(`${topic[0].toUpperCase() + topic.slice(1)}: held ${comparison.baseline.metrics[topic].toFixed(4)}; candidate ${comparison.metrics[topic].toFixed(4)} (${unit}).`);
+    }
+  }
+  reply.text = lines.join('\n');
+  reply.assumptions.push('Included hypothetical positions only, under the selected pricing model. Local Greeks hold other inputs fixed. No fills, settlement, assignment, financing, margin or suitability conclusion.');
+  return reply;
+}
+export function isCandidateSelection(value: unknown): value is CandidateSelection {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const selection = value as CandidateSelection;
+  return Object.keys(selection).every(key => ['id', 'request', 'domain'].includes(key)) && typeof selection.id === 'string' && selection.id.length > 0 && selection.id.length <= 1024 && !!selection.request && typeof selection.request === 'object' && !Array.isArray(selection.request) && (selection.domain === undefined || !!selection.domain && typeof selection.domain === 'object' && !Array.isArray(selection.domain));
+}
+export function compareSearchCandidate(state: StrategyState, snapshot: MarketSnapshot, selection: CandidateSelection, now = Date.now()) {
+  if (!isCandidateSelection(selection)) throw new Error('Invalid candidate selection');
+  if (validateMarketConstruction(state, snapshot).length) throw new Error('Invalid candidate comparison baseline');
+  const included = projectAnalysisPosition(state);
+  if (!included) throw new Error('Include an option or shares before comparing candidates');
+  state = included;
+  const times = [snapshot.retrievedAt, snapshot.spotAsOf, ...Object.values(snapshot.spotSourceTimes ?? {}), ...(snapshot.indexSourceTime ? [snapshot.indexSourceTime] : []), ...snapshot.contracts.flatMap(c => [c.quoteAsOf, ...Object.values(c.sourceTimes ?? {})])];
+  if (!finite(now) || snapshot.historical || times.some(value => { const time = Date.parse(value); return !finite(time) || time > now || now - time > 300_000; })) throw new Error('Fresh candidate quotes required');
+  const result = searchCandidates(state, snapshot, selection.request, selection.domain);
+  const selected = result.candidates.find(candidate => candidate.id === selection.id);
+  if (!selected) throw new Error('Selected candidate is not in the validated search results');
+  const baselineState = { ...structuredClone(state), scenarioSpot: selection.request.targetSpot, scenarioDate: selection.request.targetDate };
+  if (state.legs.some(leg => Date.parse(selection.request.targetDate) > Date.parse(leg.expiry)) || validateMarketStrategy(baselineState, snapshot).length) throw new Error('Unsupported candidate comparison date or baseline');
+  const classify = (amount: number | null): 'bounded' | 'unbounded' | 'not-exact' => selected.metrics.mode === 'first-expiry' ? 'not-exact' : amount === null ? 'unbounded' : 'bounded';
+  return {
+    state: selected.state, metrics: selected.metrics, baseline: { state: baselineState, metrics: calculateStrategy(baselineState) },
+    lossClassification: classify(selected.metrics.maxLoss), profitClassification: classify(selected.metrics.maxProfit), additionalShareCost: 0, removedLegIds: [] as string[],
+    candidate: { ...structuredClone(selection), ...(selected.lossBound ? { lossBound: selected.lossBound } : {}), probability: selected.probability, coverage: result.coverage, assumptions: result.assumptions, probabilityBasis: result.probabilityBasis },
+    assumptions: 'Hypothetical new-position comparison, not a trade, roll, recommendation or workspace proposal. The included held baseline preserves entry costs, base IV, global and expiry IV shifts, quantities and allowance; only target spot and date change. The independently reconstructed candidate uses dated quote entries and quote IV, the captured global IV shift, zero expiry IV shifts and the requested candidate allowance. Different cost and volatility bases are intentional, not realized returns. No exit proceeds, assignment, settlement, financing or margin cashflows. Mixed-expiry risk is not exact; any candidate loss bound is conservative at short expiry only, not lifetime risk.',
+  };
+}
 export function searchCandidates(context: StrategyState, snapshot: MarketSnapshot, input: { targetSpot: number; targetDate: string; maxLoss: number; feeAllowance: number; basis: PricingBasis; objective: "target-pnl" | "return-on-risk" | "expiry-probability" }, domain?: CandidateSearchDomain) {
   if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== 'families,maxEntryOutlay' || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !['options', 'covered-call', 'protective-put', 'collar', 'call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'].includes(family)) || !finite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0)) throw new Error('Invalid candidate search domain');
   const options = domain === undefined || domain.families.includes('options');

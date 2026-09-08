@@ -10,7 +10,7 @@ import type { SavedStrategy } from '../src/saved-strategies'
 import { buildPositionPerformance } from '../src/position-performance'
 import { createPosition } from '../src/position-lifecycle'
 import { projectPositionLots, recordLotTransaction, upgradePositionLots } from '../src/position-lots'
-import { calculateStrategy, createMarketStrategy, createStrategy, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, type MarketSnapshot } from '../src/options'
+import { calculateStrategy, compareSearchCandidate, parseComparisonIntent, renderCandidateComparison, createMarketStrategy, createStrategy, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, scenarioFacts, type MarketSnapshot } from '../src/options'
 import { buildIntradayHistory, buildIvHistory } from '../src/intraday-history'
 import { buildPriceHistory } from '../src/price-history'
 import '../src/styles.css'
@@ -66,7 +66,7 @@ async function run() {
   async function change(label: string, value: string) {
     const field = fixture.querySelector(`[aria-label="${label}"]`) as HTMLInputElement
     assert(field, `Missing ${label}`)
-    const prototype = field.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+    const prototype = field.tagName === 'SELECT' ? HTMLSelectElement.prototype : field.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
     await act(async () => { Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(field, value); field.dispatchEvent(new Event('input', { bubbles: true })); field.dispatchEvent(new Event('change', { bubbles: true })) })
   }
   async function click(name: string) {
@@ -214,12 +214,15 @@ async function run() {
     });
     for (const symbol of ['SPY', 'XSP']) await test(`${symbol} calendar discovery preserves bound scope through comparison, save, reopen and Undo`, async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
-      const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];
+      const priorDate = Date, priorNow = Date.now;
+      globalThis.Date = originalDate; Date.now = originalNow;
+      const stamp = new Date(Date.now() - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];
       const type = symbol === 'XSP' ? 'put' : 'call', model = symbol === 'XSP' ? 'european-bsm-v1' : 'american-crr-1024-v1';
       const snapshot: MarketSnapshot = { id: 'mixed-discovery', source: 'Tastytrade', underlying: symbol, ...(symbol === 'XSP' ? { underlyingKind: 'cash-index' as const, indexSourceTime: stamp, contractTerms: { exerciseStyle: 'European' as const, settlement: 'cash' as const, multiplier: 100 as const, settlementSession: 'PM' as const } } : {}), spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.flatMap(expiry => [95, 100, 105].map(strike => ({ contractId: `${symbol}   ${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100 as const, bid: 2, ask: 3, iv: .25, quoteAsOf: stamp }))) };
       const held = createMarketStrategy(type === 'put' ? 'long-put' : 'long-call', snapshot); held.valuationModel = model; held.dividendYield = .02; held.pricing!.entryMode = 'fixed'; held.legs[0].entryPrice = 1.23; held.feeAllowance = 5;
       const seed = { id: 'mixed-seed', title: 'Mixed search fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
       let saved: typeof seed | undefined, mode: 'normal' | 'altered' | 'deferred' = 'normal', release: (() => void) | undefined, calls = 0;
+      let chatMode: 'normal' | 'altered' | 'prose' | 'intent' | 'assumptions' | 'objections' | 'suggested_prompts' | 'deferred' = 'normal', chatCalls = 0, releaseChat: (() => void) | undefined, chatSignal: AbortSignal | undefined;
       window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
       window.fetch = (async (url, init) => {
         if (url === '/api/bootstrap') return Response.json({ session: { label: 'Mixed fixture', local: true, recoveryKey: 'disabled-in-test' } });
@@ -227,6 +230,21 @@ async function run() {
         if (url === '/api/strategies') return Response.json({ strategies: saved ? [seed, saved] : [seed] });
         if (url === '/api/strategies/mixed-seed') return Response.json({ record: seed });
         if (url === '/api/strategies/mixed-copy') return Response.json({ record: saved });
+        if (url === '/api/sparring') {
+          chatCalls++; const body = JSON.parse(String(init?.body));
+          assert(body.candidate_selection && !body.chart_context && !body.probability_range && !body.first_expiry_range, 'Candidate discussion mixed analysis contexts');
+          assert(body.state.legs.length === 1 && body.state.legs[0].entryPrice === 1.23 && body.state.pricing.entryMode === 'fixed', 'Candidate discussion replaced canonical held entry');
+          const positionComparison = compareSearchCandidate(body.state, snapshot, body.candidate_selection);
+          const comparisonIntent = parseComparisonIntent({ topics: ['target-pnl', 'cost-basis'], scope: 'supplied-comparison', requestedScenario: null });
+          assert(comparisonIntent, 'Synthetic candidate intent invalid');
+          const reply = { ...renderCandidateComparison(positionComparison, comparisonIntent), operations: [], evidence_ids: [], risk_classification: 'bounded' };
+          if (chatMode === 'altered') positionComparison.metrics.scenarioPnl += 1;
+          if (chatMode === 'prose') reply.text = 'FORGED CANDIDATE COMMENTARY';
+          if (chatMode === 'assumptions' || chatMode === 'objections' || chatMode === 'suggested_prompts') reply[chatMode] = ['FORGED CANDIDATE COMMENTARY'];
+          const result = { request_id: body.request_id, base_state_version: body.base_state_version, next_state: { ...body.state, version: body.state.version + 1 }, metrics: calculateStrategy(projectAnalysisPosition(body.state)!), reply, calculated: { metrics: calculateStrategy(projectAnalysisPosition(body.state)!), scenario: scenarioFacts(projectAnalysisPosition(body.state)!), riskSummary: 'Synthetic comparison', dataMode: 'market-snapshot', positionComparison, comparisonIntent: chatMode === 'intent' ? { ...comparisonIntent, extra: 'untrusted' } : comparisonIntent }, market_context: { sources: [], retrievedAt: stamp } };
+          if (chatMode === 'deferred') { chatSignal = init?.signal ?? undefined; return new Promise<Response>(resolve => { releaseChat = () => resolve(Response.json(result)); }); }
+          return Response.json(result);
+        }
         if (url === '/api/candidates') {
           calls++; const body = JSON.parse(String(init?.body)), result = searchCandidates(body.state, snapshot, body.search, body.domain);
           assert(result.candidates.length > 0, 'No calendar candidates in fixture');
@@ -255,8 +273,28 @@ async function run() {
         await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'inspection');
         await waitFor(() => !!fixture.querySelector('[aria-label="Optimizer target comparison"] path.proposal-line')?.getAttribute('d'), 'target comparison');
         assert(inputs() === before, 'Calendar inspection changed held entries');
+        const comparisonScenarios = fixture.querySelector('.comparison-scenarios')?.textContent ?? '';
+        assert(symbol === 'XSP' ? (comparisonScenarios.match(/index points/g)?.length ?? 0) === 2 && !comparisonScenarios.includes('$') : (comparisonScenarios.match(/\$/g)?.length ?? 0) === 2 && !comparisonScenarios.includes('index points'), 'Held/proposed scenario summary units do not match underlying kind');
         const boundScope = fixture.querySelector('[aria-label="Candidate conservative first-expiry bound"]')?.textContent ?? '';
-        assert(boundScope.includes('Conservative first-expiry loss bound') && boundScope.includes('does not cap losses before first expiry or lifetime losses'), 'Inspection omitted bound scope');
+        assert(boundScope.includes('Conservative first-expiry loss bound') && boundScope.includes('does not establish pre-expiry or lifetime loss caps'), 'Inspection omitted bound scope');
+        await click('Discuss candidate'); await waitFor(() => fixture.querySelectorAll('[aria-label="Read-only holdings comparison"]').length === 1, 'candidate discussion');
+        const calculations = fixture.querySelector('[aria-label="Captured analysis calculations"]');
+        assert(calculations, 'Candidate reply omitted calculation units fixture');
+        const calculationUnits = calculations.textContent ?? '', targetDescription = fixture.querySelector('[aria-label="Optimizer target comparison"] > p')?.textContent ?? '';
+        assert(symbol === 'XSP' ? calculationUnits.includes('index points') && calculationUnits.includes('premium points') && !calculationUnits.includes('/ share') && !calculationUnits.includes('spot $') && targetDescription.includes('index points') && !targetDescription.includes('at $') : calculationUnits.includes('/ share') && calculationUnits.includes('spot $') && targetDescription.includes('at $'), 'Candidate calculation or target units do not match underlying kind');
+        await change('Ask ARGUS', 'What is the main downside of this candidate?'); await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+        await waitFor(() => fixture.querySelectorAll('[aria-label="Read-only holdings comparison"]').length === 2, 'candidate follow-up');
+        assert(inputs() === before && !!fixture.querySelector('.proposal-card') && fixture.querySelectorAll('[aria-label="Read-only holdings comparison"]').length === 2, 'Candidate discussion discarded inspection or changed holdings');
+        for (const attack of ['altered', 'prose', 'intent', 'assumptions', 'objections', 'suggested_prompts'] as const) {
+          chatMode = attack; const failures = fixture.textContent?.match(/REVIEW FAILED/g)?.length ?? 0;
+          await click('Discuss candidate'); await waitFor(() => (fixture.textContent?.match(/REVIEW FAILED/g)?.length ?? 0) === failures + 1, `candidate ${attack} tamper`);
+          assert(!fixture.textContent?.includes('FORGED CANDIDATE COMMENTARY') && fixture.querySelectorAll('[aria-label="Read-only holdings comparison"]').length === 2 && inputs() === before && !!fixture.querySelector('.proposal-card'), 'Unvalidated comparison prose reached UI or discarded selection');
+        }
+        chatMode = 'deferred'; await click('Discuss candidate'); await waitFor(() => !!releaseChat, 'candidate pending');
+        await click('Keep current'); assert(chatSignal?.aborted && !fixture.querySelector('.proposal-card') && inputs() === before, 'Dismiss did not cancel candidate request');
+        await act(async () => releaseChat!()); releaseChat = undefined; await settleTimers();
+        assert(fixture.querySelectorAll('[aria-label="Read-only holdings comparison"]').length === 2 && !fixture.querySelector('.proposal-card') && inputs() === before && chatCalls === 9, 'Dismissed late candidate discussion survived');
+        await click('Inspect strategy'); await waitFor(() => !!fixture.querySelector('.proposal-card'), 'reinspection');
         await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, 'save');
         assert(saved!.state.legs.length === 2 && new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && saved!.state.valuationModel === model && saved!.state.underlyingKind === held.underlyingKind && saved!.state.dividendYield === held.dividendYield && saved!.state.legs.every(leg => leg.type === type), 'Calendar transfer lost expiries, explicit model or underlying identity');
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Calendar Undo lost held inputs');
@@ -267,7 +305,7 @@ async function run() {
         mode = 'deferred'; await click('Find strategies'); await waitFor(() => !!release, 'pending');
         await change('Optimizer maximum entry outlay', '9999'); await act(async () => release!()); release = undefined;
         await settleTimers(); assert(!fixture.querySelector('[aria-label="Deterministic quoted candidates"]') && calls === 3, 'Cancelled calendar search survived');
-      } finally { release?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
+      } finally { release?.(); releaseChat?.(); await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket; globalThis.Date = priorDate; Date.now = priorNow }
     });
     await test('Three-expiry tail reaches the rendered workspace through the valuation worker', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;

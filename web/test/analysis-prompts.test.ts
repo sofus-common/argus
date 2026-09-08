@@ -12,23 +12,58 @@ import factualCandidate from "../prompts/analysis-v5.json";
 import selectionCandidate from "../prompts/analysis-v9.json";
 import transferCandidate from "../prompts/analysis-v10.json";
 import europeanCandidate from "../prompts/analysis-v14.json";
+import comparisonCandidate from "../prompts/analysis-v15.json";
+import comparisonIntentCandidate from "../prompts/analysis-v16.json";
+import historicalBaseline from "../prompts/analysis-v13.json";
+
+const baselineV13 = readAnalysisPrompts(historicalBaseline);
+
+it('ships the qualified intent bundle while preserving all v13 prompt strings', async () => {
+  const candidate = readAnalysisPrompts(comparisonIntentCandidate);
+  expect(candidate.version).toBe('analysis-v16');
+  expect(defaultAnalysisPrompts).toEqual(candidate);
+  expect(await promptDigest(defaultAnalysisPrompts)).toBe('89531521ca027b5cfa34d05f501fd2fec704b6f82f78811776ea2e4e7acad356');
+  const { INSPECTED_COMPARISON_INTENT_PROMPT: intent, ...retained } = candidate.prompts;
+  expect(retained).toEqual(baselineV13.prompts);
+  expect(intent).toContain('requestedScenario');
+  expect(intent).toContain('different-scenario');
+  expect(intent).toContain('latest user');
+  for (const value of ['', ' ', 1, 'x'.repeat(65537)]) expect(() => readAnalysisPrompts({ ...candidate, prompts: { ...candidate.prompts, INSPECTED_COMPARISON_INTENT_PROMPT: value } })).toThrow();
+  const combined = readAnalysisPrompts({ ...candidate, prompts: { ...candidate.prompts, CANDIDATE_TOOL_DESCRIPTION: 'Synthetic search description' } });
+  expect(Object.keys(combined.prompts).slice(-2)).toEqual(['CANDIDATE_TOOL_DESCRIPTION', 'INSPECTED_COMPARISON_INTENT_PROMPT']);
+});
+
+it('versions inspected comparison from v13 without activating European search or changing unrelated prompts', () => {
+  const candidate = readAnalysisPrompts(comparisonCandidate);
+  expect(candidate.version).toBe('analysis-v15');
+  expect(defaultAnalysisPrompts.version).toBe('analysis-v16');
+  expect(Object.keys(candidate.prompts)).toEqual(Object.keys(baselineV13.prompts));
+  expect(candidate.prompts.CANDIDATE_TOOL_DESCRIPTION).toBeUndefined();
+  for (const key of Object.keys(baselineV13.prompts) as Array<keyof typeof baselineV13.prompts>) {
+    if (key === 'SYSTEM_PROMPT' || key === 'VERIFICATION_PROMPT') {
+      expect(candidate.prompts[key]).toContain(baselineV13.prompts[key]);
+      for (const rule of ['calculated.positionComparison.candidate', 'baseline.metrics', 'premium points', 'not evidence of historical execution', 'not an attained maximum', 'does not establish', 'explain-only', 'suggested_prompts', 'separate UI Apply']) expect(candidate.prompts[key]).toContain(rule);
+      expect(candidate.prompts[key]).not.toContain('dividend yield at or below zero');
+    } else expect(candidate.prompts[key]).toBe(baselineV13.prompts[key]);
+  }
+});
 
 it('versions European search without changing unrelated prompt strings or activating the candidate', () => {
   const candidate = readAnalysisPrompts(europeanCandidate);
   expect(candidate.version).toBe('analysis-v14');
   expect(candidate.prompts.CANDIDATE_TOOL_DESCRIPTION).toContain('European put calendars/diagonals');
-  for (const key of Object.keys(defaultAnalysisPrompts.prompts) as Array<keyof typeof defaultAnalysisPrompts.prompts>) {
+  for (const key of Object.keys(baselineV13.prompts) as Array<keyof typeof baselineV13.prompts>) {
     if (key === 'SYSTEM_PROMPT' || key === 'VERIFICATION_PROMPT') {
       expect(candidate.prompts[key]).toContain('dividend yield at or below zero');
       expect(candidate.prompts[key]).not.toContain('selected American model');
-    } else expect(candidate.prompts[key]).toBe(defaultAnalysisPrompts.prompts[key]);
+    } else expect(candidate.prompts[key]).toBe(baselineV13.prompts[key]);
   }
-  expect(defaultAnalysisPrompts.version).toBe('analysis-v13');
+  expect(defaultAnalysisPrompts.version).toBe('analysis-v16');
 });
 
-it('preserves the active baseline digest and admits a bounded optional versioned search description', async () => {
-  expect(defaultAnalysisPrompts.version).toBe('analysis-v13');
-  expect(await promptDigest(defaultAnalysisPrompts)).toBe('c3eabc1493a100f4bd77c20b583e460a1b3161180fce6e97c737043c8499be89');
+it('preserves the historical v13 digest and admits a bounded optional versioned search description', async () => {
+  expect(baselineV13.version).toBe('analysis-v13');
+  expect(await promptDigest(baselineV13)).toBe('c3eabc1493a100f4bd77c20b583e460a1b3161180fce6e97c737043c8499be89');
   const bundle = { ...defaultAnalysisPrompts, version: 'search-test', prompts: { ...defaultAnalysisPrompts.prompts, CANDIDATE_TOOL_DESCRIPTION: 'Synthetic description' } };
   expect(readAnalysisPrompts(bundle).prompts).toMatchObject({ CANDIDATE_TOOL_DESCRIPTION: 'Synthetic description' });
   for (const text of ['', ' ', 1, 'x'.repeat(65537)]) expect(() => readAnalysisPrompts({ ...bundle, prompts: { ...bundle.prompts, CANDIDATE_TOOL_DESCRIPTION: text } })).toThrow();
@@ -92,6 +127,7 @@ it("validates complete bounded prompt bundles in canonical immutable order", () 
   const keys = ["SYSTEM_PROMPT", "VERIFICATION_PROMPT", "BOUND_VERIFICATION_PROMPT", "LOT_DISCUSSION_PROMPT", "LOT_VERIFICATION_PROMPT", "HISTORY_DISCUSSION_PROMPT", "HISTORY_VERIFICATION_PROMPT", "INTRADAY_DISCUSSION_PROMPT", "INTRADAY_VERIFICATION_PROMPT"];
   if (defaultAnalysisPrompts.prompts.IV_DISCUSSION_PROMPT !== undefined) keys.push('IV_DISCUSSION_PROMPT', 'IV_VERIFICATION_PROMPT');
   if (defaultAnalysisPrompts.prompts.PERFORMANCE_DISCUSSION_PROMPT !== undefined) keys.push('PERFORMANCE_DISCUSSION_PROMPT', 'PERFORMANCE_VERIFICATION_PROMPT');
+  if (defaultAnalysisPrompts.prompts.INSPECTED_COMPARISON_INTENT_PROMPT !== undefined) keys.push('INSPECTED_COMPARISON_INTENT_PROMPT');
   expect(Object.keys(defaultAnalysisPrompts.prompts)).toEqual(keys);
   const reversed = { prompts: Object.fromEntries(Object.entries(defaultAnalysisPrompts.prompts).reverse()), version: "test-bundle.2" };
   const parsed = readAnalysisPrompts(reversed);

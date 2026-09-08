@@ -8,14 +8,19 @@ import { createApp } from "../src/worker";
 import { createMarketStrategy, createStrategy, type MarketSnapshot } from "../src/options";
 import { spar } from "../src/sparring";
 import previous from "../prompts/analysis-v12.json";
+import performanceBaseline from "../prompts/analysis-v13.json";
 
 const db = (env as { DB: D1Database }).DB;
-it("versions performance discussion while preserving every previous prompt string", () => {
-  expect(defaultAnalysisPrompts.version).toBe("analysis-v13");
+it("ships qualified comparison intent while preserving historical performance prompt ancestry", async () => {
+  expect(defaultAnalysisPrompts.version).toBe("analysis-v16");
+  expect(await promptDigest(defaultAnalysisPrompts)).toBe("89531521ca027b5cfa34d05f501fd2fec704b6f82f78811776ea2e4e7acad356");
+  const historical = readAnalysisPrompts(performanceBaseline);
+  expect(historical.version).toBe("analysis-v13");
   expect(ANALYSIS_ENGINE_VERSION).toBe("analysis-contract-v7");
   for (const [key, value] of Object.entries(previous.prompts)) {
-    expect(defaultAnalysisPrompts.prompts[key as keyof typeof defaultAnalysisPrompts.prompts]).toBe(value);
+    expect(historical.prompts[key as keyof typeof historical.prompts]).toBe(value);
   }
+  for (const [key, value] of Object.entries(historical.prompts)) expect(defaultAnalysisPrompts.prompts[key as keyof typeof defaultAnalysisPrompts.prompts]).toBe(value);
 });
 it('requires paired optional performance prompts and admits older unrelated bundles', () => {
   expect(readAnalysisPrompts(previous).version).toBe('analysis-v12');
@@ -54,7 +59,7 @@ it("qualifies exact candidate bytes through storage and provider boundaries with
     const snapshot: MarketSnapshot = { id: "candidate-qualification", source: "Tastytrade", underlying: "SPY", spot: 650, retrievedAt: new Date().toISOString(), spotAsOf: new Date().toISOString(), availableExpiries: ["2026-09-15"], contracts: [{ contractId: "SPY   260915C00650000", type: "call", strike: 650, expiry: "2026-09-15T20:15:00.000Z", multiplier: 100, bid: 2, ask: 3, iv: 0.25, quoteAsOf: new Date().toISOString() }] };
     await spar({ request_id: "candidate-qualification", base_state_version: 1, state: createMarketStrategy("long-call", snapshot), conversation: [{ role: "user", content: "Explain" }] }, "test", fetcher, undefined, snapshot, selected);
     expect(systems).toEqual([bundle.prompts.SYSTEM_PROMPT, bundle.prompts.VERIFICATION_PROMPT]);
-    expect(defaultAnalysisPrompts.version).toBe("analysis-v13");
+    expect(defaultAnalysisPrompts.version).toBe("analysis-v16");
   } finally {
     vi.useRealTimers();
     await db.prepare("DELETE FROM analysis_prompt_active WHERE singleton = 1").run();

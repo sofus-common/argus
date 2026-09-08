@@ -11,6 +11,13 @@ import {
   pnlDisplayBasis,
   type PnlDisplayMode,
   searchCandidates,
+  compareSearchCandidate,
+  COMPARISON_TOPICS,
+  parseComparisonIntent,
+  renderCandidateComparison,
+  type ComparisonIntent,
+  isCandidateSelection,
+  type CandidateSelection,
   CandidateSearchLimitError,
   expirationProbability,
   scenarioTable,
@@ -87,6 +94,7 @@ export type SparringRequest = {
   conversation: ConversationMessage[];
   probability_range?: { lower: number; upper: number };
   first_expiry_range?: { min: number; max: number };
+  candidate_selection?: CandidateSelection;
   chart_context?: { view: "curve" | "heatmap" | "table"; metric: "pnl" | "delta" | "gamma" | "theta" | "vega" | "rho"; valuationModel?: "american-crr-1024-v1"; pnlDisplay?: PnlDisplayMode; range?: ChartRange };
 };
 
@@ -121,7 +129,7 @@ export type SparringSuccess = {
   reply: SparringReply;
   next_state: StrategyState;
   metrics: StrategyMetrics;
-  calculated: ReturnType<typeof strategyFacts>;
+  calculated: ReturnType<typeof strategyFacts> & { comparisonIntent?: ComparisonIntent };
   market_context: MarketContext;
 };
 
@@ -133,6 +141,7 @@ type PositionComparison = {
   lossClassification: "bounded" | "unbounded" | "not-exact";
   profitClassification: "bounded" | "unbounded" | "not-exact";
   additionalShareCost: number; removedLegIds: string[]; assumptions: string;
+  candidate?: ReturnType<typeof compareSearchCandidate>["candidate"];
   replacement?: { legId: string; previousContractId: string; contractId: string; entryPrice: number; basis: "mid" | "natural"; bid: number; ask: number; quoteAsOf: string };
 };
 type RequestedScenario = {
@@ -343,6 +352,21 @@ export class AnalysisVerificationError extends Error {
     this.reason = reason;
   }
 }
+
+const COMPARISON_INTENT_SCHEMA = {
+  name: 'comparison_intent', strict: true,
+  schema: {
+    type: 'object', additionalProperties: false, required: ['topics', 'scope', 'requestedScenario'],
+    properties: {
+      topics: { type: 'array', minItems: 1, maxItems: 5, uniqueItems: true, items: { type: 'string', enum: COMPARISON_TOPICS } },
+      scope: { type: 'string', enum: ['supplied-comparison', 'different-scenario', 'action', 'unclear'] },
+      requestedScenario: { anyOf: [{ type: 'null' }, {
+        type: 'object', additionalProperties: false, required: ['spot', 'date', 'ivShift'],
+        properties: { spot: { type: ['number', 'null'] }, date: { type: ['string', 'null'] }, ivShift: { type: ['number', 'null'] } },
+      }] },
+    },
+  },
+};
 
 const VERIFICATION_SCHEMA = {
   name: "analysis_verification", strict: true,
@@ -570,7 +594,7 @@ export function strategyFacts(state: StrategyState, snapshot?: MarketSnapshot, c
   const longShares = Math.max(state.stock?.shares ?? 0, 0);
   const shortCallDeliverableShares = state.legs.filter(leg => leg.side === "short" && leg.type === "call").reduce((total, leg) => total + leg.contracts * leg.multiplier, 0);
   const remainingUncommittedLongShares = Math.max(longShares - shortCallDeliverableShares, 0);
-  const lossClassification = metrics.mode === "first-expiry" ? "not-exact" : metrics.maxLoss === null ? "unbounded" : "bounded";
+  const lossClassification: SparringReply['risk_classification'] = metrics.mode === "first-expiry" ? "not-exact" : metrics.maxLoss === null ? "unbounded" : "bounded";
   const boundaries = [...new Set([...state.legs.map((leg) => leg.strike), ...metrics.breakevens])].sort((a, b) => a - b);
   const checkpoints = [...boundaries, ...boundaries.slice(1).map((value, index) => (value + boundaries[index]) / 2)].sort((a, b) => a - b);
   return {
@@ -774,6 +798,7 @@ export function parseSparringRequest(value: unknown): SparringRequest | null {
   const chartContext = record(item.chart_context);
   const probabilityRange = record(item.probability_range);
   const firstExpiryBounds = readFirstExpiryBounds(item.first_expiry_range);
+  if (item.candidate_selection !== undefined && (!isCandidateSelection(item.candidate_selection) || item.chart_context !== undefined || item.probability_range !== undefined || item.first_expiry_range !== undefined)) return null;
   if (item.first_expiry_range !== undefined && (!firstExpiryBounds || isAmericanPreview(state, item.chart_context as SparringRequest["chart_context"]))) return null;
   if (item.probability_range !== undefined && (!probabilityRange || Object.keys(probabilityRange).length !== 2 || typeof probabilityRange.lower !== "number" || typeof probabilityRange.upper !== "number" || !Number.isFinite(probabilityRange.lower) || !Number.isFinite(probabilityRange.upper) || probabilityRange.lower <= 0 || probabilityRange.upper <= probabilityRange.lower)) return null;
   if (item.chart_context !== undefined && (!chartContext || Object.keys(chartContext).some(key => !["view", "metric", "valuationModel", "pnlDisplay", "range"].includes(key)) || (chartContext.range !== undefined && !isChartRange(chartContext.range)) || !["curve", "heatmap", "table"].includes(chartContext.view as string) || !["pnl", "delta", "gamma", "theta", "vega", "rho"].includes(chartContext.metric as string) || (chartContext.view !== "curve" && chartContext.metric !== "pnl") || (chartContext.valuationModel !== undefined && (chartContext.valuationModel !== "american-crr-1024-v1" || chartContext.view !== "heatmap")) || (chartContext.pnlDisplay !== undefined && (!["pnl", "position-value", "risk-percent"].includes(chartContext.pnlDisplay as string) || chartContext.metric !== "pnl" || !pnlDisplayBasis(included, chartContext.pnlDisplay as PnlDisplayMode))))) return null;
@@ -782,6 +807,7 @@ export function parseSparringRequest(value: unknown): SparringRequest | null {
     base_state_version: item.base_state_version as number,
     state,
     conversation,
+    ...(item.candidate_selection !== undefined ? { candidate_selection: structuredClone(item.candidate_selection) as CandidateSelection } : {}),
     ...(chartContext ? { chart_context: { view: chartContext.view, metric: chartContext.metric, ...(chartContext.valuationModel ? { valuationModel: chartContext.valuationModel } : {}), ...(chartContext.pnlDisplay ? { pnlDisplay: chartContext.pnlDisplay } : {}), ...(isChartRange(chartContext.range) ? { range: { min: chartContext.range.min, max: chartContext.range.max } } : {}) } as SparringRequest["chart_context"] } : {}),
     ...(probabilityRange ? { probability_range: { lower: probabilityRange.lower as number, upper: probabilityRange.upper as number } } : {}),
     ...(firstExpiryBounds ? { first_expiry_range: firstExpiryBounds } : {}),
@@ -989,9 +1015,21 @@ export async function spar(
   const firstExpiryBounds = readFirstExpiryBounds(request.first_expiry_range);
   if (request.first_expiry_range !== undefined && (!firstExpiryBounds || preview)) throw new Error("Invalid explicit first-expiry analysis");
   if (request.state.pricing && (!snapshot || validateMarketStrategy(request.state, snapshot).length)) throw new Error("A verified market snapshot is required");
-  const calculated = strategyFacts(request.state, snapshot, request.chart_context, request.probability_range);
+  const calculated: SparringSuccess['calculated'] = strategyFacts(request.state, snapshot, request.chart_context, request.probability_range);
+  let inspectedComparison: ReturnType<typeof compareSearchCandidate> | undefined;
+  if (request.candidate_selection !== undefined) {
+    try {
+      if (!snapshot || request.chart_context !== undefined || request.probability_range !== undefined || request.first_expiry_range !== undefined) throw new Error('Candidate comparison requires a snapshot and no other analysis scope');
+      inspectedComparison = compareSearchCandidate(request.state, snapshot, request.candidate_selection);
+      calculated.positionComparison = inspectedComparison;
+      if (!prompts.INSPECTED_COMPARISON_INTENT_PROMPT) throw new Error('Comparison intent prompt is not configured');
+    } catch (error) {
+      if (error instanceof CandidateSearchLimitError) throw error;
+      throw new InvalidProposalError(error instanceof Error ? error.message : 'Invalid candidate comparison');
+    }
+  }
   if (firstExpiryBounds) calculated.firstExpiryRange = firstExpiryRange(request.state, { ...firstExpiryBounds, tolerance: 1, maxEvaluations: 256 });
-  observeAnalysis(observer, { stage: "facts", reason: "validated-position", input: { state: canonical, analysis_scope: analysisScope, chart_context: request.chart_context, probability_range: request.probability_range, first_expiry_range: request.first_expiry_range }, output: calculated });
+  observeAnalysis(observer, { stage: "facts", reason: "validated-position", input: { state: canonical, analysis_scope: analysisScope, chart_context: request.chart_context, probability_range: request.probability_range, first_expiry_range: request.first_expiry_range, candidate_selection: request.candidate_selection }, output: calculated });
   const candidateAvailable = () => !!snapshot && !snapshot.historical && [snapshot.retrievedAt, snapshot.spotAsOf, ...snapshot.contracts.map(c => c.quoteAsOf)].every(value => { const time = Date.parse(value); return Number.isFinite(time) && time <= Date.now() && Date.now() - time <= 300_000; });
   const controller = new AbortController();
   let verificationReason: AnalysisVerificationError["reason"] = "provider_error";
@@ -1006,7 +1044,7 @@ export async function spar(
   let boundPassages: Array<{ id: string; text: string }> | undefined;
   const complete = async (verification?: unknown, resumed = false): Promise<ProviderResponse> => {
     if (Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
-    const selectingTool = !verification && !preview && !firstExpiryBounds && !toolMessages.length;
+    const selectingTool = !verification && !preview && !firstExpiryBounds && !request.candidate_selection && !toolMessages.length;
     const response = await Promise.race([deadline, providerFetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -1019,8 +1057,8 @@ export async function spar(
         model: MODEL,
         stream: false,
         max_tokens: MAX_OUTPUT_TOKENS,
-        reasoning: { effort: verification ? "low" : "medium", exclude: true },
-        messages: verification ? [{ role: "system", content: prompts.VERIFICATION_PROMPT + (boundPassages ? `\n${prompts.BOUND_VERIFICATION_PROMPT}` : "") }, { role: "user", content: JSON.stringify(verification) }] : [
+        reasoning: { effort: verification || inspectedComparison ? "low" : "medium", exclude: true },
+        messages: inspectedComparison ? [{ role: 'system', content: prompts.INSPECTED_COMPARISON_INTENT_PROMPT }, { role: 'user', content: JSON.stringify({ comparison: inspectedComparison, conversation: request.conversation }) }] : verification ? [{ role: "system", content: prompts.VERIFICATION_PROMPT + (boundPassages ? `\n${prompts.BOUND_VERIFICATION_PROMPT}` : "") }, { role: "user", content: JSON.stringify(verification) }] : [
           ...(draftMessages ??= [
           { role: "system", content: prompts.SYSTEM_PROMPT },
           {
@@ -1043,7 +1081,7 @@ export async function spar(
           ]),
           ...toolMessages,
         ],
-        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [{ ...CANDIDATE_TOOL, function: { ...CANDIDATE_TOOL.function, description: prompts.CANDIDATE_TOOL_DESCRIPTION ?? CANDIDATE_TOOL.function.description } }] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
+        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [{ ...CANDIDATE_TOOL, function: { ...CANDIDATE_TOOL.function, description: prompts.CANDIDATE_TOOL_DESCRIPTION ?? CANDIDATE_TOOL.function.description } }] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: inspectedComparison ? COMPARISON_INTENT_SCHEMA : verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
         provider: {
           allow_fallbacks: false,
           data_collection: "deny",
@@ -1090,6 +1128,7 @@ export async function spar(
     const message = provider.choices?.[0]?.message;
     if (message && hasToolCalls(message.tool_calls)) {
       observeAnalysis(observer, { stage: "tool-request", reason: "model-requested-tool", input: message.tool_calls });
+      if (request.candidate_selection) { observeAnalysis(observer, { stage: "tool-rejection", reason: "explicit-analysis-tools-disabled" }); throw new InvalidProposalError('Selected candidate discussion does not allow tool selection'); }
       if (firstExpiryBounds) { observeAnalysis(observer, { stage: "tool-rejection", reason: "explicit-analysis-tools-disabled" }); throw new Error("Explicit first-expiry analysis does not allow tool selection"); }
       if (preview) { observeAnalysis(observer, { stage: "tool-rejection", reason: "preview-tools-disabled" }); throw new Error("American preview does not support additional scenario tools"); }
       let call: Record<string, unknown>;
@@ -1132,6 +1171,16 @@ export async function spar(
     }
     const content = provider.choices?.[0]?.message?.content;
     if (typeof content !== "string") throw new Error("Provider response is missing content");
+    if (inspectedComparison) {
+      const intent = parseComparisonIntent(parseDraftJson(content));
+      if (!intent) throw new InvalidProposalError('Candidate discussion intent failed validation');
+      calculated.comparisonIntent = intent;
+      const reply: SparringReply = { ...renderCandidateComparison(inspectedComparison, intent), operations: [], evidence_ids: [], risk_classification: calculated.lossClassification };
+      const next = { ...canonical, version: canonical.version + 1 };
+      observeAnalysis(observer, { stage: 'proposal-check', reason: 'deterministic-comparison-rendered', input: intent, output: { reply, next_state: next } });
+      observeAnalysis(observer, { stage: 'completion', reason: 'deterministic-comparison-accepted' });
+      return { request_id: request.request_id, base_state_version: request.base_state_version, reply, next_state: next, metrics: calculateStrategy(request.state), calculated, market_context: marketContext };
+    }
     const reply = parseReply(parseDraftJson(content));
     if (!reply) { observeAnalysis(observer, { stage: "proposal-check", reason: "reply-schema-rejected" }); throw new Error("Provider response failed schema validation"); }
     observeAnalysis(observer, { stage: "proposal-check", reason: "checking-deterministic-constraints", input: reply });
