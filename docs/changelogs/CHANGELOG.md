@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Repeated the unchanged v17 synthetic qualification with bounded raw-response
+  diagnostics: 3/6 tasks passed, with 15 attempted inference calls and no retries.
+  A bear-put reply understated maximum profit ($475 instead of $975) and was
+  withheld; missing-outlay timed out during generation; a correct butterfly
+  clarification was also withheld. Independent numerical review reconciled all
+  20 returned candidates. V17 remains inactive; no timeout or guard was relaxed.
+  This is failed qualification evidence, not a shipped conversation improvement.
+
 - Added a controlled late-clarification regression crossing plain/fenced JSON
   with verification inside/outside the existing shared 20-second deadline.
   Both formats succeed within the deadline and fail closed beyond it; 102 focused
