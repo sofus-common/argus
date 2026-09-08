@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Completed optional second-expiry selection in the chain builder. Single-date
+  requests omit blank values; missing first dates and duplicates cannot submit.
+  Incompatible calendar rebuilds preserve holdings, and Undo restores the prior
+  contract catalog. Verified 26 browser checks each at desktop and 390px, 73
+  chain/API tests, TypeScript/build and independent review. A real same-day SPY
+  rebuild returned a 50-contract window; a later failed refresh preserved all
+  four fixed entry costs. Continuous refresh reliability is still unproven.
+
 - Enabled same-day option-chain admission before verified provider stop times.
   Closed same-day expiries are omitted from default windows; explicit expired
   selections and retained contracts fail without substitution. Conflicting
