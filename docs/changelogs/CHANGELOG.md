@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed the save API dropping cash-index identity during canonicalization, which
+  made an accepted XSP save fail on reopening. Actual Worker/database tests now
+  cover save, reopen, revision update and second reopen, preserving model, terms
+  and held entry costs. Missing or forged kinds remain rejected. All 90 API,
+  private API and saved-store checks pass. Existing malformed records are not
+  rewritten or inferred from their ticker.
+
 - Added read-only conversation about inspected optimizer candidates, preserving
   held entry costs and the pending proposal until explicit Apply or dismissal.
   One bounded intent call selects topics; deterministic calculations and rendering

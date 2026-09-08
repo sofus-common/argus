@@ -19,6 +19,36 @@ import { promptDigest, ANALYSIS_ENGINE_VERSION } from '../src/analysis-config';
 
 const local = { ARGUS_LOCAL_DEV: "true" };
 const traceDB = (env as { DB: D1Database }).DB;
+it('preserves index identity through actual save, reopen and revision update routes', async () => {
+  await traceDB.batch(snapshotMigration.split(';').filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
+  const now = Date.now(), at = new Date(now).toISOString(), expiry = new Date(now + 30 * 86400000).toISOString();
+  const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, indexSourceTime: at, contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, availableExpiries: [expiry.slice(0, 10)], contracts: [{ contractId: `XSP   ${expiry.slice(2, 10).replaceAll('-', '')}C00100000`, type: 'call', strike: 100, expiry, multiplier: 100, bid: 2, ask: 3, iv: .25, quoteAsOf: at }] };
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([undefined, undefined, undefined])));
+  const fingerprint = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  await traceDB.prepare('INSERT INTO quote_snapshots (id, owner, credential_fingerprint, expires_at, snapshot_json) VALUES (?, ?, ?, ?, ?)').bind(snapshot.id, 'local-development', fingerprint, now + 600000, JSON.stringify(snapshot)).run();
+  const provider = vi.fn<typeof fetch>(), app = createApp(provider), state = createMarketStrategy('long-call', snapshot);
+  state.pricing!.entryMode = 'fixed'; state.legs[0].entryPrice = 1.23;
+  const request = (path: string, method = 'GET', body?: unknown) => app.request(`http://localhost${path}`, { method, headers: { Origin: 'http://localhost', 'X-ARGUS-Request': '1', 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }, { ...local, DB: traceDB });
+  for (const underlyingKind of [undefined, 'equity']) expect((await request('/api/strategies', 'POST', { title: 'Invalid kind', state: { ...state, underlyingKind } })).status).toBe(422);
+  const created = await request('/api/strategies', 'POST', { title: 'Index position', state });
+  expect(created.status).toBe(201);
+  const { record } = await created.json() as any;
+  expect(record.state).toMatchObject({ underlyingKind: 'cash-index', valuationModel: 'european-bsm-v1', legs: [{ entryPrice: 1.23 }] });
+  expect((await createSavedStore(traceDB).get('local-development', record.id)).state).toEqual(record.state);
+  const loaded = await request(`/api/strategies/${record.id}`);
+  expect(loaded.status).toBe(200);
+  const reopened = (await loaded.json() as any).record;
+  expect(reopened.state.underlyingKind).toBe('cash-index');
+  expect(reopened.snapshot.contractTerms).toEqual(snapshot.contractTerms);
+  reopened.state.legs[0].entryPrice = 1.5;
+  const updated = await request(`/api/strategies/${record.id}`, 'PUT', { title: 'Index revision', revision: reopened.revision, state: reopened.state });
+  expect(updated.status).toBe(200);
+  expect((await updated.json() as any).record.state.underlyingKind).toBe('cash-index');
+  const final = await request(`/api/strategies/${record.id}`);
+  expect(final.status).toBe(200);
+  expect((await final.json() as any).record).toMatchObject({ revision: 2, state: { underlyingKind: 'cash-index', legs: [{ entryPrice: 1.5 }] }, snapshot: { underlyingKind: 'cash-index', contractTerms: snapshot.contractTerms } });
+  expect(provider).not.toHaveBeenCalled();
+});
 it('loads an index chain through bounded internal feed acquisition and reuses the stored identity', async () => {
   await traceDB.batch(snapshotMigration.split(';').filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
   const expiry = '2099-09-18', call = 'XSP   990918C00100000', put = 'XSP   990918P00100000';
