@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Real-data verification found remaining reliability gaps, not a release pass.
+  A real four-leg SPY workspace retained all fixed costs and its exclusion on
+  successful REST refresh; a failed refresh preserved the existing position.
+  Explicit feed reconnect restored all selected quote/IV coverage, but bid/ask
+  source timestamps remained unavailable and capture correctly stayed disabled.
+  The bounded feed probe failed freshness/progression checks. Intermittent chain
+  failures still need diagnosis; no freshness guard was weakened.
+
 - Completed same-snapshot/basis candidate and template transfer into fixed-entry
   positions with exclusions. Retained costs stay unchanged; replacement quote
   estimates become fixed inputs. Raw candidate prices validate before promotion,
