@@ -429,6 +429,42 @@ it("retains signed quantities, stock basis, fees and carry edge cases in conditi
   oversizedPuts.legs.forEach(leg => { leg.contracts = 1e15; });
   expect(calculateStrategy(oversizedPuts).conditionalTail).toMatchObject({ outcome: 'numerically-unresolved', slope: null, intercept: null, zeroSpotPnl: null });
 }, 30000);
+it('uses each surviving maturity for three- and four-expiry conditional tails', () => {
+  const base = { ...createStrategy('call-calendar'), pricing: { mode: 'market' as const, snapshotId: 'tail-fixture', basis: 'mid' as const } }, first = Date.parse(base.legs[0].expiry);
+  const leg = (days: number, side: 'long' | 'short', contracts = 1, type: 'call' | 'put' = 'call', strike = 100): OptionLeg => {
+    const expiry = new Date(first + days * 86400000).toISOString();
+    return { ...base.legs[0], id: `${days}-${side}-${strike}`, expiry, side, contracts, type, strike, entryPrice: 2, contractId: `${base.underlying.padEnd(6)}${expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}` };
+  };
+  for (const days of [[30, 60], [30, 60, 90]]) for (const reverse of [false, true]) {
+    const legs = [leg(0, 'long', 1, 'put'), ...days.map((day, index) => leg(day, (index === days.length - 1) !== reverse ? 'short' : 'long', index === days.length - 1 ? days.length - 1 : 1))];
+    const state = { ...base, rate: .05, dividendYield: .02, feeAllowance: 7, legs };
+    const facts = calculateStrategy(state).conditionalTail!;
+    const entry = legs.reduce((sum, item) => sum + (item.side === 'long' ? 1 : -1) * item.contracts * 100 * item.entryPrice, 0) + 7;
+    const slope = legs.filter(item => item.type === 'call').reduce((sum, item) => sum + (item.side === 'long' ? 1 : -1) * item.contracts * 100 * Math.exp(-.02 * (Date.parse(item.expiry) - first) / (365 * 86400000)), 0);
+    const intercept = -entry - legs.filter(item => item.type === 'call').reduce((sum, item) => sum + (item.side === 'long' ? 1 : -1) * item.contracts * 100 * item.strike * Math.exp(-.05 * (Date.parse(item.expiry) - first) / (365 * 86400000)), 0);
+    expect(facts.outcome).toBe(reverse ? 'loss-unbounded' : 'profit-unbounded');
+    expect(facts.slope).toBeCloseTo(slope, 11); expect(facts.intercept).toBeCloseTo(intercept, 8);
+    expect(payoffSeries(state, 2000, 2001, 1)[0].pnl).toBeCloseTo(slope * 2000 + intercept, 5);
+  }
+  for (const valuationModel of ['european-bsm-v1', 'american-crr-1024-v1'] as const) for (const dividendYield of [-.04, 0, .08]) for (const rate of [-.03, .05]) {
+    const state = { ...base, valuationModel, dividendYield, rate, legs: [leg(0, 'long', 1, 'put'), leg(30, 'long'), leg(60, 'short'), leg(90, 'long')], stock: { shares: -37, entryPrice: 91 }, feeAllowance: 11 };
+    const facts = calculateStrategy(state).conditionalTail!;
+    let slope = -37, intercept = 37 * 91 - 11;
+    for (const item of state.legs) {
+      const quantity = (item.side === 'long' ? 1 : -1) * item.contracts * 100, years = (Date.parse(item.expiry) - first) / (365 * 86400000);
+      intercept -= quantity * item.entryPrice;
+      if (item.type !== 'call') continue;
+      const carry = valuationModel === 'american-crr-1024-v1' ? Math.min(0, dividendYield) : dividendYield;
+      const discount = valuationModel === 'american-crr-1024-v1' && dividendYield > 0 ? 1 : valuationModel === 'american-crr-1024-v1' && dividendYield === 0 ? Math.exp(Math.min(0, -rate * years)) : Math.exp(-rate * years);
+      slope += quantity * Math.exp(-carry * years); intercept -= quantity * item.strike * discount;
+    }
+    expect(facts.slope).toBeCloseTo(slope, 11); expect(facts.intercept).toBeCloseTo(intercept, 8);
+  }
+  const cancelled = { ...base, dividendYield: .02, legs: [leg(0, 'long', 1, 'put'), ...[30, 60, 90].flatMap(day => [leg(day, 'long'), leg(day, 'short', 1, 'call', 105)])] };
+  expect(calculateStrategy(cancelled).conditionalTail).toMatchObject({ outcome: 'finite-limit', slope: 0 });
+  const uncertain = { ...base, dividendYield: 1e-15, legs: [leg(0, 'long', 1, 'put'), leg(30, 'long'), leg(60, 'short', 2), leg(90, 'long')] };
+  expect(calculateStrategy(uncertain).conditionalTail).toMatchObject({ outcome: 'numerically-unresolved', slope: null, intercept: null, zeroSpotPnl: null });
+}, 30000);
 it("describes endpoint valuation without inventing historical-path or assignment simulation", () => {
   for (const valuationModel of ["european-bsm-v1", "american-crr-1024-v1"] as const) {
     const initial = { ...createStrategy("call-calendar"), valuationModel, feeAllowance: 7 };

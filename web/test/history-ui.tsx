@@ -86,6 +86,36 @@ async function run() {
     finally { await unmount() }
   }
   try {
+    await test('Three-expiry tail reaches the rendered workspace through the valuation worker', async () => {
+      await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
+      const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-09-10T20:00:00.000Z', '2027-10-08T20:00:00.000Z', '2027-11-12T20:00:00.000Z'];
+      const snapshot: MarketSnapshot = { id: 'three-expiry-tail', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: dates.map(date => date.slice(0, 10)), contracts: dates.map((expiry, index) => ({ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}${index ? 'C' : 'P'}00100000`, type: index ? 'call' : 'put', strike: 100, expiry, multiplier: 100, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp })) };
+      const held = createMarketStrategy('long-put', snapshot);
+      held.dividendYield = .02; held.valuationModel = 'european-bsm-v1';
+      held.legs = snapshot.contracts.map((contract, index) => ({ id: `tail-${index}`, contractId: contract.contractId, type: contract.type, side: index === 1 ? 'short' : 'long', contracts: 1, strike: contract.strike, expiry: contract.expiry, multiplier: 100, entryPrice: 2.5, iv: contract.iv }));
+      const record = { id: 'three-expiry-saved', title: 'Three expiry tail', revision: 1, createdAt: stamp, updatedAt: stamp, state: held, snapshot };
+      window.WebSocket = class { close() {} } as unknown as typeof WebSocket;
+      window.fetch = (async url => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Tail fixture', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies') return Response.json({ strategies: [record] });
+        if (url === '/api/strategies/three-expiry-saved') return Response.json({ record });
+        throw new Error(`Unexpected tail request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 800 && !check(); i++) await settleTimers(); assert(check(), 'Three-expiry workspace did not settle') };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !!fixture.querySelector('option[value="three-expiry-saved"]'));
+        await change('Saved positions', record.id); await click('Load');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Conditional first-expiry tail"]'));
+        const tail = fixture.querySelector('[aria-label="Conditional first-expiry tail"]')!.textContent!;
+        assert(tail.includes('loss grows without bound') && !tail.includes('finite limit'), `Wrong rendered three-expiry tail: ${tail}`);
+        const years = (index: number) => (Date.parse(dates[index]) - Date.parse(dates[0])) / (365 * 86400000);
+        const expectedSlope = 100 * (Math.exp(-.02 * years(2)) - Math.exp(-.02 * years(1)));
+        const provenance = fixture.querySelector('[aria-label="Sampled range assumptions"]')!.textContent!;
+        assert(provenance.includes(`slope ${expectedSlope.toPrecision(6)} USD per $1 spot`), `Rendered slope does not match independent dated-carry expression: ${provenance}`);
+        assert(tail.includes('Not lifetime or assignment risk'), 'Conditional tail lost its risk scope');
+      } finally { await unmount(); window.fetch = priorFetch; window.WebSocket = priorSocket }
+    });
     await test('Lot manager rolls, revisits and closes saved holdings with revision-bound performance', async () => {
       await unmount(); const priorFetch = window.fetch;
       const stamp = '2026-09-01T12:00:00.000Z', range = { start: '2026-09-01', end: '2026-09-03' };
@@ -674,7 +704,7 @@ async function run() {
     });
     await test('Workspace captures preserve holdings and scenarios, group automatic Undo and reject late edits', async () => {
       await unmount(); const priorFetch = window.fetch, originalSocket = window.WebSocket, originalWorker = window.Worker;
-      let socket: { onmessage?: (event: { data: string }) => void } | undefined, captures = 0;
+      let socket: { onmessage?: (event: { data: string }) => void } | undefined, captures = 0, chainRequests = 0;
       let release: (() => void) | undefined, delay = false;
       const stamp = new Date(fixedNow - 120000).toISOString(), expiry = '2027-10-09T20:00:00.000Z';
       const contracts = [90, 95, 100, 105, 110].flatMap(strike => ['call', 'put'].map(type => ({ contractId: `SPY   271009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry, multiplier: 100, bid: 2, ask: 3, iv: .2, quoteAsOf: stamp })));
@@ -689,6 +719,7 @@ async function run() {
         if (url === '/api/strategies') return delayLists ? new Promise<Response>(resolve => listResponses.push(resolve)) : json({ strategies: importedWorkspace ? [{ id: 'imported-workspace', title: 'Imported fixture', revision: 1, createdAt: stamp, updatedAt: stamp }] : [] });
         if (url === '/api/strategies/import') { importedWorkspace = true; return Response.json({ record: { id: 'imported-workspace', revision: 1 } }, { status: 201 }) }
         if (String(url).startsWith('/api/chain?')) {
+          chainRequests++;
           assert(new URL(String(url), location.origin).searchParams.get('retain') !== '', 'Empty retained-contract query rejected by real endpoint');
           assert(new URL(String(url), location.origin).searchParams.get('expiries') !== '', 'Empty expiry query rejected by real endpoint');
           return json({ snapshot });
@@ -707,9 +738,9 @@ async function run() {
         return json({ snapshot: { ...snapshot, id: expectedSnapshot, captureSource: 'DXLink', spot: 102 + index, retrievedAt: at, spotAsOf: at, spotSourceTimes: { bid: at, ask: at }, contracts: [{ ...contract, bid: 4, ask: 5, iv: delay ? .4 : .3, quoteAsOf: at, sourceTimes: { bid: at, ask: at, iv: at } }] } });
       }) as typeof fetch;
       const field = (label: string) => fixture.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
-      const waitFor = async (check: () => boolean) => {
+      const waitFor = async (check: () => boolean, stage: string) => {
         for (let i = 0; i < 800 && !check(); i++) await settleTimers();
-        assert(check(), `Workspace did not reach expected state: ${fixture.querySelector('#workspace-chart')?.textContent}`);
+        assert(check(), `Workspace ${stage} did not reach expected state; chain requests=${chainRequests}; captures=${captures}; errors=${[...fixture.querySelectorAll('[role="alert"], .calculation-error, .workspace-error')].map(node => node.textContent).join(' | ')}; comparison=${fixture.querySelector('.comparison-banner')?.textContent}; chart=${fixture.querySelector('#workspace-chart')?.textContent}`);
       };
       const auto = () => field('Automatic repricing');
       const termsText = () => fixture.querySelector('[aria-label="Recorded contract terms"]')?.textContent;
@@ -734,10 +765,10 @@ async function run() {
         const importFile = new File([JSON.stringify({ format: 'argus-saved-position', formatVersion: 1, exportedAt: stamp, record: { id: 'exported-fixture', title: 'Imported fixture', revision: 1, createdAt: stamp, updatedAt: stamp, state: createStrategy('long-call'), snapshot: null, lifecycle: null } })], 'fixture.json', { type: 'application/json' });
         const files = new DataTransfer(); files.items.add(importFile);
         await act(async () => { field('Saved JSON file').files = files.files; field('Saved JSON file').dispatchEvent(new Event('change', { bubbles: true })); await importFile.text(); });
-        await waitFor(() => !!fixture.querySelector('.import-preview'));
+        await waitFor(() => !!fixture.querySelector('.import-preview'), 'import preview');
         assert(!importedWorkspace, 'File selection wrote a saved position');
         await click('Import as new saved position');
-        await waitFor(() => !!fixture.querySelector('option[value="imported-workspace"]'));
+        await waitFor(() => !!fixture.querySelector('option[value="imported-workspace"]'), 'imported saved list');
         assert(originalInputs() === beforeImport && field('Saved positions').value === savedSelection && fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.disabled, 'Import replaced holdings, selection or Undo');
         delayLists = true;
         await click('Refresh saved list'); await click('Refresh saved list');
@@ -770,22 +801,22 @@ async function run() {
         const undoDisabled = fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.disabled;
         await click('Freeze comparison');
         const baselineText = fixture.querySelector('.comparison-banner details')!.textContent;
-        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'));
+        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'), 'freeze comparison curve');
         const baselinePath = fixture.querySelector('path.proposal-line')!.getAttribute('d');
         assert(fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.disabled === undoDisabled, 'Freezing comparison changed Undo');
         await change('Contracts', '2');
-        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'));
+        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'), 'edited quantity comparison');
         assert(fixture.querySelector('.comparison-banner details')!.textContent === baselineText, 'Manual edit mutated frozen baseline');
         await undo();
-        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'));
+        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'), 'quantity Undo comparison');
         assert(fixture.querySelector('path.proposal-line')!.getAttribute('d') === baselinePath, 'Restored position changed baseline curve');
         const originalDate = field('Scenario date UTC').value;
         await change('Scenario time', '500');
-        await waitFor(() => fixture.querySelector('.comparison-banner')!.textContent!.includes('overlay hidden'));
+        await waitFor(() => fixture.querySelector('.comparison-banner')!.textContent!.includes('overlay hidden'), 'incompatible date guard');
         assert(!fixture.querySelector('path.proposal-line'), 'Incompatible scenario retained overlay');
         await undo();
         assert(field('Scenario date UTC').value === originalDate, 'Scenario Undo failed');
-        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'));
+        await waitFor(() => !!fixture.querySelector('path.proposal-line')?.getAttribute('d'), 'scenario Undo comparison');
         await change('Contracts', '2');
         await click('Replace baseline');
         assert(fixture.querySelector('.comparison-banner details')!.textContent !== baselineText, 'Replace baseline retained old inputs');
@@ -802,13 +833,13 @@ async function run() {
         await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(thesisField, '   '); thesisField.dispatchEvent(new Event('input', { bubbles: true })); });
         assert(thesisPanel.querySelector('summary')!.textContent?.includes('optional'), 'Whitespace-only thesis incorrectly included');
         await act(async () => [...fixture.querySelectorAll<HTMLButtonElement>('.template-list button')].find(item => item.textContent?.includes('Long call'))!.click());
-        await click('Use real prices'); await waitFor(() => !!auto());
+        await click('Use real prices'); await waitFor(() => !!auto(), 'first quote load');
         assert(termsText()?.includes('Supported contract terms are unavailable'), 'Quotes without recorded terms inferred exercise style');
         const comparison = () => fixture.querySelector<HTMLElement>('[aria-label="Quote and model comparison"]');
         assert(comparison(), 'Quote/model comparison missing');
         const expectedPnl = calculateStrategy(createMarketStrategy('long-call', snapshot as MarketSnapshot)).scenarioPnl;
         const usd = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
-        await waitFor(() => comparison()!.querySelectorAll('dd')[1]?.textContent === usd(expectedPnl));
+        await waitFor(() => comparison()!.querySelectorAll('dd')[1]?.textContent === usd(expectedPnl), 'initial quoted model P/L');
         assert(comparison()!.querySelectorAll('dd')[0].textContent === '$0.00' && comparison()!.querySelectorAll('dd')[2].textContent === usd(expectedPnl), 'Quote/model comparison amounts do not reconcile');
         assert(comparison()!.textContent?.includes('not measured mispricing') && comparison()!.textContent?.includes(stamp), 'Quote/model scope or dated provenance missing');
         await act(async () => comparison()!.querySelector('summary')!.click());
@@ -823,14 +854,14 @@ async function run() {
         const optionCount = fixture.querySelectorAll('.leg-row').length;
         for (let index = 0; index < optionCount; index++) await act(async () => fixture.querySelector<HTMLButtonElement>('.leg-row [aria-label="Remove leg"]')!.click());
         assert(fixture.querySelectorAll('.leg-row').length === 0 && field('Shares').value === '50', 'Last option cannot be removed into stock-only holdings');
-        await waitFor(() => fixture.querySelector('.metric-ribbon')?.textContent?.includes('$100') === true);
+        await waitFor(() => fixture.querySelector('.metric-ribbon')?.textContent?.includes('$100') === true, 'stock-only ribbon');
         assert(!fixture.querySelector('.expiry-reference') && !fixture.querySelector('[aria-label="Scenario time"]'), 'Stock-only view invented an option expiry');
         assert(fixture.textContent?.includes('Stock-only') && fixture.textContent?.includes('No option expiry'), 'Stock-only scope is not visible');
-        await click('Table'); await waitFor(() => !!fixture.querySelector('[aria-label="Scenario P/L and Greeks"]'));
+        await click('Table'); await waitFor(() => !!fixture.querySelector('[aria-label="Scenario P/L and Greeks"]'), 'stock-only table');
         await click('Curve');
         await click('Freeze comparison');
         await commitField('Shares', '60');
-        await waitFor(() => !!fixture.querySelector('.proposal-line')?.getAttribute('d'));
+        await waitFor(() => !!fixture.querySelector('.proposal-line')?.getAttribute('d'), 'stock-only comparison');
         assert(!fixture.querySelector('.comparison-banner')?.textContent?.includes('overlay hidden'), 'Stock-only baseline is incompatible');
         await undo(); await click('Clear baseline');
         await click('Connect live feed');
@@ -856,8 +887,8 @@ async function run() {
         for (const id of ['SPY', contract.contractId]) await emit({ type: 'quote', contractId: id, bid: 1, ask: 2, bidTime: fixedNow, askTime: fixedNow, receivedAt: new Date(fixedNow).toISOString() });
         await emit({ type: 'greeks', contractId: contract.contractId, iv: .3, time: fixedNow, receivedAt: new Date(fixedNow).toISOString() });
         assert(captures === 0 && fixture.querySelector('[aria-label="Position snapshot source age"]')!.textContent === snapshotAge, 'Uncaptured stream changed snapshot age');
-        await waitFor(() => !auto().disabled); await act(async () => auto().click());
-        await waitFor(() => captures >= 2 && field('Scenario spot').value === '104');
+        await waitFor(() => !auto().disabled, 'automatic capture eligible'); await act(async () => auto().click());
+        await waitFor(() => captures >= 2 && field('Scenario spot').value === '104', 'second automatic capture');
         assert(termsText()?.includes('Recorded snapshot terms: American exercise') && termsText()?.includes('100 shares per contract') && termsText()?.includes('PM settlement') && termsText()?.includes('not a current corporate-action check'), 'Captured recorded terms or scope missing');
         assert(holdings() === held && field('Implied volatility').value === '30', 'Automatic capture changed holdings or omitted IV');
         await act(async () => auto().click()); await undo(); expectedSnapshot = snapshot.id;
@@ -869,7 +900,7 @@ async function run() {
         changedScenario.legs = changedScenario.legs.map(leg => ({ ...leg, contracts: 2, entryPrice: 1.23 }));
         changedScenario.stock = { shares: 50, entryPrice: 98 }; changedScenario.scenarioSpot = 97.5;
         const changedPnl = calculateStrategy(changedScenario).scenarioPnl;
-        await waitFor(() => comparison()!.querySelectorAll('dd')[1]?.textContent === usd(changedPnl));
+        await waitFor(() => comparison()!.querySelectorAll('dd')[1]?.textContent === usd(changedPnl), 'changed scenario P/L');
         assert(quoteBeforeScenario === '$354.00' && comparison()!.querySelectorAll('dd')[0].textContent === quoteBeforeScenario && comparison()!.querySelectorAll('dd')[2].textContent === usd(changedPnl - 354) && comparison()!.textContent?.includes('spot $97.50'), 'Held-entry difference, dated quote P/L or scenario labels are wrong');
         const future = new Date(fixedNow + 3600000).toISOString().slice(0, -1);
         await change('Scenario date UTC', future);

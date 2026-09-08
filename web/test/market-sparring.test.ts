@@ -14,6 +14,20 @@ const snapshot: MarketSnapshot = {
   }))),
 };
 const context: MarketContext = { retrievedAt: snapshot.retrievedAt, sources: [] };
+it("grounds AI facts in each surviving expiry without claiming an exact risk bound", () => {
+  const first = Date.parse(snapshot.contracts[0].expiry);
+  const quotes: MarketSnapshot = { ...snapshot, contracts: [0, 30, 60].map((days, index) => {
+    const expiry = new Date(first + days * 86400000).toISOString(), type = index ? "call" as const : "put" as const;
+    return { ...snapshot.contracts[0], type, expiry, contractId: `SPY   ${expiry.slice(2, 10).replaceAll("-", "")}${index ? "C" : "P"}00645000` };
+  }) };
+  const state = createMarketStrategy("long-put", quotes);
+  state.legs = quotes.contracts.map((quote, index) => marketLeg(quote, index === 1 ? "short" : "long", 1, quote.contractId, "mid"));
+  state.rate = .05; state.dividendYield = .02;
+  const facts = strategyFacts(state);
+  expect(facts.metrics.conditionalTail?.slope).toBeCloseTo(100 * (Math.exp(-.02 * 60 / 365) - Math.exp(-.02 * 30 / 365)), 12);
+  expect(facts.metrics.conditionalTail?.outcome).toBe("loss-unbounded");
+  expect(facts.metrics.maxLoss).toBeNull(); expect(facts.lossClassification).toBe("not-exact");
+});
 it("supplies sampled range provenance without exact calendar risk claims", () => {
   const state = createStrategy("call-calendar");
   const facts = strategyFacts(state);

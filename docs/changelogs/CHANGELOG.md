@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Corrected conditional first-expiry tail calculations for positions with three
+  or four expiries. Each surviving maturity now receives its own carry and
+  strike discount; exact same-expiry offsets and numerical-uncertainty guards
+  are preserved. Previously, offsetting calls at different expiries could be
+  misclassified as a finite tail despite model-unbounded loss. Independent
+  high-spot checks covered both models and signed carry; 225 focused tests,
+  TypeScript and build passed. AI facts retain the distinction between this
+  conditional tail and an exact maximum-loss or lifetime-risk bound.
+  The corrected warning and numerical slope reach the real valuation Worker
+  and rendered UI; all 31 browser harness checks passed at desktop and mobile
+  widths after freezing source updates. Providers remain mocked in this check.
+
 - Expanded direct discovery with selectable covered-call, protective-put and
   collar families, each using 100 shares at the dated underlying mark. Added an
   explicit maximum net entry outlay, including shares, premiums and allowance,

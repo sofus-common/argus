@@ -1198,31 +1198,36 @@ export function firstExpiryBreakevens(state: StrategyState, input: { min: number
 
 function firstExpiryTail(state: StrategyState): NonNullable<StrategyMetrics["conditionalTail"]> {
   const at = firstExpiry(state), model = state.valuationModel ?? "european-bsm-v1";
-  const years = (Math.max(...state.legs.map(leg => Date.parse(leg.expiry))) - at) / YEAR_MS;
   const carry = model === "american-crr-1024-v1" ? Math.min(0, state.dividendYield) : state.dividendYield;
-  const exponent = -carry * years;
-  let baseSlope = state.stock?.shares ?? 0, futureCalls = 0;
+  let baseSlope = state.stock?.shares ?? 0;
+  const futureCalls = new Map<number, number>();
   let safeQuantities = true;
   let intercept = -entryCost(state) - (state.feeAllowance ?? 0);
   for (const leg of state.legs) {
     const quantity = (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier;
     safeQuantities &&= Number.isSafeInteger(quantity);
     if (leg.type !== "call") continue;
-    const future = Date.parse(leg.expiry) > at;
+    const expiry = Date.parse(leg.expiry), years = (expiry - at) / YEAR_MS, future = expiry > at;
     baseSlope += quantity;
-    if (future) futureCalls += quantity;
-    safeQuantities &&= [baseSlope, futureCalls].every(Number.isSafeInteger);
+    if (future) futureCalls.set(expiry, (futureCalls.get(expiry) ?? 0) + quantity);
+    safeQuantities &&= Number.isSafeInteger(baseSlope) && (!future || Number.isSafeInteger(futureCalls.get(expiry)));
     const discount = !future || (model === "american-crr-1024-v1" && state.dividendYield > 0) ? 1
       : model === "american-crr-1024-v1" && state.dividendYield === 0 ? Math.exp(Math.min(0, -state.rate * years)) : Math.exp(-state.rate * years);
     intercept -= quantity * leg.strike * discount;
   }
-  // Two-expiry invariant: all surviving calls share carry; aggregate before cancellation.
-  const correction = futureCalls === 0 ? 0 : futureCalls * Math.expm1(exponent);
+  // Aggregate matching maturities before applying carry so exact offsets cancel.
+  let correction = 0, correctionMagnitude = 0;
+  for (const [expiry, quantity] of [...futureCalls].sort(([a], [b]) => a - b)) {
+    const years = (expiry - at) / YEAR_MS;
+    const term = quantity === 0 ? 0 : quantity * Math.expm1(-carry * years);
+    correction += term;
+    correctionMagnitude += Math.abs(term);
+  }
   const slope = baseSlope + correction;
   const zeroSpotPnl = strategyValue(state, 0, at) - entryCost(state) - (state.feeAllowance ?? 0);
-  const finiteLimit = baseSlope === 0 && (futureCalls === 0 || carry === 0);
+  const finiteLimit = baseSlope === 0 && (carry === 0 || [...futureCalls.values()].every(quantity => quantity === 0));
   const resolved = [slope, intercept, zeroSpotPnl].every(Number.isFinite) && safeQuantities
-    && (finiteLimit || Math.abs(slope) > 8 * Number.EPSILON * (Math.abs(baseSlope) + Math.abs(correction)));
+    && (finiteLimit || Math.abs(slope) > 8 * Number.EPSILON * (Math.abs(baseSlope) + correctionMagnitude));
   return {
     date: new Date(at).toISOString(), model,
     zeroSpotPnl: resolved ? rounded(zeroSpotPnl) : null,
