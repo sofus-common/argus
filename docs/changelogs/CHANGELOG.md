@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Qualified the expanded position through D1 save, close, atomic roll, private
+  export/import and final closure. The synthetic ledger reconciles $200 realized
+  plus $1,600 unrealized less $7 allowance to $1,793 final net realized P/L.
+  Added valid maximum-length Unicode/escaped conversation admission checks;
+  their reproduced HTTP 413 required increasing the ordinary request envelope
+  from 32 to 128 KiB without changing field, snapshot, ownership or rate guards.
+  Verified 70 focused checks, TypeScript/build and independent review.
+  The opt-in live-chain wide check passed with 200 real SPY quotes, eight legs
+  across four expiries, unchanged held entries, server/local scenario agreement,
+  and persisted trace readback. One AI task used three inference requests; this
+  does not prove sustained feed reliability or general trading judgment.
+
 - Integrated eight-leg/four-expiry controls and all 200 quotes into the builder.
   Optional dates are omitted from requests; duplicate dates and ninth legs are
   rejected. Scenario IV adjustments and read-only leg-removal comparisons use

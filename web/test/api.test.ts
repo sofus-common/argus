@@ -245,6 +245,24 @@ function post(app: ReturnType<typeof createApp>, body: unknown, env: Bindings = 
 }
 
 describe("sparring API", () => {
+  it.each(['界', '\u0000'])('admits maximum-length %j conversation with eight legs without bypassing snapshot requirements', async text => {
+    await traceDB.batch(snapshotMigration.split(';').filter(sql => sql.trim()).map(sql => traceDB.prepare(sql)));
+    const body = input(), state = body.state;
+    state.pricing = { mode: 'market', snapshotId: 'missing-wide-snapshot', basis: 'mid', entryMode: 'fixed' };
+    state.legs = Array.from({ length: 8 }, (_, i) => {
+      const leg = state.legs[i % 2], day = ['09', '16', '23', '30'][Math.floor(i / 2)], strike = 90 + i;
+      return { ...leg, id: `wide-${i}`, strike, expiry: `2026-10-${day}T20:00:00.000Z`, contractId: `SPY   2610${day}C${String(strike * 1000).padStart(8, '0')}` };
+    });
+    const request = { ...body, conversation: [{ role: 'user', content: text.repeat(12000) }] };
+    expect(parseSparringRequest(request)).not.toBeNull();
+    const bytes = new TextEncoder().encode(JSON.stringify(request)).length;
+    expect(bytes).toBeGreaterThan(32 * 1024); expect(bytes).toBeLessThan(128 * 1024);
+    const provider = vi.fn<typeof fetch>();
+    const response = await post(createApp(provider), request, { OPENROUTER_API_KEY: 'test' });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: 'snapshot_expired' } });
+    expect(provider).not.toHaveBeenCalled();
+  });
   it("admits included analysis but rejects an empty selection before inference", async () => {
     const provider = vi.fn<typeof fetch>(async () => providerReply());
     const app = createApp(provider), body = input();
@@ -599,7 +617,7 @@ describe("sparring API", () => {
     const oversizedResponse = await app.request("http://localhost/api/sparring", {
       method: "POST",
       headers: browserHeaders,
-      body: JSON.stringify({ padding: "x".repeat(32 * 1024) }),
+      body: JSON.stringify({ padding: "x".repeat(128 * 1024) }),
     }, local);
     expect(oversizedResponse.status).toBe(413);
 

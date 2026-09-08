@@ -2,14 +2,60 @@ import { env } from "cloudflare:workers";
 import { beforeAll, expect, it } from "vitest";
 import migration from "../migrations/0001_saved_strategies.sql?raw";
 import lifecycleMigration from "../migrations/0002_position_lifecycle.sql?raw";
-import { createMarketStrategy, createStrategy, type MarketSnapshot } from "../src/options";
+import { createMarketStrategy, createStrategy, marketLeg, type MarketSnapshot } from "../src/options";
 import { createSavedStore } from "../src/saved-strategies";
 import { createPosition, projectPosition, type PositionRecord } from "../src/position-lifecycle";
-import { projectPositionLots, type LotTransaction, type PositionLots } from "../src/position-lots";
+import { projectPositionLots, valuePositionLots, type LotTransaction, type PositionLots } from "../src/position-lots";
 
 const db = (env as { DB: D1Database }).DB;
 beforeAll(async () => {
   await db.batch((migration + lifecycleMigration).split(";").filter(sql => sql.trim()).map(sql => db.prepare(sql)));
+});
+
+it("round trips eight-leg four-expiry holdings and reconciles closes and rolls without crossing owners", async () => {
+  const store = createSavedStore(db), owner = crypto.randomUUID(), recipient = crypto.randomUUID();
+  const at = "2026-09-05T12:00:00.000Z", markedAt = "2026-09-06T12:00:00.000Z";
+  const dates = ["2026-10-09", "2026-10-16", "2026-10-23", "2026-10-30"];
+  const snapshot: MarketSnapshot = {
+    id: "wide-held", underlying: "SPY", source: "Tastytrade", spot: 100, retrievedAt: "2026-09-04T18:00:00.000Z", spotAsOf: "2026-09-04T18:00:00.000Z", availableExpiries: dates,
+    contracts: dates.flatMap(date => [100, 105, 110].map(strike => ({ contractId: `SPY   ${date.slice(2).replaceAll("-", "")}C${String(strike * 1000).padStart(8, "0")}`, type: "call" as const, strike, expiry: `${date}T20:00:00.000Z`, multiplier: 100 as const, bid: 3, ask: 5, iv: .2, quoteAsOf: "2026-09-04T18:00:00.000Z" }))),
+  };
+  const state = createMarketStrategy("long-call", snapshot);
+  state.legs = snapshot.contracts.filter(quote => quote.strike !== 110).map((quote, i) => ({ ...marketLeg(quote, "long", 1, `held-${i}`, "mid"), entryPrice: 2 }));
+  state.pricing!.entryMode = "fixed"; state.stock = { shares: 100, entryPrice: 98 }; state.feeAllowance = 7;
+  state.excludedLegIds = [state.legs[7].id];
+  state.expiryIvShifts = dates.map(date => ({ expiry: `${date}T20:00:00.000Z`, ivShift: .01 }));
+  const saved = await store.create(owner, "Wide inventory", state, snapshot);
+  expect((await store.get(owner, saved.id)).state).toEqual(state);
+  const close = { id: "first-close", assetId: `option:${state.legs[0].id}`, quantity: 1, price: 3, at };
+  await expect(store.close(recipient, saved.id, 1, close)).rejects.toMatchObject({ status: 404 });
+  await store.close(owner, saved.id, 1, close);
+  const replacement = snapshot.contracts.find(quote => quote.strike === 110)!;
+  const roll: LotTransaction = { id: "roll", at, recordedAt: at, closes: [{ id: "roll-close", lotId: "initial:option:1", quantity: 1, price: 3 }], opens: [{ id: "replacement", side: "long", quantity: 1, entryPrice: 2, asset: { kind: "option", contractId: replacement.contractId, type: replacement.type, strike: replacement.strike, expiry: replacement.expiry, multiplier: 100 } }] };
+  const rolled = await store.transact(owner, saved.id, 2, roll);
+  expect(rolled.state).toEqual(state);
+  const marks = { ...snapshot, id: "wide-mark", retrievedAt: markedAt, spotAsOf: markedAt, contracts: snapshot.contracts.map(quote => ({ ...quote, quoteAsOf: markedAt })) };
+  const valuation = valuePositionLots(rolled.lifecycle as PositionLots, marks, "mid");
+  expect(valuation).toMatchObject({ grossRealizedPnl: 200, unrealizedPnl: 1600, allowance: 7, combinedPnl: 1793, analysisUnavailable: null });
+  expect(valuation.remainingState!.legs).toHaveLength(7);
+  expect(valuation.remainingState!.excludedLegIds).toEqual([state.legs[7].contractId]);
+  const exported = JSON.parse(JSON.stringify({ format: "argus-saved-position", formatVersion: 1, exportedAt: new Date().toISOString(), record: await store.get(owner, saved.id) }));
+  const imported = await store.importRecord(recipient, exported);
+  expect(imported.id).not.toBe(saved.id); expect(imported.revision).toBe(1);
+  expect(imported.state).toEqual({ ...state, pricing: { ...state.pricing, snapshotId: imported.snapshot!.id, historical: true } });
+  expect(imported.snapshot!.contracts).toEqual(snapshot.contracts);
+  expect(imported.snapshot).toMatchObject({ historical: true, imported: true });
+  expect((imported.lifecycle as PositionLots).transactions).toEqual([roll]);
+  expect(valuePositionLots(imported.lifecycle as PositionLots, marks, "mid")).toEqual(valuation);
+  await expect(store.get(owner, imported.id)).rejects.toMatchObject({ status: 404 });
+  await expect(store.get(recipient, saved.id)).rejects.toMatchObject({ status: 404 });
+  const remaining = projectPositionLots(imported.lifecycle as PositionLots).lots;
+  const finish: LotTransaction = { id: "finish", at: markedAt, recordedAt: markedAt, opens: [], closes: remaining.map(lot => ({ id: `finish-${lot.id}`, lotId: lot.id, quantity: lot.quantity, price: lot.asset.kind === "stock" ? 100 : 4 })) };
+  await expect(store.transact(owner, imported.id, 1, finish)).rejects.toMatchObject({ status: 404 });
+  const closed = await store.transact(recipient, imported.id, 1, finish);
+  expect(projectPositionLots(closed.lifecycle as PositionLots)).toMatchObject({ status: "closed", lots: [], grossRealizedPnl: 1800, netClosedPnl: 1793 });
+  expect(await store.transact(recipient, imported.id, 1, finish)).toEqual(closed);
+  expect(await store.get(owner, saved.id)).toEqual(rolled);
 });
 
 it("upgrades only on atomic lot writes and retains legacy retries and original basis", async () => {

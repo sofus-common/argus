@@ -26,7 +26,7 @@ import {
   type ProviderFetch,
 } from "./sparring";
 
-const MAX_REQUEST_BYTES = 32 * 1024;
+const MAX_REQUEST_BYTES = 128 * 1024;
 
 function traceContext(c: Context<{ Bindings: Bindings; Variables: { session: Session } }>, kind: "sparring" | "lots" | "history" | "intraday", requestId: string) {
   const env = c.env;

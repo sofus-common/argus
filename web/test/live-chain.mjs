@@ -1,16 +1,36 @@
 import assert from 'node:assert/strict';
-import { createMarketStrategy, calculateStrategy, validateMarketStrategy } from '../src/options.ts';
+import { createMarketStrategy, calculateStrategy, evaluateScenario, marketLeg, validateMarketStrategy } from '../src/options.ts';
 
-if (!process.argv.includes('--run')) throw new Error('Pass --run for real quote retrieval and up to four paid generation/verification requests.');
+if (!process.argv.includes('--run')) throw new Error('Pass --run for real quote retrieval and up to four paid generation/verification requests; --wide uses one scenario task with at most three paid requests.');
 const base = 'http://127.0.0.1:5173';
-const traceReadonly = process.argv.includes('--trace-readonly');
+const wide = process.argv.includes('--wide');
+const traceReadonly = wide || process.argv.includes('--trace-readonly');
 const symbol = process.argv.find(arg => arg.startsWith('--symbol='))?.slice(9) ?? 'SPY';
 assert.match(symbol, /^[A-Z]{1,6}$/);
 const loaded = await fetch(`${base}/api/chain?symbol=${symbol}`, { signal: AbortSignal.timeout(35000) });
 assert.equal(loaded.status, 200);
-const { snapshot } = await loaded.json();
+let { snapshot } = await loaded.json();
+if (wide) {
+  const dates = snapshot.availableExpiries.slice(0, 4);
+  assert.equal(dates.length, 4, 'Four listed expiry dates required');
+  const expanded = await fetch(`${base}/api/chain?${new URLSearchParams({ symbol, expiries: dates.join(',') })}`, { signal: AbortSignal.timeout(35000) });
+  assert.equal(expanded.status, 200);
+  snapshot = (await expanded.json()).snapshot;
+  assert.deepEqual([...new Set(snapshot.contracts.map(leg => leg.expiry.slice(0, 10)))].sort(), dates.sort());
+}
 assert.equal(snapshot.underlying, symbol);
 const state = createMarketStrategy('long-call', snapshot);
+if (wide) {
+  state.legs = [...new Set(snapshot.contracts.map(leg => leg.expiry))].sort().flatMap(expiry => {
+    const calls = snapshot.contracts.filter(leg => leg.expiry === expiry && leg.type === 'call').sort((a, b) => Math.abs(a.strike - snapshot.spot) - Math.abs(b.strike - snapshot.spot) || a.strike - b.strike).slice(0, 2).sort((a, b) => a.strike - b.strike);
+    assert.equal(calls.length, 2);
+    return calls.map((leg, i) => marketLeg(leg, i ? 'short' : 'long', 1, leg.contractId, state.pricing.basis));
+  });
+  state.pricing.entryMode = 'fixed';
+  state.name = 'Four-expiry paired calls';
+  assert.equal(state.legs.length, 8);
+  assert.deepEqual(validateMarketStrategy(state, snapshot), []);
+}
 if (traceReadonly) state.feeAllowance = 5;
 const original = structuredClone(state);
 const post = (route, body) => fetch(`${base}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', Origin: base, 'X-ARGUS-Request': '1' }, body: JSON.stringify(body), signal: AbortSignal.timeout(45000) });
@@ -18,10 +38,12 @@ const calculated = await post('/api/calculate', state);
 assert.equal(calculated.status, 200);
 assert.deepEqual((await calculated.json()).metrics, calculateStrategy(state));
 const forged = structuredClone(state);
-forged.legs[0].entryPrice += 1;
+if (wide) forged.legs[0].iv += 1;
+else forged.legs[0].entryPrice += 1;
 assert.equal((await post('/api/calculate', forged)).status, 422);
 assert.equal((await post('/api/calculate', { ...state, pricing: { ...state.pricing, snapshotId: 'unknown' } })).status, 409);
-const prompts = traceReadonly ? ['Explain this quoted long call read-only. State the quote dates separately from retrieval time; do not claim fresh or executable prices. Explain gross entry cost, the $5 modeled allowance, net cost and intact-expiry risk using supplied facts. Do not search alternatives, request additional scenarios or change the position.'] : ['Explain the biggest risk in this quoted long call. Use its actual quote snapshot, not sample numbers. Do not change the builder.', 'Replace this position with a bull-call template using the loaded quote snapshot.'];
+const target = { scenarioDate: state.scenarioDate, scenarioSpot: state.spot, ivShift: 0, legIvShifts: state.legs.map((leg, i) => ({ legId: leg.id, ivShift: (i + 1) / 100 })) };
+const prompts = wide ? [`Read-only: price exactly this one hypothetical scenario with evaluate_scenarios: ${JSON.stringify(target)}. Include every listed leg adjustment exactly once. Explain the scenario P/L versus the current baseline, with the first-expiry horizon and mixed-expiry limitations. These fixed analysis entries are not confirmed fills. Do not search, change the builder or claim execution.`] : traceReadonly ? ['Explain this quoted long call read-only. State the quote dates separately from retrieval time; do not claim fresh or executable prices. Explain gross entry cost, the $5 modeled allowance, net cost and intact-expiry risk using supplied facts. Do not search alternatives, request additional scenarios or change the position.'] : ['Explain the biggest risk in this quoted long call. Use its actual quote snapshot, not sample numbers. Do not change the builder.', 'Replace this position with a bull-call template using the loaded quote snapshot.'];
 for (const prompt of prompts) {
   const requestId = crypto.randomUUID();
   const response = await post('/api/sparring', { request_id: requestId, base_state_version: state.version, state, conversation: [{ role: 'user', content: prompt }] });
@@ -32,7 +54,7 @@ for (const prompt of prompts) {
   assert.equal(result.next_state.underlying, symbol);
   assert.ok(result.market_context.sources.filter(source => source.id.startsWith('alpaca-quote') || source.id.startsWith('tastytrade-') || source.id.startsWith('theta-reference')).every(source => source.label.startsWith(symbol)));
   assert.deepEqual(validateMarketStrategy(result.next_state, snapshot), []);
-  if (prompt.startsWith('Explain')) assert.equal(result.reply.operations.length, 0);
+  if (wide || prompt.startsWith('Explain')) assert.equal(result.reply.operations.length, 0);
   else { assert.ok(result.reply.operations.length); assert.equal(result.next_state.name, 'Bull Call Spread'); }
   if (traceReadonly) {
     assert.equal(result.request_id, requestId);
@@ -41,6 +63,16 @@ for (const prompt of prompts) {
     assert.deepEqual(result.next_state, { ...original, version: original.version + 1 });
     assert.deepEqual(result.calculated.metrics, calculateStrategy(original));
     assert.deepEqual(state, original);
+    if (wide) {
+      assert.equal(result.calculated.requestedScenarios.length, 1);
+      const point = result.calculated.requestedScenarios[0];
+      assert.deepEqual(point.scenario, target);
+      assert.equal(point.legVolatilities.length, 8);
+      const repriced = { ...original, ...target, ivShift: 0, expiryIvShifts: [], legs: original.legs.map((leg, i) => ({ ...leg, iv: leg.iv + target.legIvShifts[i].ivShift })) };
+      assert.deepEqual(point.metrics, evaluateScenario(repriced));
+      const singleLegSum = repriced.legs.reduce((sum, leg) => sum + evaluateScenario({ ...repriced, legs: [leg], feeAllowance: 0 }).pnl, 0) - original.feeAllowance;
+      assert.ok(Math.abs(point.metrics.pnl - singleLegSum) < 1e-6, 'Scenario P/L must reconcile to independently repriced legs and one allowance');
+    }
     assert.equal(response.headers.get('X-ARGUS-Trace-Status'), 'complete');
     const traceId = response.headers.get('X-ARGUS-Trace-Id');
     assert.match(traceId ?? '', /^[a-f0-9-]{36}$/);
@@ -65,6 +97,7 @@ for (const prompt of prompts) {
     assert.equal(facts.output.contractTerms.status, 'provider-verified-standard-window');
     const requests = trace.events.filter(event => ['generation-request', 'verification-request'].includes(event.stage));
     assert.ok(requests.length >= 2 && requests.length <= 3);
+    if (wide) assert.equal(requests.length, 3, 'One generation, one tool continuation and one verifier required');
     assert.equal(requests[0].reason, 'initial'); assert.equal(requests.at(-1).stage, 'verification-request');
     assert.equal(JSON.parse(requests[0].input.messages[1].content).option_snapshot.id, snapshot.id);
     assert.deepEqual(JSON.parse(requests.at(-1).input.messages[1].content).reply, result.reply);
@@ -91,4 +124,4 @@ for (const prompt of prompts) {
     console.log(JSON.stringify({ case: 'local-quoted-trace', traceId, requestId, source: snapshot.source, retrievedAt: snapshot.retrievedAt, spotAsOf: snapshot.spotAsOf, quoteOldest: quoteTimes[0], quoteNewest: quoteTimes.at(-1), contracts: snapshot.contracts.length, traceEvents: trace.event_count, traceBytes: trace.total_bytes, configuration: trace.events.find(event => event.stage === 'configuration').output, inferenceRequests: requests.length, totalTokens: trace.events.reduce((sum, event) => sum + (event.output?.usage?.total_tokens ?? 0), 0), persistedReadback: true, sourceUnchanged: true }));
   }
 }
-console.log(`Live chain contract checks passed: ${snapshot.contracts.length} contracts, calculator agreement, forged-price rejection, snapshot expiry guard and ${traceReadonly ? 'read-only analysis with persisted trace' : 'real-contract proposal'}. Review free-text correctness separately.`);
+console.log(`Live chain contract checks passed: ${snapshot.contracts.length} contracts, calculator agreement, forged-input rejection, snapshot expiry guard and ${wide ? 'eight-leg four-expiry scenario with persisted trace' : traceReadonly ? 'read-only analysis with persisted trace' : 'real-contract proposal'}. Review free-text correctness separately.`);
