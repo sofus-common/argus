@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Added read-only conversation for saved historical position performance. Each
+  question reloads server-owned recorded history, checks the saved revision before
+  and after provider work, and validates refreshed accounting before displaying
+  the reply. Client-supplied P/L is rejected; the full transaction ledger is not
+  sent to inference. Date/range/revision changes and reloads discard pending chat.
+  The existing bounded generation/verification workflow has no tools or writes.
+  Prompt v13 / analysis contract v7 preserves earlier prompt text and adds explicit
+  realized/unrealized, one-time allowance, missing-mark and daily-change rules.
+  Verified 650 offline tests, TypeScript/build and 34 desktop/mobile checks. The
+  activation gate caught and then passed an updated canonical prompt-key test.
+  Real OpenRouter review of a synthetic closed local record reconciled $200 gross
+  realized minus $7 allowance to $193 net, with $0 next-day change; saved export
+  stayed identical and the test record was removed. This does not prove live
+  Theta historical marks, percentage returns or hosted performance availability.
+
 - Connected conversational discovery to the existing stock-backed and American
   calendar/diagonal optimizer through an optional explicit family/outlay domain.
   No new agent loop: the existing read-only tool, continuation and verifier remain.

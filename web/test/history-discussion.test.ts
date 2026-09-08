@@ -1,8 +1,63 @@
 import { expect, it, vi } from 'vitest';
 import { createStrategy } from '../src/options';
 import { buildPriceHistory } from '../src/price-history';
-import { discussPriceHistory, discussIntradayHistory, MODEL } from '../src/sparring';
+import { discussPriceHistory, discussIntradayHistory, discussPositionPerformance, MODEL } from '../src/sparring';
 import { buildIntradayHistory } from '../src/intraday-history';
+import { buildPositionPerformance } from '../src/position-performance';
+import { createPosition } from '../src/position-lifecycle';
+import { upgradePositionLots, recordLotTransaction } from '../src/position-lots';
+import { defaultAnalysisPrompts } from '../src/analysis-prompts';
+
+function performanceFacts() {
+  const state = { ...createStrategy('long-call'), legs: [], stock: { shares: 100, entryPrice: 100 }, feeAllowance: 5, valuationTimestamp: '2026-09-01T12:00:00.000Z', scenarioDate: '2026-09-01T12:00:00.000Z', pricing: { mode: 'market' as const, snapshotId: 'recorded', basis: 'mid' as const, entryMode: 'fixed' as const } };
+  let position = upgradePositionLots(createPosition(state));
+  position = recordLotTransaction(position, { id: 'private-close-event', at: '2026-09-03T12:00:00.000Z', recordedAt: '2026-09-03T12:00:00.000Z', opens: [], closes: [{ id: 'close', lotId: 'initial:stock', quantity: 100, price: 102 }] });
+  const range = { start: '2026-09-01', end: '2026-09-04' };
+  const performance = buildPositionPerformance(position, [], { response: [{ bid: 100.9, ask: 101.1, created: '2026-09-01T17:15:00.000', last_trade: '2026-09-01T16:00:00.000' }] }, range);
+  return { position, facts: { savedId: 'saved-performance', revision: 2, range, performance, selectedDate: '2026-09-03' } };
+}
+
+it('discusses frozen recorded performance in two calls without ledger, price scaling or tools', async () => {
+  const { position, facts } = performanceFacts(), before = structuredClone(facts), ledger = structuredClone(position), bodies: any[] = [];
+  const answer = { text: 'Recorded combined P/L on the selected closed date is $195 after the allowance.', assumptions: [], objections: [], suggested_prompts: [] };
+  expect(await discussPositionPerformance(position, facts, conversation, 'test', async (_url, init) => {
+    bodies.push(JSON.parse(String(init!.body))); facts.selectedDate = 'changed';
+    return response({ content: JSON.stringify(bodies.length === 1 ? answer : { valid: true }) });
+  })).toEqual({ reply: answer });
+  expect(bodies).toHaveLength(2); expect(position).toEqual(ledger);
+  for (const body of bodies) {
+    const input = JSON.parse(body.messages[1].content);
+    expect(input.facts).toEqual(before); expect(input.historyDisplay).toBeUndefined(); expect(input.facts.position).toBeUndefined(); expect(input.facts.state).toBeUndefined();
+    expect(body.tools).toBeUndefined(); expect(body.tool_choice).toBeUndefined(); expect(JSON.stringify(body)).not.toContain('private-close-event');
+    expect(input.facts.performance.rows.map((row: any) => row.combinedPnl)).toEqual([95, null, 195, 195]);
+    expect(input.facts.performance.rows.map((row: any) => row.changeUsd)).toEqual([null, null, null, 0]);
+  }
+});
+
+it('rejects performance identity, selection and accounting tampering before inference', async () => {
+  const fetcher = vi.fn<typeof fetch>();
+  for (const change of [(f: any) => { f.savedId = ''; }, (f: any) => { f.revision = 0; }, (f: any) => { f.selectedDate = '2026-08-31'; }, (f: any) => { f.performance.rows[0].combinedPnl++; }, (f: any) => { f.extra = true; }]) {
+    const { position, facts } = performanceFacts(); change(facts);
+    await expect(discussPositionPerformance(position, facts, conversation, 'test', fetcher)).rejects.toThrow();
+  }
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+it('withholds performance discussion on tools, mutation fields or rejected verification', async () => {
+  for (const kind of ['tools', 'operations', 'rejected']) {
+    const { position, facts } = performanceFacts(); let calls = 0;
+    const fetcher: typeof fetch = async () => {
+      calls++;
+      return response(kind === 'tools' ? { tool_calls: [{ type: 'function', function: { name: 'evaluate_lot_scenarios', arguments: '{}' } }] } : { content: JSON.stringify(calls === 1 ? { ...draft, ...(kind === 'operations' ? { operations: [] } : {}) } : { valid: false }) });
+    };
+    await expect(discussPositionPerformance(position, facts, conversation, 'test', fetcher)).rejects.toThrow(); expect(calls).toBe(kind === 'rejected' ? 2 : 1);
+  }
+  const { position, facts } = performanceFacts(), prompts = { ...defaultAnalysisPrompts.prompts };
+  delete prompts.PERFORMANCE_DISCUSSION_PROMPT; delete prompts.PERFORMANCE_VERIFICATION_PROMPT;
+  const fetcher = vi.fn<typeof fetch>();
+  await expect(discussPositionPerformance(position, facts, conversation, 'test', fetcher, { ...defaultAnalysisPrompts, prompts })).rejects.toThrow('not configured');
+  expect(fetcher).not.toHaveBeenCalled();
+});
 
 function facts(contracts = 1) {
   const state = createStrategy('bull-call');

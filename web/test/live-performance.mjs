@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 
-if (!process.argv.includes('--run')) throw new Error('Pass --run to create and remove one synthetic local saved-position test record. No orders, inference or provider calls.');
+if (!process.argv.includes('--run')) throw new Error('Pass --run to create and remove one synthetic local saved-position test record. Optional --discuss adds two paid inference calls; no orders or historical-provider calls.');
 registerHooks({ resolve(specifier, context, next) { return next(specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier) ? new URL(`${specifier}.ts`, context.parentURL).href : specifier, context); } });
 const { createMarketStrategy } = await import('../src/options.ts');
 const { createPosition } = await import('../src/position-lifecycle.ts');
 const base = 'http://127.0.0.1:5173';
-const call = (path, body, method = body === undefined ? 'GET' : 'POST') => fetch(`${base}/api/strategies${path}`, { method, headers: { 'Content-Type': 'application/json', Origin: base, 'X-ARGUS-Request': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15000) });
+const call = (path, body, method = body === undefined ? 'GET' : 'POST', timeout = 15000) => fetch(`${base}/api/strategies${path}`, { method, headers: { 'Content-Type': 'application/json', Origin: base, 'X-ARGUS-Request': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(timeout) });
 const stamp = '2026-09-01T12:00:00.000Z';
 const snapshot = { id: 'synthetic-performance-proof', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2026-10-09'], contracts: [{ contractId: 'SPY   261009C00100000', type: 'call', strike: 100, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100, bid: 1.9, ask: 2.1, iv: .2, quoteAsOf: stamp }] };
 const state = createMarketStrategy('long-call', snapshot);
@@ -43,6 +43,18 @@ try {
   const body = await performance.json();
   assert.equal(body.savedId, createdId); assert.equal(body.revision, record.revision);
   assert.deepEqual(body.performance.rows.map(row => [row.status, row.grossRealizedPnl, row.unrealizedPnl, row.allowance, row.combinedPnl, row.changeUsd]), [['closed', 200, 0, 7, 193, null], ['closed', 200, 0, 7, 193, 0]]);
+  if (process.argv.includes('--discuss')) {
+    const requestId = crypto.randomUUID();
+    const response = await call(`/${record.id}/performance/discuss`, { revision: record.revision, range, selectedDate: range.end, request_id: requestId, conversation: [{ role: 'user', content: 'Explain why recorded net P/L is $193 rather than gross realized $200, and why daily change is zero on September 4. Is another $7 deducted on September 4? Distinguish the closed recorded results from a current theoretical price or investment forecast. Do not invent percentage returns or change anything.' }] }, 'POST', 65000);
+    const result = await response.json();
+    console.log(JSON.stringify({ discussionStatus: response.status, traceId: response.headers.get('X-ARGUS-Trace-Id'), facts: body.performance, reply: result.reply, error: result.error }));
+    assert.equal(response.status, 200, 'Recorded-performance discussion must pass');
+    assert.equal(result.request_id, requestId); assert.equal(result.savedId, createdId); assert.equal(result.revision, record.revision); assert.equal(result.selectedDate, range.end);
+    assert.deepEqual(result.performance, body.performance);
+    assert.deepEqual(Object.keys(result.reply).sort(), ['assumptions', 'objections', 'suggested_prompts', 'text']);
+    const unchanged = await call(`/${record.id}/export`); assert.equal(unchanged.status, 200);
+    assert.deepEqual((await unchanged.json()).record, record, 'Discussion changed saved accounting');
+  }
   const exported = await call(`/${record.id}/export`);
   assert.equal(exported.status, 200);
   assert.deepEqual((await exported.json()).record.lifecycle, record.lifecycle);

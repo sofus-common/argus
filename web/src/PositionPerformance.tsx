@@ -3,10 +3,45 @@ import { HistoryCharts } from './HistoryCharts'
 import { historyToday } from './price-history'
 import { readPositionPerformance, validatePerformanceRange, type PositionPerformance as Performance } from './position-performance'
 import { savedPosition, type SavedStrategy } from './saved-strategies'
-import { projectPositionLots, upgradePositionLots } from './position-lots'
+import { projectPositionLots, upgradePositionLots, type PositionLots } from './position-lots'
+import type { ConversationMessage, LotDiscussionReply } from './sparring'
 
 const money = (value: number | null) => value === null ? 'Unavailable' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value)
 const priorDate = (date: string, days: number) => new Date(Date.parse(date) - days * 86400000).toISOString().slice(0, 10)
+
+function PerformanceDiscussion({ record, position, range, selectedDate, onRefresh }: { record: SavedStrategy; position: PositionLots; range: Performance['range']; selectedDate: string; onRefresh: (performance: Performance) => void }) {
+  const [question, setQuestion] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false)
+  const [turns, setTurns] = useState<{ question: string; reply: LotDiscussionReply }[]>([]), [conversation, setConversation] = useState<ConversationMessage[]>([])
+  const pending = useRef<AbortController | null>(null), mounted = useRef(false)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; pending.current?.abort() } }, [])
+  async function discuss() {
+    if (busy) return
+    const content = question.trim(), messages: ConversationMessage[] = [...conversation, { role: 'user', content }]
+    if (!content || messages.length > 12 || messages.reduce((sum, message) => sum + message.content.length, 0) > 12000) { setError('Enter a question within the 12-message / 12,000-character limit, or start a new discussion. Nothing was sent.'); return }
+    const controller = new AbortController(), requestId = crypto.randomUUID()
+    pending.current = controller; setBusy(true); setError('')
+    const timer = setTimeout(() => { controller.abort(); if (mounted.current) { setBusy(false); setError('Discussion timed out. Your question has been kept; try again later.') } }, 90000)
+    try {
+      const response = await fetch(`/api/strategies/${encodeURIComponent(record.id)}/performance/discuss`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-ARGUS-Request': '1' }, signal: controller.signal, body: JSON.stringify({ revision: record.revision, range, selectedDate, request_id: requestId, conversation: messages }) })
+      const body = await response.json() as { savedId?: unknown; revision?: unknown; source?: unknown; range?: { start?: unknown; end?: unknown }; selectedDate?: unknown; request_id?: unknown; performance?: unknown; reply?: LotDiscussionReply } | null
+      if (controller.signal.aborted) return
+      if (!response.ok) throw new Error(response.status === 409 ? 'Saved revision changed. Reload the saved record before discussing performance.' : 'Performance discussion unavailable. Your question and recorded holdings are unchanged.')
+      if (!body || body.savedId !== record.id || body.revision !== record.revision || body.source !== 'Theta EOD' || body.range?.start !== range.start || body.range?.end !== range.end || body.selectedDate !== selectedDate || body.request_id !== requestId) throw new Error('Discussion identity or dates do not match. Reply discarded.')
+      const checked = readPositionPerformance(body.performance, position, range), reply = body.reply
+      if (!checked.rows.some(row => row.date === selectedDate)) throw new Error('Selected performance date is unavailable.')
+      if (!reply || Object.keys(reply).sort().join() !== 'assumptions,objections,suggested_prompts,text' || typeof reply.text !== 'string' || !reply.text.trim() || !(['assumptions', 'objections', 'suggested_prompts'] as const).every(key => Array.isArray(reply[key]) && reply[key].every(item => typeof item === 'string')) || new TextEncoder().encode(JSON.stringify(reply)).byteLength > 64 * 1024) throw new Error('Invalid read-only performance reply. Your question has been kept.')
+      onRefresh(checked)
+      setTurns(previous => [...previous, { question: content, reply }]); setQuestion('')
+      setConversation([...messages, { role: 'assistant', content: [reply.text, ...reply.assumptions, ...reply.objections, ...reply.suggested_prompts].join('\n') }])
+    } catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Performance discussion unavailable.') }
+    finally { clearTimeout(timer); if (!controller.signal.aborted) setBusy(false) }
+  }
+  return <section aria-label="Read-only performance discussion"><h3>Discuss this position’s performance</h3><p>Selected {selectedDate} · {range.start} through {range.end}. Each question reloads dated history for saved revision {record.revision}; validated accounting may update. Previous assistant replies are not authoritative facts. AI interpretation may contain errors. Changing the date, range, record or reloading starts a new discussion. No holdings, orders or transactions change.</p>
+    {turns.map((turn, index) => <article key={index}><h4>{turn.question}</h4><p style={{ whiteSpace: 'pre-wrap' }}>{turn.reply.text}</p>{(['assumptions', 'objections'] as const).map(key => turn.reply[key].length > 0 && <div key={key}><h4>{key === 'assumptions' ? 'Assumptions' : 'Objections'}</h4><ul>{turn.reply[key].map((text, item) => <li key={item}>{text}</li>)}</ul></div>)}{turn.reply.suggested_prompts.map((text, item) => <button key={item} type="button" disabled={busy} onClick={() => setQuestion(text)}>{text}</button>)}</article>)}
+    <form className="history-range" onSubmit={event => { event.preventDefault(); void discuss() }}><label>Question<input aria-label="Performance question" value={question} maxLength={12000} disabled={busy} onChange={event => setQuestion(event.target.value)} /></label><button type="submit" disabled={busy || !question.trim()}>Discuss performance</button><button type="button" disabled={busy} onClick={() => { setTurns([]); setConversation([]); setError('') }}>Start new performance discussion</button></form>
+    {busy && <p role="status">Reloading dated performance and reviewing the selected date…</p>}{error && <p role="alert">{error}</p>}
+  </section>
+}
 
 export function PositionPerformance({ record }: { record: SavedStrategy }) {
   const latest = priorDate(historyToday(), 1)
@@ -67,6 +102,7 @@ export function PositionPerformance({ record }: { record: SavedStrategy }) {
           <ul>{row.lots.map(lot => <li key={lot.id}><strong>{lot.id} · {lot.asset.kind === 'stock' ? `${lot.asset.symbol} shares` : lot.asset.contractId}</strong><p>{lot.side} · {lot.quantity} units · entry {money(lot.entryPrice)} · unrealized {money(lot.unrealizedPnl)}</p>{lot.mark ? <p>Bid {money(lot.mark.bid)} · ask {money(lot.mark.ask)} · midpoint {money(lot.mark.mid)}<br />Report created (raw): {lot.mark.created}<br />Last trade (raw): {lot.mark.lastTrade}</p> : <p>{lot.asset.kind === 'option' && Date.parse(lot.asset.expiry) <= Date.parse(row.cutoff) ? 'Expired holding without recorded settlement; valuation unavailable.' : 'No admissible dated mark; valuation unavailable.'}</p>}</li>)}</ul>
         </details>
       </section>}
+      {row && position && <PerformanceDiscussion key={`${record.id}:${record.revision}:${range.start}:${range.end}:${row.date}`} record={record} position={position} range={range} selectedDate={row.date} onRefresh={setResult} />}
     </>}
   </details></section>
 }

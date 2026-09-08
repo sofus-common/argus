@@ -86,6 +86,58 @@ async function run() {
     finally { await unmount() }
   }
   try {
+    await test('Performance discussion refreshes accounting and rejects altered or stale responses', async () => {
+      await unmount(); const priorFetch = window.fetch;
+      const stamp = '2026-09-01T12:00:00.000Z', expiry = '2026-10-09T20:00:00.000Z', range = { start: '2026-09-01', end: '2026-09-03' };
+      const snapshot: MarketSnapshot = { id: 'discuss-performance', source: 'Tastytrade', underlying: 'SPY', spot: 100, spotAsOf: stamp, retrievedAt: stamp, availableExpiries: ['2026-10-09'], contracts: [{ contractId: 'SPY   261009C00100000', type: 'call', strike: 100, expiry, multiplier: 100, bid: 1.9, ask: 2.1, iv: .2, quoteAsOf: stamp }] };
+      const held = createMarketStrategy('long-call', snapshot); held.pricing!.entryMode = 'fixed'; held.feeAllowance = 7;
+      const record = { id: 'performance-chat', title: 'Discussion fixture', revision: 3, createdAt: stamp, updatedAt: stamp, state: held, snapshot, lifecycle: createPosition(held) }, original = JSON.stringify(held);
+      const performance = (mid: number) => buildPositionPerformance(upgradePositionLots(record.lifecycle), [{ response: [{ contract: { symbol: 'SPY', strike: 100, expiration: '2026-10-09', right: 'CALL' }, data: [1, 3].map(day => ({ bid: mid - .1, ask: mid + .1, created: `2026-09-0${day}T17:15:00.000`, last_trade: `2026-09-0${day}T16:00:00.000` })) }] }], { response: [] }, range);
+      const envelope = (mid: number) => ({ savedId: record.id, revision: record.revision, range, source: 'Theta EOD', performance: performance(mid) });
+      const calls: Array<{ signal?: AbortSignal | null; body: any; finish: (value: any) => void }> = [];
+      window.fetch = (async (url, init) => {
+        const body = JSON.parse(String(init?.body));
+        if (url === '/api/strategies/performance-chat/performance') return Response.json(envelope(2));
+        assert(url === '/api/strategies/performance-chat/performance/discuss', 'Unexpected performance discussion request');
+        assert(Object.keys(body).sort().join() === 'conversation,range,request_id,revision,selectedDate' && body.revision === 3 && JSON.stringify(body.range) === JSON.stringify(range), 'Discussion sent unbound identity or client-calculated history');
+        return new Promise<Response>(resolve => calls.push({ body, signal: init?.signal, finish: value => resolve(Response.json(value)) }));
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean) => { for (let i = 0; i < 100 && !check(); i++) await settleTimers(); assert(check(), 'Performance discussion did not settle') };
+      const reply = (index: number) => ({ ...envelope(3), request_id: calls[index].body.request_id, selectedDate: calls[index].body.selectedDate, reply: { text: 'Refreshed net P/L is $93.00.', assumptions: [], objections: [], suggested_prompts: [] } });
+      const chat = () => fixture.querySelector('[aria-label="Read-only performance discussion"]');
+      const ask = async () => { await change('Performance question', 'Explain the selected P/L and gaps.'); await click('Discuss performance') };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<PositionPerformance record={record} />));
+        await change('Performance start date', range.start); await change('Performance end date', range.end); await click('Load position performance');
+        await waitFor(() => !!fixture.querySelector('[aria-label="Selected performance accounting"]'));
+        assert(chat() && calls.length === 0, 'Loaded performance has no explicit read-only discussion');
+        await ask(); assert(calls[0].body.selectedDate === range.end, 'Discussion lost selected date');
+        await act(async () => calls[0].finish(reply(0))); await waitFor(() => chat()?.textContent?.includes('Refreshed net P/L') === true);
+        assert(fixture.querySelector('[aria-label="Selected performance accounting"]')?.textContent?.includes('$93.00') && JSON.stringify(held) === original, 'Fresh discussion did not update validated accounting or mutated holdings');
+        for (const attack of ['amount', 'date', 'revision', 'operations']) {
+          await click('Start new performance discussion'); await ask(); const index = calls.length - 1, body: any = reply(index);
+          if (attack === 'amount') body.performance.rows[2].combinedPnl = 999;
+          if (attack === 'date') body.selectedDate = range.start;
+          if (attack === 'revision') body.revision = 2;
+          if (attack === 'operations') body.reply.operations = [];
+          await act(async () => calls[index].finish(body)); await waitFor(() => !!chat()?.querySelector('[role="alert"]'));
+          assert(!chat()?.textContent?.includes('Refreshed net P/L'), `Altered ${attack} reply displayed`);
+        }
+        await ask(); const delayed = calls.length - 1; await change('Inspect history date', '1');
+        assert(calls[delayed].signal?.aborted, 'Selected date did not cancel discussion');
+        await act(async () => calls[delayed].finish(reply(delayed))); assert(!chat()?.textContent?.includes('Refreshed net P/L'), 'Late selected-date response displayed');
+        await ask(); const changedRange = calls.length - 1; await change('Performance end date', range.start);
+        assert(calls[changedRange].signal?.aborted && !chat(), 'Range change did not discard discussion');
+        await change('Performance end date', range.end); await click('Load position performance'); await waitFor(() => !!chat());
+        await ask(); const reloaded = calls.length - 1; await click('Load position performance'); await waitFor(() => !!chat());
+        assert(calls[reloaded].signal?.aborted && !chat()?.textContent?.includes('Refreshed net P/L'), 'Explicit reload retained discussion');
+        await ask(); const changedRecord = calls.length - 1;
+        await act(async () => root!.render(<PositionPerformance record={{ ...record, revision: 4 }} />));
+        assert(calls[changedRecord].signal?.aborted && !chat(), 'Record change retained discussion');
+        await act(async () => root!.render(<PositionPerformance record={record} />)); await click('Load position performance'); await waitFor(() => !!chat());
+        await ask(); const closing = calls.length - 1; await unmount(); assert(calls[closing].signal?.aborted, 'Unmount did not cancel discussion');
+      } finally { await unmount(); window.fetch = priorFetch }
+    });
     await test('American calendar discovery preserves bound scope through comparison, save, reopen and Undo', async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
       const stamp = new Date(fixedNow - 120000).toISOString(), dates = ['2027-10-09T20:00:00.000Z', '2027-10-16T20:00:00.000Z'];

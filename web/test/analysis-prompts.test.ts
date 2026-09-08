@@ -69,6 +69,7 @@ it("preserves old bundle digests and admits IV prompts only as a complete pair",
 it("validates complete bounded prompt bundles in canonical immutable order", () => {
   const keys = ["SYSTEM_PROMPT", "VERIFICATION_PROMPT", "BOUND_VERIFICATION_PROMPT", "LOT_DISCUSSION_PROMPT", "LOT_VERIFICATION_PROMPT", "HISTORY_DISCUSSION_PROMPT", "HISTORY_VERIFICATION_PROMPT", "INTRADAY_DISCUSSION_PROMPT", "INTRADAY_VERIFICATION_PROMPT"];
   if (defaultAnalysisPrompts.prompts.IV_DISCUSSION_PROMPT !== undefined) keys.push('IV_DISCUSSION_PROMPT', 'IV_VERIFICATION_PROMPT');
+  if (defaultAnalysisPrompts.prompts.PERFORMANCE_DISCUSSION_PROMPT !== undefined) keys.push('PERFORMANCE_DISCUSSION_PROMPT', 'PERFORMANCE_VERIFICATION_PROMPT');
   expect(Object.keys(defaultAnalysisPrompts.prompts)).toEqual(keys);
   const reversed = { prompts: Object.fromEntries(Object.entries(defaultAnalysisPrompts.prompts).reverse()), version: "test-bundle.2" };
   const parsed = readAnalysisPrompts(reversed);

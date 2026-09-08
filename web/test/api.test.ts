@@ -111,6 +111,49 @@ it("returns saved daily estimates read-only and rejects a revision changed durin
     }
   }
 });
+it("discusses server-reconstructed owned performance and rejects stale or client-invented facts", async () => {
+  const store = createSavedStore(traceDB), range = { start: "2026-09-04", end: "2026-09-04" };
+  const snapshot: MarketSnapshot = { id: "performance-chat", underlying: "SPY", source: "Tastytrade", spot: 100, retrievedAt: "2026-09-04T12:00:00.000Z", spotAsOf: "2026-09-04T12:00:00.000Z", availableExpiries: ["2026-10-09"], contracts: [{ contractId: "SPY   261009C00100000", type: "call", strike: 100, expiry: "2026-10-09T20:00:00.000Z", multiplier: 100, bid: 2, ask: 3, iv: .25, quoteAsOf: "2026-09-04T12:00:00.000Z" }] };
+  const state = createMarketStrategy("long-call", snapshot); state.legs = []; state.stock = { shares: 100, entryPrice: 98 }; state.feeAllowance = 5; state.pricing!.entryMode = "fixed";
+  const body = { revision: 1, range, selectedDate: range.start, request_id: "performance-review", conversation: [{ role: "user", content: "Explain recorded P/L; do not change anything." }] };
+  const reply = { text: "Recorded gross realized P/L is zero; the dated unrealized estimate is $300 and net P/L is $295 after the $5 allowance once.", assumptions: [], objections: [], suggested_prompts: [] };
+  for (const changed of ["none", "history", "inference"]) {
+    const record = await store.create("local-development", "Performance chat", state, snapshot);
+    let inference = 0;
+    const provider = vi.fn<typeof fetch>(async (url, init) => {
+      if (String(url).includes("/v3/stock/history/eod?")) {
+        if (changed === "history") await store.update("local-development", record.id, 1, "Changed", state, snapshot);
+        return Response.json({ response: [{ created: "2026-09-04T17:15:00.000", last_trade: "2026-09-04T16:00:00.000", bid: 100, ask: 102 }] });
+      }
+      expect(String(url)).toBe("https://openrouter.ai/api/v1/chat/completions"); inference++;
+      const payload = JSON.parse(String(init?.body));
+      expect(payload.tools).toBeUndefined();
+      const facts = JSON.parse(payload.messages[1].content).facts;
+      expect(facts).toMatchObject({ savedId: record.id, revision: 1, range, selectedDate: range.start, performance: { rows: [{ grossRealizedPnl: 0, unrealizedPnl: 300, allowance: 5, combinedPnl: 295 }] } });
+      expect(facts.position).toBeUndefined();
+      if (changed === "inference" && inference === 2) await store.update("local-development", record.id, 1, "Changed", state, snapshot);
+      return Response.json({ choices: [{ message: { content: JSON.stringify(inference === 1 ? reply : { valid: true }) } }] });
+    });
+    const app = createApp(provider), bindings = { ...local, DB: traceDB, OPENROUTER_API_KEY: "test", THETADATA_TERMINAL_URL: "http://127.0.0.1:25503" };
+    const send = (id: string, value: unknown, settings = bindings) => app.request(`http://localhost/api/strategies/${id}/performance/discuss`, { method: "POST", headers: { "content-type": "application/json", Origin: "http://localhost", "X-ARGUS-Request": "1" }, body: JSON.stringify(value) }, settings);
+    if (changed === "none") {
+      const foreign = await store.create("other-owner", "Private", state, snapshot);
+      expect((await send(foreign.id, body)).status).toBe(404);
+      expect((await send(record.id, { ...body, revision: 2 })).status).toBe(409);
+      for (const bad of [{ ...body, performance: { combinedPnl: 99999 } }, { ...body, selectedDate: "2026-09-03" }, { ...body, conversation: [] }, { ...body, request_id: " " }]) expect((await send(record.id, bad)).status).toBe(400);
+      expect((await send(record.id, body, { ...bindings, SPARRING_RATE_LIMITER: { limit: async () => ({ success: false }) } } as typeof bindings)).status).toBe(429);
+      expect((await send(record.id, body, { ...bindings, OPENROUTER_API_KEY: "" })).status).toBe(503);
+      expect(provider).not.toHaveBeenCalled();
+    }
+    const response = await send(record.id, body);
+    expect(response.status).toBe(changed === "none" ? 200 : 409);
+    expect(inference).toBe(changed === "history" ? 0 : 2);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const result = await response.json() as any;
+    if (changed === "none") { expect(result).toMatchObject({ savedId: record.id, revision: 1, request_id: body.request_id, selectedDate: range.start, reply }); expect(await store.get("local-development", record.id)).toEqual(record); }
+    else expect(result.reply).toBeUndefined();
+  }
+});
 it("keeps daily performance local-only and enforces origin and authentication guards", async () => {
   const bindings = { ACCESS_TEAM_DOMAIN: "https://argus.cloudflareaccess.com", ACCESS_AUD: "performance", APP_ORIGIN: "https://argus.example.com", DB: traceDB, ARGUS_LOCAL_DEV: "true" };
   const keys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);

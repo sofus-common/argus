@@ -6,15 +6,23 @@ import { ANALYSIS_ENGINE_VERSION, loadAnalysisPrompts, promptDigest } from "../s
 import { defaultAnalysisPrompts, readAnalysisPrompts, type AnalysisPrompts } from "../src/analysis-prompts";
 import { createApp } from "../src/worker";
 import { createStrategy } from "../src/options";
-import previous from "../prompts/analysis-v11.json";
+import previous from "../prompts/analysis-v12.json";
 
 const db = (env as { DB: D1Database }).DB;
-it("versions domain-aware discovery while preserving unrelated prompt bytes", () => {
-  expect(defaultAnalysisPrompts.version).toBe("analysis-v12");
-  expect(ANALYSIS_ENGINE_VERSION).toBe("analysis-contract-v6");
+it("versions performance discussion while preserving every previous prompt string", () => {
+  expect(defaultAnalysisPrompts.version).toBe("analysis-v13");
+  expect(ANALYSIS_ENGINE_VERSION).toBe("analysis-contract-v7");
   for (const [key, value] of Object.entries(previous.prompts)) {
-    if (key !== "SYSTEM_PROMPT" && key !== "VERIFICATION_PROMPT") expect(defaultAnalysisPrompts.prompts[key as keyof typeof defaultAnalysisPrompts.prompts]).toBe(value);
+    expect(defaultAnalysisPrompts.prompts[key as keyof typeof defaultAnalysisPrompts.prompts]).toBe(value);
   }
+});
+it('requires paired optional performance prompts and admits older unrelated bundles', () => {
+  expect(readAnalysisPrompts(previous).version).toBe('analysis-v12');
+  for (const missing of ['PERFORMANCE_DISCUSSION_PROMPT', 'PERFORMANCE_VERIFICATION_PROMPT'] as const) {
+    const prompts = { ...defaultAnalysisPrompts.prompts }; delete prompts[missing];
+    expect(() => readAnalysisPrompts({ ...defaultAnalysisPrompts, prompts })).toThrow();
+  }
+  for (const key of ['PERFORMANCE_DISCUSSION_PROMPT', 'PERFORMANCE_VERIFICATION_PROMPT'] as const) for (const term of ['17:15 America/New_York', 'grossRealizedPnl', 'allowance once', 'adjacent complete calendar', 'zero', 'assignment', 'capital', 'selectedDate']) expect(defaultAnalysisPrompts.prompts[key]).toContain(term);
 });
 it("requires explicit discovery domains and keeps candidate risk horizons separate", () => {
   for (const key of ["SYSTEM_PROMPT", "VERIFICATION_PROMPT"] as const) {
@@ -76,7 +84,7 @@ it("rejects tampering, incompatible engines and invalid evaluation dates without
     { engine: "analysis-contract-v2" },
     { engine: "analysis-contract-v3" },
     { engine: "analysis-contract-v4" },
-    { engine: "analysis-contract-v5" },
+    { engine: "analysis-contract-v6" },
     { evaluated: "not-a-date" },
     { json: JSON.stringify({ ...defaultAnalysisPrompts, version: "wrong-version" }) },
     { json: JSON.stringify({ ...defaultAnalysisPrompts, prompts: {} }) },

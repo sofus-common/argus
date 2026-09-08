@@ -21,6 +21,7 @@ import {
   parseLotConversation,
   discussLotComparison,
   discussPriceHistory,
+  discussPositionPerformance,
   discussIntradayHistory,
   discussIvHistory,
   spar,
@@ -161,13 +162,16 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
       return c.json({ record, projection: projectPositionLots(position.schemaVersion === 2 ? position : upgradePositionLots(position)) });
     } catch { return c.json({ error: { code: "invalid_position", message: "Valid held entry costs are required to view dated lots." } }, 422); }
   });
-  app.post("/api/strategies/:id/performance", async c => {
+  app.post("/api/strategies/:id/performance/:action?", async c => {
+    const discussion = c.req.param("action") === "discuss";
+    if (c.req.param("action") && !discussion) return c.notFound();
     if (!c.get("session").local) return c.json({ error: { code: "history_local_only", message: "Hosted history requires a configured relay and shared provider limits." } }, 503);
-    let body: { revision: number; range: { start: string; end: string } };
+    let body: { revision: number; range: { start: string; end: string }; selectedDate?: string; request_id?: string; conversation?: unknown };
     try {
       body = await readJson(c.req.raw) as typeof body;
-      if (!body || Object.keys(body).sort().join() !== "range,revision" || !Number.isSafeInteger(body.revision) || body.revision < 1) throw new Error();
+      if (!body || Object.keys(body).sort().join() !== (discussion ? "conversation,range,request_id,revision,selectedDate" : "range,revision") || !Number.isSafeInteger(body.revision) || body.revision < 1) throw new Error();
       validatePerformanceRange(body.range);
+      if (discussion && (typeof body.request_id !== "string" || !body.request_id.trim() || body.request_id.length > 128 || typeof body.selectedDate !== "string" || !parseLotConversation(body.conversation))) throw new Error();
     } catch (error) { return c.json({ error: { code: error instanceof Error && error.message === "too_large" ? "request_too_large" : "invalid_request" } }, error instanceof Error && error.message === "too_large" ? 413 : 400); }
     const owner = c.get("session").owner, id = c.req.param("id"), store = createSavedStore(c.env.DB!);
     const record = await store.get(owner, id);
@@ -177,13 +181,27 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
       const saved = savedPosition(record);
       position = saved.schemaVersion === 2 ? saved : upgradePositionLots(saved);
     } catch { return c.json({ error: { code: "invalid_position", message: "A saved listed position with held entry costs is required." } }, 422); }
-    try { preparePositionPerformance(position, body.range); }
+    try { const prepared = preparePositionPerformance(position, body.range); if (discussion && !prepared.rows.some(row => row.date === body.selectedDate)) throw new Error(); }
     catch { return c.json({ error: { code: "invalid_request", message: "Performance requires a listed position, at most 31 complete dates and 64 held identities." } }, 400); }
+    if (discussion) {
+      const limited = await c.env.SPARRING_RATE_LIMITER?.limit({ key: owner });
+      if (limited && !limited.success) return c.json({ error: { code: "rate_limited" } }, 429);
+      if (!c.env.OPENROUTER_API_KEY) return c.json({ error: { code: "ai_unavailable" } }, 503);
+    }
     let performance: Awaited<ReturnType<typeof loadPositionPerformance>>;
     try { performance = await loadPositionPerformance(position, body.range, c.env, thetaRequest); }
     catch { return c.json({ error: { code: "history_unavailable", message: "Daily performance unavailable or terminal busy. Missing marks have not been substituted; the saved position is unchanged." } }, 503); }
     if ((await store.get(owner, id)).revision !== body.revision) throw new SavedStoreError("conflict", 409);
-    return c.json({ savedId: id, revision: record.revision, range: body.range, source: "Theta EOD", performance });
+    const result = { savedId: id, revision: record.revision, range: body.range, source: "Theta EOD", performance };
+    if (!discussion) return c.json(result);
+    let reply;
+    try {
+      ({ reply } = await withAnalysisTrace(c.env.DB, traceContext(c, "history", body.request_id!), (prompts, observe) => discussPositionPerformance(position, { savedId: id, revision: record.revision, range: body.range, performance, selectedDate: body.selectedDate! }, parseLotConversation(body.conversation)!, c.env.OPENROUTER_API_KEY!, providerFetch, prompts, observe)));
+    } catch (error) {
+      return c.json({ request_id: body.request_id, error: { code: error instanceof AnalysisTraceError ? "trace_unavailable" : error instanceof AnalysisVerificationError ? "analysis_unverified" : "provider_error", message: "Performance discussion could not be verified and was withheld. Recorded holdings are unchanged." } }, error instanceof AnalysisTraceError ? 503 : 502);
+    }
+    if ((await store.get(owner, id)).revision !== body.revision) throw new SavedStoreError("conflict", 409);
+    return c.json({ ...result, selectedDate: body.selectedDate, request_id: body.request_id, reply });
   });
   app.post("/api/strategies/:id/valuation", async c => {
     let body: { revision: number; snapshotId: string; basis: "mid" | "natural" };

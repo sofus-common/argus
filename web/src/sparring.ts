@@ -44,7 +44,8 @@ import { calculateLotScenarioComparison, type LotScenario } from "./lot-scenario
 import { historyPriceScale, readPriceHistory, type buildPriceHistory, type HistoricalRange } from "./price-history";
 import { readIntradayHistory, buildIvDiscussionFacts, type buildIvHistory, type buildIntradayHistory } from "./intraday-history";
 
-import type { LotTransaction, projectPositionLots, valuePositionLots } from "./position-lots";
+import type { LotTransaction, PositionLots, projectPositionLots, valuePositionLots } from "./position-lots";
+import { readPositionPerformance, type PositionPerformance } from "./position-performance";
 
 export const MODEL = "google/gemini-3.8-flash";
 export const MAX_MESSAGES = 12;
@@ -214,11 +215,22 @@ export async function discussIvHistory(facts: IvHistoryDiscussionFacts, conversa
   return { reply };
 }
 
-async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussionFacts | IntradayHistoryDiscussionFacts | ReturnType<typeof buildIvDiscussionFacts>, conversation: ConversationMessage[], apiKey: string, providerFetch: ProviderFetch, kind: "lots" | "history" | "intraday" | "iv", bundle: AnalysisPrompts, observer?: AnalysisObserver): Promise<{ reply: LotDiscussionReply; requestedScenarios: ReturnType<typeof calculateLotScenarioComparison>[] }> {
+export type PositionPerformanceDiscussionFacts = { savedId: string; revision: number; range: HistoricalRange; performance: PositionPerformance; selectedDate: string };
+export async function discussPositionPerformance(position: PositionLots, facts: PositionPerformanceDiscussionFacts, conversation: ConversationMessage[], apiKey: string, providerFetch: ProviderFetch = fetch, prompts: AnalysisPrompts = defaultAnalysisPrompts, observer?: AnalysisObserver): Promise<{ reply: LotDiscussionReply }> {
+  if (!record(facts) || Object.keys(facts).sort().join() !== 'performance,range,revision,savedId,selectedDate' || typeof facts.savedId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(facts.savedId) || !Number.isSafeInteger(facts.revision) || facts.revision < 1 || new TextEncoder().encode(JSON.stringify(facts)).byteLength > INTRADAY_DISCUSSION_BYTES) throw new Error('Invalid performance discussion facts');
+  const captured = structuredClone(facts);
+  captured.performance = readPositionPerformance(captured.performance, position, captured.range);
+  if (!captured.performance.rows.some(row => row.date === captured.selectedDate)) throw new Error('Invalid selected performance date');
+  const { reply } = await discussReadOnly(captured, conversation, apiKey, providerFetch, 'performance', prompts, observer);
+  return { reply };
+}
+
+async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussionFacts | IntradayHistoryDiscussionFacts | ReturnType<typeof buildIvDiscussionFacts> | PositionPerformanceDiscussionFacts, conversation: ConversationMessage[], apiKey: string, providerFetch: ProviderFetch, kind: "lots" | "history" | "intraday" | "iv" | "performance", bundle: AnalysisPrompts, observer?: AnalysisObserver): Promise<{ reply: LotDiscussionReply; requestedScenarios: ReturnType<typeof calculateLotScenarioComparison>[] }> {
   const { prompts } = readAnalysisPrompts(bundle);
   if (kind === 'iv' && (!prompts.IV_DISCUSSION_PROMPT || !prompts.IV_VERIFICATION_PROMPT)) throw new Error('IV discussion prompts are not configured');
-  const prompt = kind === 'iv' ? prompts.IV_DISCUSSION_PROMPT : kind === 'intraday' ? prompts.INTRADAY_DISCUSSION_PROMPT : kind === "history" ? prompts.HISTORY_DISCUSSION_PROMPT : prompts.LOT_DISCUSSION_PROMPT;
-  const inputLimit = kind === 'intraday' || kind === 'iv' ? INTRADAY_DISCUSSION_BYTES : 64 * 1024;
+  if (kind === 'performance' && (!prompts.PERFORMANCE_DISCUSSION_PROMPT || !prompts.PERFORMANCE_VERIFICATION_PROMPT)) throw new Error('Performance discussion prompts are not configured');
+  const prompt = kind === 'performance' ? prompts.PERFORMANCE_DISCUSSION_PROMPT : kind === 'iv' ? prompts.IV_DISCUSSION_PROMPT : kind === 'intraday' ? prompts.INTRADAY_DISCUSSION_PROMPT : kind === "history" ? prompts.HISTORY_DISCUSSION_PROMPT : prompts.LOT_DISCUSSION_PROMPT;
+  const inputLimit = kind === 'performance' || kind === 'intraday' || kind === 'iv' ? INTRADAY_DISCUSSION_BYTES : 64 * 1024;
   const messages = parseLotConversation(conversation);
   if (!messages) throw new Error("Invalid lot conversation");
   const captured = structuredClone(facts);
@@ -227,7 +239,7 @@ async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussio
   const daily = kind === 'history' ? captured as PriceHistoryDiscussionFacts : null;
   const priceDivisor = intraday || daily ? historyPriceScale((intraday ?? daily)!.state) : null;
   const selectedValue = intraday ? intraday.history.rows.find(row => row.time === intraday.selectedTime)?.value : daily?.history.rows.find(row => row.date === daily.selectedDate)?.value?.mid;
-  const historyDisplay = kind === 'lots' || kind === 'iv' ? undefined : { priceDivisor, selectedPrice: priceDivisor && selectedValue != null ? selectedValue / priceDivisor : null };
+  const historyDisplay = kind === 'lots' || kind === 'iv' || kind === 'performance' ? undefined : { priceDivisor, selectedPrice: priceDivisor && selectedValue != null ? selectedValue / priceDivisor : null };
   const frozen = JSON.stringify({ facts: presented, historyDisplay, conversation: messages });
   let requestedScenarios: ReturnType<typeof calculateLotScenarioComparison>[] = [];
   let toolMessages: Record<string, unknown>[] = [];
@@ -249,7 +261,7 @@ async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussio
       method: "POST", signal: controller.signal,
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "HTTP-Referer": "https://github.com/wibo/argus", "X-Title": "ARGUS" },
       body: observedBody(observer, !!reply, resumed, { model: MODEL, stream: false, max_tokens: MAX_OUTPUT_TOKENS, reasoning: { effort: reply ? "low" : "medium", exclude: true },
-        messages: [{ role: "system", content: reply ? kind === 'iv' ? prompts.IV_VERIFICATION_PROMPT : kind === 'intraday' ? prompts.INTRADAY_VERIFICATION_PROMPT : kind === "history" ? prompts.HISTORY_VERIFICATION_PROMPT : prompts.LOT_VERIFICATION_PROMPT : prompt }, { role: "user", content }, ...(!reply ? toolMessages : [])],
+        messages: [{ role: "system", content: reply ? kind === 'performance' ? prompts.PERFORMANCE_VERIFICATION_PROMPT : kind === 'iv' ? prompts.IV_VERIFICATION_PROMPT : kind === 'intraday' ? prompts.INTRADAY_VERIFICATION_PROMPT : kind === "history" ? prompts.HISTORY_VERIFICATION_PROMPT : prompts.LOT_VERIFICATION_PROMPT : prompt }, { role: "user", content }, ...(!reply ? toolMessages : [])],
         ...(selectingTool ? { tools: LOT_SCENARIO_TOOLS, tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: reply ? VERIFICATION_SCHEMA : LOT_DISCUSSION_SCHEMA } }),
         provider: { allow_fallbacks: false, data_collection: "deny", require_parameters: true },
       }),
