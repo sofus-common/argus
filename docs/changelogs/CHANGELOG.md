@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Enabled same-day option-chain admission before verified provider stop times.
+  Closed same-day expiries are omitted from default windows; explicit expired
+  selections and retained contracts fail without substitution. Conflicting
+  schedules and expiry crossed during quote retrieval reject before persistence.
+  Historical snapshots remain reopenable. Verified 73 chain/API tests, TypeScript
+  and build; a real SPY request returned today's and tomorrow's contracts.
+  Single-expiry UI selection and full intraday browser/session proof remain open.
+
 - Added fixed, secret-safe option-chain failure stages and reason codes for
   local development only; hosted responses remain generic. Regression checks
   cover provider/storage error redaction and hosted isolation. A real rejected

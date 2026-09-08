@@ -151,6 +151,53 @@ function symbolFixture(symbol: string, problem = "") {
   }) as typeof fetch;
 }
 
+it("includes same-day contracts before their verified stop time and omits them at the cutoff", async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date(`${dates[0]}T19:00:00Z`));
+    const store = createOptionChainStore(fixture());
+    const snapshot = await store.load(env);
+    expect(snapshot.availableExpiries).toEqual(dates);
+    expect(snapshot.contracts.some(contract => contract.expiry.startsWith(dates[0]))).toBe(true);
+    const position = createMarketStrategy('bull-call', snapshot);
+    expect(validateMarketStrategy(position, snapshot)).toEqual([]);
+    expect(Number.isFinite(calculateStrategy(position).entryAmount)).toBe(true);
+    expect(await store.get(snapshot.id, env)).toEqual(snapshot);
+    vi.setSystemTime(new Date(`${dates[0]}T20:15:00Z`));
+    const later = await store.load(env);
+    expect(later.availableExpiries).toEqual([dates[1]]);
+    expect(later.contracts.every(contract => contract.expiry.startsWith(dates[1]))).toBe(true);
+    await expect(store.load(env, [dates[0]])).rejects.toThrow();
+    await expect(store.load(env, undefined, 'local-development', 'SPY', { retain: [snapshot.contracts[0].contractId] })).rejects.toThrow();
+    const historical = await store.restore(snapshot, env, 'local-development');
+    expect(historical.contracts).toEqual(snapshot.contracts);
+    expect(historical.historical).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(['conflict', 'representative-conflict', 'invalid', 'crossing'])("rejects unsafe same-day %s schedules without storing a snapshot", async problem => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date(`${dates[0]}T20:14:59Z`));
+    const base = fixture();
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input)), response = await base(input, init);
+      const value = await response.json() as any;
+      if (url.pathname.includes('instruments') && value.data['expiration-date'] === dates[0]) {
+        if (problem === 'conflict' && value.data['option-type'] === 'P') value.data['stops-trading-at'] = `${dates[0]}T20:14:00Z`;
+        if (problem === 'representative-conflict' && Number(value.data['strike-price']) > 85) value.data['expires-at'] = `${dates[0]}T20:16:00Z`;
+        if (problem === 'invalid') value.data['stops-trading-at'] = 'invalid';
+      }
+      if (problem === 'crossing' && url.searchParams.has('equity-option')) vi.setSystemTime(new Date(`${dates[0]}T20:15:00Z`));
+      return Response.json(value);
+    };
+    const batch = vi.fn();
+    const bindings = { ...env, DB: { prepare: db.prepare.bind(db), batch } as unknown as D1Database };
+    await expect(createOptionChainStore(fetcher).load(bindings)).rejects.toThrow('Option chain unavailable');
+    expect(batch.mock.calls.length).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
 it.each(["QQQ", "AAPL", "F", "ABCDEF"])("binds %s quotes, contracts, schedules and saved states to their root", async symbol => {
   const fetcher = symbolFixture(symbol);
   const store = createOptionChainStore(fetcher);

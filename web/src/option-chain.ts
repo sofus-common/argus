@@ -73,6 +73,18 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
         if (Date.now() >= deadline) throw new Error("Timed out");
         return request(`https://api.tastyworks.com${path}`, { headers: { Authorization: `Bearer ${token}`, "User-Agent": "argus/0.1" } }, limit);
       };
+      const schedulesFor = async (representatives: { contractId: string; type: 'call' | 'put'; strike: number; date: string }[]) => {
+        stage = 'instruments';
+        const schedules = await Promise.all(representatives.map(async c => {
+          const instrument = (await get(`/instruments/equity-options/${encodeURIComponent(c.contractId)}`)).data;
+          if (instrument?.symbol !== c.contractId || instrument["underlying-symbol"] !== symbol || instrument["root-symbol"] !== symbol || instrument["shares-per-contract"] !== 100 || instrument["exercise-style"] !== "American" || instrument["settlement-type"] !== "PM" || instrument["option-chain-type"] !== "Standard" || instrument["option-type"] !== (c.type === "call" ? "C" : "P") || number(instrument["strike-price"]) !== c.strike || instrument["expiration-date"] !== c.date) throw new Error("Invalid instrument");
+          const expiry = timestamp(instrument["stops-trading-at"]), expiresAt = timestamp(instrument["expires-at"]);
+          if (expiry.slice(0, 10) !== c.date || Date.parse(expiry) > Date.parse(expiresAt)) throw new Error("Invalid expiry");
+          return { date: c.date, expiry, expiresAt };
+        }));
+        for (const date of new Set(schedules.map(s => s.date))) { const pair = schedules.filter(s => s.date === date); if (pair.length !== 2 || pair[0].expiry !== pair[1].expiry || pair[0].expiresAt !== pair[1].expiresAt) throw new Error("Conflicting expiry schedules"); }
+        return schedules;
+      };
       stage = 'catalog';
       const [rawChain, rawSpot] = await Promise.all([get(`/option-chains/${symbol}/nested`, 2_097_152), get(`/market-data/by-type?equity=${symbol}`)]);
       const underlying = quote(items(rawSpot).find(x => x.symbol === symbol));
@@ -82,7 +94,17 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       stage = 'selection';
       const chains = items(rawChain).filter(x => x["underlying-symbol"] === symbol && x["root-symbol"] === symbol && x["option-chain-type"] === "Standard" && x["shares-per-contract"] === 100 && Array.isArray(x.deliverables) && x.deliverables.length === 1 && x.deliverables[0].symbol === symbol && x.deliverables[0]["deliverable-type"] === "Shares" && number(x.deliverables[0].amount) === 100);
       const today = new Date().toISOString().slice(0, 10);
-      const windows = chains.flatMap(x => Array.isArray(x.expirations) ? x.expirations : []).filter(x => typeof x["expiration-date"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x["expiration-date"]) && Number.isFinite(Date.parse(x["expiration-date"])) && new Date(x["expiration-date"]).toISOString().slice(0, 10) === x["expiration-date"] && x["expiration-date"] > today && x["settlement-type"] === "PM" && Array.isArray(x.strikes));
+      let windows = chains.flatMap(x => Array.isArray(x.expirations) ? x.expirations : []).filter(x => typeof x["expiration-date"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x["expiration-date"]) && Number.isFinite(Date.parse(x["expiration-date"])) && new Date(x["expiration-date"]).toISOString().slice(0, 10) === x["expiration-date"] && x["expiration-date"] >= today && x["settlement-type"] === "PM" && Array.isArray(x.strikes));
+      const sameDay = windows.find(x => x["expiration-date"] === today);
+      let sameDaySchedule: { expiry: string; expiresAt: string } | undefined;
+      if (sameDay) {
+        const row = sameDay.strikes.find((s: any) => number(s["strike-price"]) > 0 && typeof s.call === 'string' && typeof s.put === 'string');
+        if (!row) throw new Error("Invalid instrument");
+        const schedules = await schedulesFor((["call", "put"] as const).map(type => ({ contractId: row[type], type, strike: number(row["strike-price"]), date: today })));
+        sameDaySchedule = schedules[0];
+        if (Date.parse(schedules[0].expiry) <= Date.now()) windows = windows.filter(x => x["expiration-date"] !== today);
+      }
+      stage = 'selection';
       const availableExpiries = [...new Set<string>(windows.map(x => x["expiration-date"]))].sort();
       const selected = expiries ?? availableExpiries.slice(0, 2);
       if (!selected.length || selected.length > 2 || new Set(selected).size !== selected.length || selected.some(x => !availableExpiries.includes(x))) throw new Error("Invalid expiries");
@@ -101,15 +123,9 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       if (contracts.some(c => c.contractId.slice(6, 12) !== c.date.slice(2).replaceAll("-", "") || c.contractId[12] !== (c.type === "call" ? "C" : "P") || Number(c.contractId.slice(13)) / 1000 !== c.strike)) throw new Error("Mismatched contract identity");
       // ponytail: standard expiry schedules verified on one call/put per date; per-strike metadata if adjusted contracts are supported.
       const representatives = selected.flatMap(date => (["call", "put"] as const).map(type => contracts.find(c => c.date === date && c.type === type)!));
-      stage = 'instruments';
-      const schedules = await Promise.all(representatives.map(async c => {
-        const instrument = (await get(`/instruments/equity-options/${encodeURIComponent(c.contractId)}`)).data;
-        if (instrument?.symbol !== c.contractId || instrument["underlying-symbol"] !== symbol || instrument["root-symbol"] !== symbol || instrument["shares-per-contract"] !== 100 || instrument["exercise-style"] !== "American" || instrument["settlement-type"] !== "PM" || instrument["option-chain-type"] !== "Standard" || instrument["option-type"] !== (c.type === "call" ? "C" : "P") || number(instrument["strike-price"]) !== c.strike || instrument["expiration-date"] !== c.date) throw new Error("Invalid instrument");
-        const expiry = timestamp(instrument["stops-trading-at"]), expiresAt = timestamp(instrument["expires-at"]);
-        if (expiry.slice(0, 10) !== c.date || Date.parse(expiry) > Date.parse(expiresAt) || Date.parse(expiry) <= Date.now()) throw new Error("Invalid expiry");
-        return { date: c.date, expiry, expiresAt };
-      }));
-      for (const date of selected) { const pair = schedules.filter(s => s.date === date); if (pair[0].expiry !== pair[1].expiry || pair[0].expiresAt !== pair[1].expiresAt) throw new Error("Conflicting expiry schedules"); }
+      const schedules = await schedulesFor(representatives);
+      if (sameDaySchedule && schedules.some(s => s.date === today && (s.expiry !== sameDaySchedule.expiry || s.expiresAt !== sameDaySchedule.expiresAt))) throw new Error("Conflicting expiry schedules");
+      if (schedules.some(s => Date.parse(s.expiry) <= Date.now())) throw new Error("Invalid expiry");
       stage = 'quotes';
       const rawQuotes = items(await get(`/market-data/by-type?${new URLSearchParams({ "equity-option": contracts.map(c => c.contractId).join(",") })}`, 1_048_576));
       const normalized: MarketContract[] = contracts.map(c => {
@@ -123,6 +139,7 @@ export function createOptionChainStore(fetcher: typeof fetch = fetch) {
       });
       if (Date.now() > deadline) throw new Error("Timed out");
       const snapshot: MarketSnapshot = { id: crypto.randomUUID(), underlying: symbol, strikeCenter, source: "Tastytrade", retrievedAt: new Date().toISOString(), spot, spotAsOf: underlying.quoteAsOf, availableExpiries, contracts: normalized };
+      if (normalized.some(c => c.expiry <= snapshot.retrievedAt)) throw new Error("Invalid expiry");
       snapshot.contractTerms = { exerciseStyle: "American", settlement: "physical-shares", sharesPerContract: 100, settlementSession: "PM" };
       stage = 'storage';
       return await register(snapshot, env, owner);
