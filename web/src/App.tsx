@@ -916,7 +916,7 @@ function SavedOverview({ saved, disabled, onInspect }: { saved: SavedSummary[]; 
       <th scope="row">{item.title}<small>{t?.underlying ?? 'Unknown instrument'} · r{item.revision}<br />Saved {new Date(item.updatedAt).toISOString()}</small></th>
       <td>{labels[t?.status ?? 'unavailable']}{t?.remainingLots != null && <small>{t.remainingLots} lots · {t.optionContracts} contracts<br />{t.signedShares} signed shares</small>}</td>
       <td>{t?.grossRealizedPnl == null ? '—' : money(t.grossRealizedPnl)}{t?.allowance != null && <small>Allowance {money(t.allowance)}{t.asOf && <><br />Ledger {t.asOf}</>}</small>}</td>
-      <td>{t?.netClosedPnl != null ? money(t.netClosedPnl) : t?.status === 'open' ? 'Not valued' : '—'}<small>{t?.status === 'closed' ? 'Recorded closes − allowance' : t?.status === 'not-tracked' ? 'Requires listed fixed entries' : 'No quote mark inferred'}</small></td>
+      <td>{t?.netClosedPnl != null ? money(t.netClosedPnl) : t?.status === 'open' ? 'Not valued' : '—'}<small>{t?.status === 'closed' ? 'Recorded outcomes − allowance' : t?.status === 'not-tracked' ? 'Requires listed fixed entries' : 'No quote mark inferred'}</small></td>
       <td><button aria-label={`Inspect ${item.title}`} disabled={disabled || !t || t.status === 'unavailable' || t.status === 'not-tracked'} onClick={() => onInspect(item.id)}>Inspect</button></td>
     </tr> })}</tbody></table></div>{!rows.length && <p>{saved.length ? 'No matching loaded positions.' : 'No saved positions yet. Save a position to begin.'}</p>}
     <p>Gross realized P/L excludes the flat allowance; closed net P/L deducts it once. Analysis exclusions do not remove held inventory. Ledger and save times are not quote timestamps.</p>

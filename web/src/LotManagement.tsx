@@ -4,11 +4,14 @@ import type { StrategyState } from './options'
 import { assertRemainingLotInventory } from './lot-scenarios'
 import type { SavedStrategy } from './saved-strategies'
 import type { LotAsset, LotTransaction, LotAmendment, projectPositionLots, valuePositionLots } from './position-lots'
+import { projectPositionLots as projectExpiry, upgradePositionLots, recordExpiryResolution, recordExpiryVoid, type ExpiryResolution, type ExpiryVoid } from './position-lots'
+import { createPosition } from './position-lifecycle'
 import type { valuePosition } from './position-lifecycle'
 import { requestLotScenarioComparison, type LotScenario, type LotScenarioComparison, type LotScenarioInput } from './workspace-valuation-client'
 import type { ConversationMessage, LotDiscussionFacts, LotDiscussionReply } from './sparring'
 
 type Projection = ReturnType<typeof projectPositionLots>
+type ExpiryReview = { revision: number; resolution?: ExpiryResolution; void?: ExpiryVoid; projection: Projection }
 type Loaded = { record: SavedStrategy; projection: Projection }
 type Selection = { checked: boolean; quantity: string; price: string }
 type Valuation = ReturnType<typeof valuePosition> & { lotMarks?: ReturnType<typeof valuePositionLots>['lotMarks']; analysisUnavailable?: ReturnType<typeof valuePositionLots>['analysisUnavailable'] }
@@ -148,10 +151,12 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
   const [opens, setOpens] = useState<Record<string, Selection>>({})
   const [at, setAt] = useState('')
   const [review, setReview] = useState<{ revision: number; transaction: LotTransaction; before: Projection; projection: Projection } | null>(null)
-  const [action, setAction] = useState<'transaction' | 'correction' | 'opening-correction' | 'void'>('transaction')
+  const [action, setAction] = useState<'transaction' | 'correction' | 'opening-correction' | 'void' | 'expiry' | 'expiry-void'>('transaction')
+  const [expiryQuantity, setExpiryQuantity] = useState(''), [expiryOutcome, setExpiryOutcome] = useState<'no-exercise' | 'cash-settlement'>('no-exercise')
+  const [expiryReview, setExpiryReview] = useState<ExpiryReview | null>(null)
   const [closeId, setCloseId] = useState(''), [correctedPrice, setCorrectedPrice] = useState(''), [reason, setReason] = useState('')
   const [amendmentReview, setAmendmentReview] = useState<{ revision: number; amendment: LotAmendment; before: Projection; projection: Projection } | null>(null)
-  const reviewing = !!review || !!amendmentReview
+  const reviewing = !!review || !!amendmentReview || !!expiryReview
   const [busy, setBusy] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const [error, setError] = useState('')
@@ -173,7 +178,12 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
   const dismiss = () => { dialog.current?.close(); onClose() }
   const matched = (record: SavedStrategy, transaction: LotTransaction) => record.lifecycle?.schemaVersion === 2 && record.lifecycle.transactions.some(item => sameTransaction(item, transaction))
   const matchedAmendment = (record: SavedStrategy, amendment: LotAmendment) => record.lifecycle?.schemaVersion === 2 && record.lifecycle.amendments?.some(item => item.kind === amendment.kind && item.id === amendment.id && item.recordedAt === amendment.recordedAt && item.reason === amendment.reason && (item.kind === 'opening-price-correction' ? amendment.kind === 'opening-price-correction' && item.lotId === amendment.lotId && item.price === amendment.price : amendment.kind !== 'opening-price-correction' && item.closeId === amendment.closeId && (item.kind !== 'price-correction' || amendment.kind === 'price-correction' && item.price === amendment.price)))
-  const clear = () => { setReview(null); setAmendmentReview(null); setUncertain(false); setCloses({}); setOpens({}); setAt(''); setCloseId(''); setCorrectedPrice(''); setReason('') }
+  const matchedExpiry = (record: SavedStrategy, pending: ExpiryReview) => {
+    const events = record.lifecycle?.schemaVersion === 2 ? pending.resolution ? record.lifecycle.expiryResolutions : record.lifecycle.expiryVoids : undefined
+    const expected = pending.resolution ?? pending.void!
+    return record.id === savedId && events?.some(item => Object.keys(expected).every(key => (item as unknown as Record<string, unknown>)[key] === (expected as unknown as Record<string, unknown>)[key]))
+  }
+  const clear = () => { setReview(null); setAmendmentReview(null); setExpiryReview(null); setExpiryQuantity(''); setUncertain(false); setCloses({}); setOpens({}); setAt(''); setCloseId(''); setCorrectedPrice(''); setReason('') }
   const refreshList = async () => { try { await onRecorded() } catch { setNotice('Transaction recorded. Reload the saved-position list before another saved-workspace action.') } }
   const load = async (signal?: AbortSignal) => {
     invalidateValuation()
@@ -182,14 +192,19 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
       const response = await fetch(`${endpoint}/lots`, { signal })
       const body = await response.json() as Loaded & { error?: { message?: string } }
       if (!response.ok) throw new Error(body.error?.message ?? 'Lot inventory unavailable. Keep held entry costs and save first.')
+      const saved = body.record?.lifecycle ?? createPosition(body.record?.state), position = saved.schemaVersion === 2 ? saved : upgradePositionLots(saved)
+      if (body.record.id !== savedId || !Number.isSafeInteger(body.record.revision) || body.record.revision < 1 || JSON.stringify(projectExpiry(position)) !== JSON.stringify(body.projection)) throw new Error('Saved lot response could not be reconciled.')
       setCurrent(body)
-      if (uncertain && amendmentReview) {
+      if (uncertain && expiryReview) {
+        if (body.record.revision > expiryReview.revision && matchedExpiry(body.record, expiryReview)) { clear(); setNotice('The identical expiry outcome is recorded. The builder has not changed.'); await refreshList() }
+        else setNotice('This reload does not confirm the expiry outcome. Retry the identical request; edits remain locked.')
+      } else if (uncertain && amendmentReview) {
         if (matchedAmendment(body.record, amendmentReview.amendment)) { clear(); setNotice('The identical amendment is recorded. The builder has not changed.'); await refreshList() }
         else setNotice('This reload does not confirm the amendment. It may still be processing. Retry the identical request; edits remain locked.')
       } else if (uncertain && review) {
         if (matched(body.record, review.transaction)) { clear(); setNotice('The identical transaction is recorded. The builder has not changed.'); await refreshList() }
         else setNotice('This reload does not confirm the transaction. It may still be processing. Retry the identical request; edits remain locked.')
-      } else { setReview(null); setAmendmentReview(null) }
+      } else { setReview(null); setAmendmentReview(null); setExpiryReview(null) }
     } catch (cause) { if (!signal?.aborted) setError(cause instanceof Error ? cause.message : 'Lot inventory unavailable.') }
     finally { if (!signal?.aborted) setBusy(false) }
   }
@@ -232,10 +247,17 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
     finally { setBusy(false) }
   }
   const confirm = async () => {
-    if ((!review && !amendmentReview) || busy) return
+    if ((!review && !amendmentReview && !expiryReview) || busy) return
     invalidateValuation()
     setBusy(true); setError(''); setNotice('')
     try {
+      if (expiryReview) {
+        const response = await fetch(`${endpoint}/${expiryReview.resolution ? 'expiry-resolutions' : 'expiry-voids'}`, { method: 'POST', headers, body: JSON.stringify({ revision: expiryReview.revision, ...(expiryReview.resolution ? { resolution: expiryReview.resolution } : { void: expiryReview.void }) }) })
+        const body = await response.json() as Loaded & { error?: { message?: string } }
+        if (!response.ok && response.status >= 400 && response.status < 500 && !uncertain) { setError(body.error?.message ?? 'Expiry outcome rejected. Reload before trying again.'); return }
+        if (!response.ok || !matchedExpiry(body.record, expiryReview) || body.record.revision <= expiryReview.revision || body.record.lifecycle?.schemaVersion !== 2 || JSON.stringify(projectExpiry(body.record.lifecycle)) !== JSON.stringify(body.projection)) throw new Error('The response did not confirm this exact expiry outcome.')
+        setCurrent(body); clear(); setNotice('Expiry outcome recorded. No trade was sent and the builder has not changed.'); await refreshList(); return
+      }
       const amendment = amendmentReview?.amendment
       const { kind, ...request } = amendment ?? { kind: '' }
       const response = await fetch(`${endpoint}/${amendment ? kind === 'opening-price-correction' ? 'lot-opening-price-corrections' : kind === 'price-correction' ? 'lot-price-corrections' : 'lot-close-voids' : 'transactions'}`, { method: 'POST', headers, body: JSON.stringify(amendment ? { revision: amendmentReview!.revision, [kind === 'close-void' ? 'void' : 'correction']: request } : { revision: review!.revision, transaction: review!.transaction }) })
@@ -303,7 +325,31 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
     return amended?.kind === 'price-correction' ? amended.price : legacy?.priceCorrections?.filter(item => item.closeId === id).at(-1)?.price ?? original
   }
   const activeCloses = recordedCloses.filter(item => !voided.has(item.id))
-  const chosenAction = reviewing ? action : (action === 'correction' || action === 'void') && (ledger?.schemaVersion !== 2 || !activeCloses.length) ? 'transaction' : action
+  const expiredLots = current?.projection.lots.filter(lot => lot.asset.kind === 'option' && Date.parse(lot.asset.expiry) <= Date.now()) ?? []
+  const expiryEvents = ledger?.schemaVersion === 2 ? ledger.expiryResolutions ?? [] : []
+  const activeExpiries = expiryEvents.filter(event => ledger?.schemaVersion === 2 && !ledger.expiryVoids?.some(item => item.resolutionId === event.id))
+  const terms = current?.record.snapshot?.contractTerms
+  const canCashSettle = index && terms?.exerciseStyle === 'European' && terms.settlement === 'cash' && terms.settlementSession === 'PM' && terms.multiplier === 100
+  const previewExpiry = async () => {
+    if (!current || busy || uncertain || reviewing) return
+    invalidateValuation(); setBusy(true); setError(''); setNotice('')
+    try {
+      const base = { id: crypto.randomUUID(), recordedAt: new Date().toISOString(), reason: reason.trim() }
+      if (!base.reason) throw new Error('Enter a broker statement or official settlement reference. No outcome is inferred from quotes.')
+      const saved = current.record.lifecycle ?? createPosition(current.record.state), position = saved.schemaVersion === 2 ? saved : upgradePositionLots(saved)
+      const pending: ExpiryReview = action === 'expiry-void'
+        ? { revision: current.record.revision, void: { ...base, resolutionId: closeId }, projection: current.projection }
+        : { revision: current.record.revision, resolution: { ...base, lotId: closeId, quantity: Number(expiryQuantity), outcome: expiryOutcome, settlementValue: expiryOutcome === 'cash-settlement' ? Number(correctedPrice) : null }, projection: current.projection }
+      if (pending.resolution && (!expiryQuantity.trim() || pending.resolution.outcome === 'cash-settlement' && (!canCashSettle || !correctedPrice.trim()))) throw new Error('Select a quantity and explicit official settlement value for cash settlement.')
+      pending.projection = projectExpiry(pending.resolution ? recordExpiryResolution(position, pending.resolution) : recordExpiryVoid(position, pending.void!))
+      const response = await fetch(`${endpoint}/${pending.resolution ? 'expiry-resolutions' : 'expiry-voids'}/preview`, { method: 'POST', headers, body: JSON.stringify({ revision: pending.revision, ...(pending.resolution ? { resolution: pending.resolution } : { void: pending.void }) }) })
+      const body = await response.json() as { revision: number; projection: Projection; error?: { message?: string } }
+      if (!response.ok || body.revision !== pending.revision || JSON.stringify(body.projection) !== JSON.stringify(pending.projection)) throw new Error(body.error?.message ?? 'Expiry preview could not be reconciled. Nothing was recorded.')
+      setExpiryReview(pending)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Expiry preview unavailable.') }
+    finally { setBusy(false) }
+  }
+  const chosenAction = reviewing ? action : (action === 'correction' || action === 'void') && (ledger?.schemaVersion !== 2 || !activeCloses.length) || action === 'expiry' && !expiredLots.length || action === 'expiry-void' && !activeExpiries.length ? 'transaction' : action
   const previewAmendment = async () => {
     if (!current || (chosenAction !== 'opening-correction' && ledger?.schemaVersion !== 2) || busy || uncertain || reviewing || chosenAction === 'transaction') return
     invalidateValuation(); setBusy(true); setError(''); setNotice('')
@@ -323,7 +369,7 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
   }
   return <dialog ref={dialog} className="lifecycle-dialog lot-management" aria-label="Manage lots and rolls" onCancel={event => { event.preventDefault(); if (!busy && !uncertain) dismiss() }}>
     <header><div><h2>{current?.record.title ?? 'Manage lots and rolls'}</h2><span>{current ? `Revision ${current.record.revision} · ${current.projection.status}` : 'Loading saved position'}</span></div><button aria-label="Close lot-management panel" disabled={busy || uncertain} onClick={dismiss}>Close</button></header>
-    <p>User-recorded transactions, not broker-verified fills or orders. Recording does not change the builder. Exercise, assignment and settlement are not simulated.</p>
+    <p>User-recorded transactions and expiry outcomes, not broker-verified fills or orders. Recording does not change the builder. Physical exercise/assignment remains unsupported; no expiry outcome is inferred automatically.</p>
     {index && <p>European cash-settled index options · execution premiums in points · $100 per premium point per contract. P/L and allowance are USD. Index shares cannot be opened.</p>}
     {busy && <p role="status">Updating lot records…</p>}{error && <p role="alert" className="workspace-error">{error}</p>}{notice && <p role="status">{notice}</p>}
     <button disabled={busy} onClick={() => void load()}>Reload saved record</button>
@@ -336,9 +382,15 @@ export function LotManagement({ savedId, source, snapshotId, onClose, onRecorded
         {valuation && <section aria-label="Dated lot combined P/L"><h3>Dated combined P/L · {money(valuation.combinedPnl)}</h3><p>Recorded realized {money(valuation.grossRealizedPnl)} + remaining unrealized {money(valuation.unrealizedPnl)} − allowance {money(valuation.allowance)} = {money(valuation.combinedPnl)}</p><p>{valuation.basis === 'mid' ? 'Midpoint' : 'Natural liquidation'} quotes · {valuation.historical ? 'Historical snapshot' : 'Dated snapshot'} · {valuation.snapshotId}</p><p>Retrieved {valuation.retrievedAt}<br />Source quotes {valuation.oldestQuoteAt} to {valuation.newestQuoteAt}</p><p>{valuation.disclosure}</p>{valuation.lotMarks && <><h3>Dated lot marks</h3><ul>{valuation.lotMarks.map(mark => <li key={mark.lotId}>Lot {mark.lotId} · {mark.quantity} units · held entry {priceLabel(mark.entryPrice)} · mark {priceLabel(mark.mark)} · unrealized {money(mark.unrealizedPnl)}</li>)}</ul></>}</section>}
       </section>
       </div>
-      <label>Lot action<select aria-label="Lot action" value={chosenAction} disabled={busy || uncertain || reviewing} onChange={event => { setAction(event.target.value as typeof action); setError(''); setCloseId(''); setCorrectedPrice(''); setReason(''); invalidateValuation() }}><option value="transaction">Record transaction</option><option value="opening-correction">Correct recorded opening price</option>{ledger?.schemaVersion === 2 && activeCloses.length > 0 && <><option value="correction">Correct recorded close price</option><option value="void">Void erroneous close</option></>}</select></label>
+      {expiredLots.length > 0 && <p role="status">Expiry outcome unresolved for {expiredLots.length} option lots. Missing quotes and moneyness do not establish exercise, assignment or settlement. Record an explicit outcome; physical delivery remains unsupported.</p>}
+      <label>Lot action<select aria-label="Lot action" value={chosenAction} disabled={busy || uncertain || reviewing} onChange={event => { setAction(event.target.value as typeof action); setError(''); setCloseId(''); setCorrectedPrice(''); setReason(''); invalidateValuation() }}><option value="transaction">Record transaction</option><option value="opening-correction">Correct recorded opening price</option>{ledger?.schemaVersion === 2 && activeCloses.length > 0 && <><option value="correction">Correct recorded close price</option><option value="void">Void erroneous close</option></>}{expiredLots.length > 0 && <option value="expiry">Record expiry outcome</option>}{activeExpiries.length > 0 && <option value="expiry-void">Void erroneous expiry outcome</option>}</select></label>
+      {(chosenAction === 'expiry' || chosenAction === 'expiry-void') && !reviewing && <form onSubmit={event => { event.preventDefault(); void previewExpiry() }}><fieldset disabled={busy || uncertain}><legend>Explicit expiry accounting</legend><p>No trade is sent. Effective time is the option's recorded expiry; recording time is now. Physical exercise/assignment and tax-basis accounting are not supported. Only record an outcome confirmed by your statement; to correct an outcome, void it and record the correct one.</p>
+        {chosenAction === 'expiry' ? <><label>Expired option lot<select aria-label="Expired option lot" required value={closeId} onChange={event => setCloseId(event.target.value)}><option value="">Choose expired lot</option>{expiredLots.map(lot => <option key={lot.id} value={lot.id}>{lot.id} · {lot.side} {label(lot.asset)} · {lot.quantity} remaining</option>)}</select></label><label>Quantity<input aria-label="Expiry quantity" type="number" min="1" step="1" required value={expiryQuantity} onChange={event => setExpiryQuantity(event.target.value)} /></label><label>Outcome<select aria-label="Expiry outcome" value={expiryOutcome} onChange={event => setExpiryOutcome(event.target.value as typeof expiryOutcome)}><option value="no-exercise">Expired without exercise or assignment · zero proceeds</option>{canCashSettle && <option value="cash-settlement">XSP cash settlement · official settlement value</option>}</select></label>{expiryOutcome === 'cash-settlement' && <label>Official settlement value · index points<input aria-label="Official expiry settlement value" type="number" min="0" step="any" required value={correctedPrice} onChange={event => setCorrectedPrice(event.target.value)} /></label>}</> : <label>Recorded expiry outcome<select aria-label="Recorded expiry outcome" required value={closeId} onChange={event => setCloseId(event.target.value)}><option value="">Choose recorded outcome</option>{activeExpiries.map(item => <option key={item.id} value={item.id}>{item.lotId} · {item.outcome} · {item.quantity} · recorded {item.recordedAt}</option>)}</select></label>}
+        <label>Statement / official reference or void reason<input aria-label="Expiry reference" required maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label><button type="submit">Preview expiry outcome</button></fieldset></form>}
+      {expiryReview && <section aria-label="Expiry outcome preview"><h3>{expiryReview.resolution ? 'Proposed expiry outcome' : 'Proposed expiry void'}</h3><p>{expiryReview.resolution ? `${expiryReview.resolution.quantity} of ${expiryReview.resolution.lotId}: ${expiryReview.resolution.outcome}${expiryReview.resolution.settlementValue === null ? '' : ` at official settlement ${expiryReview.resolution.settlementValue} index points`}` : `Void ${expiryReview.void!.resolutionId}; the original remains audited.`}</p><p>{(expiryReview.resolution ?? expiryReview.void)!.reason}</p><h4>Projected remaining inventory</h4>{inventory(expiryReview.projection)}{totals(expiryReview.projection, true)}<p>{uncertain ? 'Recording is uncertain. Retry this exact outcome or reload; do not enter a duplicate.' : 'Preview only. Confirm to update this saved revision; the builder is unchanged.'}</p><button disabled={busy} onClick={() => void confirm()}>{uncertain ? 'Retry identical expiry outcome' : expiryReview.resolution ? 'Confirm expiry outcome' : 'Confirm expiry void'}</button><button disabled={busy || uncertain} onClick={() => setExpiryReview(null)}>Cancel expiry preview</button></section>}
+      {expiryEvents.length > 0 && <details><summary>Recorded expiry outcomes</summary>{expiryEvents.map(event => <p key={event.id}>{event.id} · {event.lotId} · {event.quantity} · {event.outcome} · {event.settlementValue === null ? 'zero proceeds' : `${event.settlementValue} official index settlement points`} · recorded {event.recordedAt} · {event.reason}{ledger?.schemaVersion === 2 && ledger.expiryVoids?.filter(item => item.resolutionId === event.id).map(item => <span key={item.id}> · VOID {item.recordedAt}: {item.reason}</span>)}</p>)}</details>}
       {ledger?.schemaVersion !== 2 && <p>For close-price corrections or erroneous-close voids on this original record, use Manage closes. Confirming an opening-price correction preserves the original record inside the lot ledger; preview alone does not upgrade it.</p>}
-      {chosenAction !== 'transaction' && !reviewing && <form onSubmit={event => { event.preventDefault(); void previewAmendment() }}><fieldset disabled={busy || uncertain}><legend>{chosenAction === 'opening-correction' ? 'Correct a recorded opening price' : chosenAction === 'correction' ? 'Correct a recorded close price' : 'Void an erroneous close'}</legend><p>{chosenAction === 'void' ? 'Only void a close that did not occur. This restores recorded inventory; it does not reverse an actual trade or send an order.' : chosenAction === 'opening-correction' ? 'Correct the opening transcription price only. This recalculates the lot’s realized P/L and remaining entry basis, including fully closed lots. Quantity, contract, execution time and original records are unchanged. This does not void an opening or undo a roll.' : 'Correct the transcription price only. Quantity and execution time are unchanged; the original record is retained.'}</p>
+      {['correction', 'opening-correction', 'void'].includes(chosenAction) && !reviewing && <form onSubmit={event => { event.preventDefault(); void previewAmendment() }}><fieldset disabled={busy || uncertain}><legend>{chosenAction === 'opening-correction' ? 'Correct a recorded opening price' : chosenAction === 'correction' ? 'Correct a recorded close price' : 'Void an erroneous close'}</legend><p>{chosenAction === 'void' ? 'Only void a close that did not occur. This restores recorded inventory; it does not reverse an actual trade or send an order.' : chosenAction === 'opening-correction' ? 'Correct the opening transcription price only. This recalculates the lot’s realized P/L and remaining entry basis, including fully closed lots. Quantity, contract, execution time and original records are unchanged. This does not void an opening or undo a roll.' : 'Correct the transcription price only. Quantity and execution time are unchanged; the original record is retained.'}</p>
         {chosenAction === 'opening-correction' ? <label>Recorded opening lot<select aria-label="Recorded opening lot" required value={closeId} onChange={event => setCloseId(event.target.value)}><option value="">Select an opening lot</option>{current.projection.openings.map(lot => <option key={lot.id} value={lot.id}>{lot.id} · {lot.side} {label(lot.asset)} · opened {lot.quantity} · original {priceLabel(lot.originalEntryPrice)} · effective {priceLabel(lot.entryPrice)}{current.projection.lots.some(item => item.id === lot.id) ? '' : ' · fully closed'}</option>)}</select></label> : <label>Recorded close<select aria-label="Recorded lot close" required value={closeId} onChange={event => setCloseId(event.target.value)}><option value="">Select a close</option>{activeCloses.map(item => <option key={item.id} value={item.id}>{item.description} · original {priceLabel(item.price)} · effective {priceLabel(effectivePrice(item.id, item.price))}</option>)}</select></label>}
         {chosenAction !== 'void' && <label>Corrected price · {priceUnit}<input aria-label={chosenAction === 'opening-correction' ? 'Corrected lot opening price' : 'Corrected lot close price'} type="number" min="0" step="any" required value={correctedPrice} onChange={event => setCorrectedPrice(event.target.value)} /></label>}<label>Reason<input aria-label="Lot amendment reason" required maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label><button type="submit">Preview lot amendment</button></fieldset></form>}
       {amendmentReview && <section aria-label="Lot amendment preview"><h3>Preview amendment recording</h3><p>{amendmentReview.amendment.kind === 'opening-price-correction' ? `Opening lot ${amendmentReview.amendment.lotId}` : `Close ${amendmentReview.amendment.closeId}`}{amendmentReview.amendment.kind !== 'close-void' ? ` · corrected price ${priceLabel(amendmentReview.amendment.price)}` : ' · void erroneous close; not a reversal of an actual trade or an order'}<br />{amendmentReview.amendment.reason}<br />Requested recording timestamp {amendmentReview.amendment.recordedAt}</p>

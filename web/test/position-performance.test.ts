@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { createStrategy } from '../src/options';
 import { createPosition } from '../src/position-lifecycle';
-import { projectPositionLots, recordLotTransaction, upgradePositionLots } from '../src/position-lots';
+import { projectPositionLots, recordLotTransaction, upgradePositionLots, recordExpiryResolution, recordExpiryVoid } from '../src/position-lots';
 import { buildPositionPerformance, loadPositionPerformance, performanceCutoff, readPositionPerformance } from '../src/position-performance';
 
 function fixture() {
@@ -77,6 +77,32 @@ it('uses New York DST accounting cutoffs and validates ranges before requesting 
   expect(result.rows[2].combinedPnl).toBe(493); expect(calls).toBe(1);
   await expect(loadPositionPerformance(f.position, { start: '2026-01-01', end: '2026-09-05' }, {}, request, f.now)).rejects.toThrow();
   expect(calls).toBe(1);
+});
+
+it.each(['no-exercise', 'cash-settlement'] as const)('reconciles explicit %s at expiry without marks and restores unavailable history on void', async outcome => {
+  const f = fixture(), state = structuredClone(f.position.legacy.initial);
+  delete state.stock; state.underlying = 'XSP'; state.underlyingKind = 'cash-index'; state.valuationModel = 'european-bsm-v1';
+  state.legs[0].expiry = '2026-09-02T20:00:00.000Z'; state.legs[0].contractId = 'XSP   260902C00100000';
+  const start = upgradePositionLots(createPosition(state));
+  const request = { id: 'expiry', lotId: 'initial:option:0', quantity: 2, outcome, settlementValue: outcome === 'cash-settlement' ? 105 : null, recordedAt: '2026-09-04T12:00:00.000Z', reason: 'Confirmed broker expiry statement' };
+  const position = recordExpiryResolution(start, request), gross = outcome === 'cash-settlement' ? 600 : -400;
+  const range = { start: '2026-09-01', end: '2026-09-03' };
+  const result = buildPositionPerformance(position, [{ response: [] }], { response: [] }, range, f.now);
+  expect(result.rows[0]).toMatchObject({ status: 'open', grossRealizedPnl: 0, combinedPnl: null, lots: [{ quantity: 2, entryPrice: 2, mark: null }] });
+  expect(result.rows.slice(1).map(row => [row.status, row.grossRealizedPnl, row.unrealizedPnl, row.combinedPnl, row.lots])).toEqual([
+    ['closed', gross, 0, gross - 7, []], ['closed', gross, 0, gross - 7, []],
+  ]);
+  expect(result.rows.map(row => row.changeUsd)).toEqual([null, null, 0]);
+  expect(readPositionPerformance(JSON.parse(JSON.stringify(result)), position, range, f.now)).toEqual(result);
+  let requests = 0;
+  const closedOnly = await loadPositionPerformance(position, { start: '2026-09-02', end: '2026-09-03' }, {}, async () => { requests++; return []; }, f.now);
+  expect(requests).toBe(0); expect(closedOnly.rows.map(row => row.combinedPnl)).toEqual([gross - 7, gross - 7]);
+  const partial = recordExpiryResolution(start, { ...request, quantity: 1 });
+  expect(buildPositionPerformance(partial, [{ response: [] }], { response: [] }, range, f.now).rows[1]).toMatchObject({ status: 'open', grossRealizedPnl: gross / 2, unrealizedPnl: null, combinedPnl: null, lots: [{ quantity: 1, mark: null }] });
+  const voided = recordExpiryVoid(position, { id: 'void', resolutionId: request.id, recordedAt: '2026-09-05T12:00:00.000Z', reason: 'Statement correction' });
+  const restored = buildPositionPerformance(voided, [{ response: [] }], { response: [] }, range, f.now);
+  expect(restored.rows.slice(1).every(row => row.status === 'open' && row.grossRealizedPnl === 0 && row.unrealizedPnl === null && row.combinedPnl === null && row.lots[0].mark === null)).toBe(true);
+  expect(restored.high).toBeNull(); expect(restored.low).toBeNull();
 });
 
 it('loads more than eight historical identities in bounded batches and rejects over-budget unions', async () => {

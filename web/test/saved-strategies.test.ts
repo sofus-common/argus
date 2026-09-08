@@ -5,7 +5,7 @@ import lifecycleMigration from "../migrations/0002_position_lifecycle.sql?raw";
 import { createMarketStrategy, createStrategy, marketLeg, type MarketSnapshot } from "../src/options";
 import { createSavedStore } from "../src/saved-strategies";
 import { createPosition, projectPosition, type PositionRecord } from "../src/position-lifecycle";
-import { projectPositionLots, valuePositionLots, type LotTransaction, type PositionLots } from "../src/position-lots";
+import { projectPositionLots, projectPositionLotsAt, valuePositionLots, type LotTransaction, type PositionLots } from "../src/position-lots";
 
 const db = (env as { DB: D1Database }).DB;
 beforeAll(async () => {
@@ -77,6 +77,30 @@ it('rejects noncanonical or malformed cursors before querying storage', async ()
   const value = { updatedAt: '2026-01-01T00:00:00.000Z', id: 'position' };
   for (const cursor of ['', '!', 'x'.repeat(1025), encode(null), encode({ ...value, id: '../foreign' }), encode({ ...value, updatedAt: '2026-02-30T00:00:00.000Z' }), encode({ ...value, extra: 1 }), encode({ id: value.id, updatedAt: value.updatedAt }), `${encode(value)}=`]) await expect(store.listPage('owner', cursor)).rejects.toMatchObject({ status: 400, code: 'invalid_request' });
   expect(queries).toBe(0);
+});
+
+it('preserves explicit no-exercise records, voids and restated history through storage and import', async () => {
+  const store = createSavedStore(db), owner = crypto.randomUUID(), recipient = crypto.randomUUID(), at = '2026-09-01T18:00:00.000Z', expiry = '2026-09-04T20:00:00.000Z';
+  const snapshot: MarketSnapshot = { id: 'expiry-store', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, availableExpiries: ['2026-09-04'], contracts: [{ contractId: 'SPY   260904C00100000', type: 'call', strike: 100, expiry, multiplier: 100, bid: 2, ask: 3, iv: .2, quoteAsOf: at }] };
+  const state = createMarketStrategy('long-call', snapshot); state.pricing!.entryMode = 'fixed'; state.legs[0].entryPrice = 2;
+  const saved = await store.create(owner, 'Expired', state, snapshot);
+  const resolution = { id: 'no-exercise', lotId: 'initial:option:0', quantity: 1, outcome: 'no-exercise' as const, settlementValue: null, recordedAt: '2026-09-05T12:00:00.000Z', reason: 'User recorded no exercise' };
+  await expect(store.resolveExpiry(recipient, saved.id, 1, resolution)).rejects.toMatchObject({ status: 404 });
+  const settled = await store.resolveExpiry(owner, saved.id, 1, resolution);
+  expect(await store.resolveExpiry(owner, saved.id, 1, resolution)).toEqual(settled);
+  expect(projectPositionLots(settled.lifecycle as PositionLots)).toMatchObject({ status: 'closed', grossRealizedPnl: -200 });
+  expect(projectPositionLotsAt(settled.lifecycle as PositionLots, '2026-09-04T19:59:00.000Z')).toMatchObject({ status: 'open', grossRealizedPnl: 0 });
+  expect(projectPositionLotsAt(settled.lifecycle as PositionLots, expiry)).toMatchObject({ status: 'closed', grossRealizedPnl: -200 });
+  const imported = await store.importRecord(recipient, { format: 'argus-saved-position', formatVersion: 1, exportedAt: new Date().toISOString(), record: await store.get(owner, saved.id) });
+  expect((imported.lifecycle as PositionLots).expiryResolutions).toEqual([resolution]);
+  expect(projectPositionLotsAt(imported.lifecycle as PositionLots, expiry)).toMatchObject({ status: 'closed', grossRealizedPnl: -200 });
+  const request = { id: 'undo-expiry', resolutionId: resolution.id, recordedAt: '2026-09-05T13:00:00.000Z', reason: 'Correction requires unresolved inventory' };
+  const voided = await store.voidExpiry(owner, saved.id, 2, request);
+  expect(await store.voidExpiry(owner, saved.id, 2, request)).toEqual(voided);
+  expect(projectPositionLotsAt(voided.lifecycle as PositionLots, expiry)).toMatchObject({ status: 'open', grossRealizedPnl: 0 });
+  const reimported = await store.importRecord(recipient, { format: 'argus-saved-position', formatVersion: 1, exportedAt: new Date().toISOString(), record: voided });
+  expect((reimported.lifecycle as PositionLots).expiryVoids).toEqual([request]);
+  expect(projectPositionLotsAt(reimported.lifecycle as PositionLots, expiry)).toMatchObject({ status: 'open', grossRealizedPnl: 0 });
 });
 
 it("round trips eight-leg four-expiry holdings and reconciles closes and rolls without crossing owners", async () => {

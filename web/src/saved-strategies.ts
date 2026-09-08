@@ -1,7 +1,7 @@
-import { validateMarketConstruction, type MarketSnapshot, type StrategyState } from "./options";
+import { validateMarketConstruction, validContractTerms, type MarketSnapshot, type StrategyState } from "./options";
 import { readWorkspaceDraft } from "./workspace-draft";
 import { createPosition, projectPosition, recordClose, recordCloseVoid, recordPriceCorrection, type CloseRequest, type CloseVoid, type PriceCorrection, type PositionRecord } from "./position-lifecycle";
-import { projectPositionLots, upgradePositionLots, recordLotTransaction, recordLotPriceCorrection, recordLotOpeningPriceCorrection, recordLotCloseVoid, type OpeningPriceCorrection, type PositionLots, type LotTransaction } from "./position-lots";
+import { projectPositionLots, upgradePositionLots, recordLotTransaction, recordLotPriceCorrection, recordLotOpeningPriceCorrection, recordLotCloseVoid, recordExpiryResolution, recordExpiryVoid, type ExpiryResolution, type ExpiryVoid, type OpeningPriceCorrection, type PositionLots, type LotTransaction } from "./position-lots";
 
 export interface SavedStrategySummary {
   id: string;
@@ -55,8 +55,15 @@ const decode = ({ state_json, snapshot_json, lifecycle_json, ...summary }: Row):
     else projectPosition(lifecycle);
     if (JSON.stringify(lifecycle.schemaVersion === 2 ? lifecycle.legacy.initial : lifecycle.initial) !== JSON.stringify(state)) throw new Error("Saved lifecycle basis mismatch");
   }
-  return { ...summary, state, snapshot: snapshot_json ? JSON.parse(snapshot_json) : null, lifecycle };
+  const snapshot = snapshot_json ? JSON.parse(snapshot_json) : null;
+  validateCashExpiryBasis(state, snapshot, lifecycle);
+  return { ...summary, state, snapshot, lifecycle };
 };
+
+function validateCashExpiryBasis(state: StrategyState, snapshot: MarketSnapshot | null, lifecycle: SavedStrategy['lifecycle']) {
+  if (lifecycle?.schemaVersion !== 2 || !lifecycle.expiryResolutions?.some(event => event.outcome === 'cash-settlement')) return;
+  if (state.underlying !== 'XSP' || state.underlyingKind !== 'cash-index' || state.valuationModel !== 'european-bsm-v1' || !snapshot || snapshot.underlying !== 'XSP' || snapshot.underlyingKind !== 'cash-index' || !snapshot.contractTerms || !validContractTerms(snapshot) || snapshot.contractTerms.exerciseStyle !== 'European' || snapshot.contractTerms.settlement !== 'cash' || snapshot.contractTerms.settlementSession !== 'PM' || snapshot.contractTerms.multiplier !== 100) throw new Error('Cash expiry requires recorded European PM cash contract terms');
+}
 
 function titleValue(title: string) {
   if (typeof title !== "string" || !title.trim() || title.trim().length > 120) throw new SavedStoreError("invalid_request", 400);
@@ -69,6 +76,7 @@ function revisionValue(revision: number) {
 }
 
 export function savedPosition(record: SavedStrategy) {
+  validateCashExpiryBasis(record.state, record.snapshot, record.lifecycle);
   if (record.state.pricing) {
     const snapshot = record.snapshot?.underlying === undefined && record.state.underlying === "SPY" && record.snapshot ? { ...record.snapshot, underlying: "SPY" } : record.snapshot;
     if (!snapshot || validateMarketConstruction(record.state, snapshot).length) throw new Error("Invalid saved market basis");
@@ -105,7 +113,7 @@ export function createSavedStore(db: D1Database) {
     revisionValue(revision);
     const current = await get(owner, id);
     const append = (record: SavedStrategy) => {
-      try { return apply(savedPosition(record)); }
+      try { const next = apply(savedPosition(record)); validateCashExpiryBasis(record.state, record.snapshot, next); return next; }
       catch { throw new SavedStoreError("invalid_request", 400); }
     };
     const next = append(current);
@@ -116,7 +124,7 @@ export function createSavedStore(db: D1Database) {
     if (row) return decode(row);
     const latest = await get(owner, id);
     const position = latest.lifecycle, legacy = position?.schemaVersion === 2 ? position.legacy : position;
-    if (legacy && [...legacy.closes, ...(legacy.priceCorrections ?? []), ...(legacy.closeVoids ?? []), ...(position?.schemaVersion === 2 ? [...position.transactions, ...(position.amendments ?? [])] : [])].some(event => event.id === eventId)) {
+    if (legacy && [...legacy.closes, ...(legacy.priceCorrections ?? []), ...(legacy.closeVoids ?? []), ...(position?.schemaVersion === 2 ? [...position.transactions, ...(position.amendments ?? []), ...(position.expiryResolutions ?? []), ...(position.expiryVoids ?? [])] : [])].some(event => event.id === eventId)) {
       if (JSON.stringify(append(latest)) === JSON.stringify(latest.lifecycle)) return latest;
     }
     throw new SavedStoreError("conflict", 409);
@@ -159,6 +167,7 @@ export function createSavedStore(db: D1Database) {
           if (lifecycle.schemaVersion === 2) { lifecycle.legacy.initial = structuredClone(state); projectPositionLots(lifecycle); }
           else { lifecycle.initial = structuredClone(state); projectPosition(lifecycle); }
         }
+        validateCashExpiryBasis(state, snapshot, lifecycle);
       } catch { throw new SavedStoreError('invalid_request', 400); }
       const id = crypto.randomUUID(), now = new Date().toISOString();
       const row = await db.prepare(`INSERT INTO saved_strategies (id, owner, title, state_json, snapshot_json, lifecycle_json, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?) RETURNING ${columns}`)
@@ -210,6 +219,12 @@ export function createSavedStore(db: D1Database) {
     },
     async transact(owner: string, id: string, revision: number, request: LotTransaction) {
       return writeEvent(owner, id, revision, request?.id, position => recordLotTransaction(position.schemaVersion === 2 ? position : upgradePositionLots(position), request));
+    },
+    async resolveExpiry(owner: string, id: string, revision: number, request: ExpiryResolution) {
+      return writeEvent(owner, id, revision, request?.id, position => recordExpiryResolution(position.schemaVersion === 2 ? position : upgradePositionLots(position), request));
+    },
+    async voidExpiry(owner: string, id: string, revision: number, request: ExpiryVoid) {
+      return writeEvent(owner, id, revision, request?.id, position => recordExpiryVoid(position.schemaVersion === 2 ? position : upgradePositionLots(position), request));
     },
     async remove(owner: string, id: string, revision: number) {
       const row = await db.prepare("DELETE FROM saved_strategies WHERE owner = ? AND id = ? AND revision = ? RETURNING id")

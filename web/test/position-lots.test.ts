@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createStrategy, quoteValuation, type MarketSnapshot } from "../src/options";
 import { createPosition, recordClose } from "../src/position-lifecycle";
-import { upgradePositionLots, projectPositionLots, projectPositionLotsAt, recordLotTransaction, valuePositionLots, recordLotPriceCorrection, recordLotCloseVoid, recordLotOpeningPriceCorrection, type LotTransaction, type LotAsset } from "../src/position-lots";
+import { upgradePositionLots, projectPositionLots, projectPositionLotsAt, recordLotTransaction, valuePositionLots, recordLotPriceCorrection, recordLotCloseVoid, recordLotOpeningPriceCorrection, recordExpiryResolution, recordExpiryVoid, type LotTransaction, type LotAsset } from "../src/position-lots";
 
 const at = "2026-09-05T12:00:00.000Z";
 const fixture = (side: "long" | "short" = "long") => {
@@ -207,6 +207,81 @@ const marketFixture = () => {
   const snapshot: MarketSnapshot = { id: "mark", underlying: "SPY", source: "Tastytrade", spot: 600, spotAsOf: at, retrievedAt: at, availableExpiries: [leg.expiry.slice(0, 10)], contracts: [{ contractId: leg.contractId, type: leg.type, strike: leg.strike, expiry: leg.expiry, multiplier: 100, iv: leg.iv, bid: 2, ask: 4, quoteAsOf: at }] };
   return { base, snapshot };
 };
+
+it('records and voids explicit expiry without rewriting trades or inferring marks', () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime('2026-09-22T12:00:00.000Z');
+  try {
+    const { base } = marketFixture(); base.initial.stock = { shares: 1, entryPrice: 100 };
+    const expiry = base.initial.legs[0].expiry, later = '2026-09-21T12:00:00.000Z';
+    const before = recordLotTransaction(upgradePositionLots(base), transaction({ at: later, recordedAt: later, closes: [{ id: 'stock-exit', lotId: 'initial:stock', quantity: 1, price: 110 }] }));
+    const request = { id: 'expired', lotId: 'initial:option:0', quantity: 2, outcome: 'no-exercise' as const, settlementValue: null, recordedAt: later, reason: 'Broker confirms no exercise' };
+    const resolved = recordExpiryResolution(before, request);
+    expect(projectPositionLots(resolved)).toMatchObject({ lots: [], grossRealizedPnl: -390, netClosedPnl: -397, asOf: later });
+    expect(projectPositionLotsAt(resolved, expiry)).toMatchObject({ grossRealizedPnl: -400, lots: [{ id: 'initial:stock' }] });
+    expect(projectPositionLotsAt(resolved, new Date(Date.parse(expiry) - 1).toISOString()).lots).toHaveLength(2);
+    expect(recordExpiryResolution(resolved, request)).toEqual(resolved);
+    expect(resolved.transactions).toEqual(before.transactions);
+    expect(() => recordExpiryResolution(resolved, { ...request, id: 'twice' })).toThrow();
+    const fixed = recordLotOpeningPriceCorrection(resolved, { id: 'basis', lotId: request.lotId, price: 3, reason: 'Correct entry', recordedAt: later });
+    expect(projectPositionLots(fixed).grossRealizedPnl).toBe(-590);
+    const voidRequest = { id: 'undo-expiry', resolutionId: request.id, reason: 'Broker correction', recordedAt: later };
+    const voided = recordExpiryVoid(fixed, voidRequest);
+    expect(projectPositionLots(voided)).toMatchObject({ grossRealizedPnl: 10, lots: [{ quantity: 2, entryPrice: 3 }], netClosedPnl: null });
+    expect(recordExpiryVoid(voided, voidRequest)).toEqual(voided);
+    expect(projectPositionLots(JSON.parse(JSON.stringify(voided)))).toEqual(projectPositionLots(voided));
+  } finally { vi.useRealTimers(); }
+});
+
+it('settles listed XSP calls and puts with signed cash arithmetic and rejects unsupported identity', () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime('2026-09-22T12:00:00.000Z');
+  try {
+    for (const side of ['long', 'short'] as const) for (const type of ['call', 'put'] as const) for (const payoff of [0, 5]) {
+      const { base } = marketFixture(), leg = base.initial.legs[0];
+      base.initial.underlying = 'XSP'; base.initial.underlyingKind = 'cash-index';
+      leg.side = side; leg.type = type; leg.contractId = `XSP   ${leg.expiry.slice(2, 10).replaceAll('-', '')}${type === 'call' ? 'C' : 'P'}${String(leg.strike * 1000).padStart(8, '0')}`;
+      const start = upgradePositionLots(base), request = { id: 'cash', lotId: 'initial:option:0', quantity: 1, outcome: 'cash-settlement' as const, settlementValue: leg.strike + payoff * (type === 'call' ? 1 : -1), reason: 'Official settlement reference', recordedAt: '2026-09-21T12:00:00.000Z' };
+      const settled = recordExpiryResolution(start, request), expected = (payoff - 2) * 100 * (side === 'long' ? 1 : -1);
+      expect(projectPositionLots(settled)).toMatchObject({ grossRealizedPnl: expected, lots: [{ quantity: 1 }], netClosedPnl: null });
+      expect(projectPositionLotsAt(settled, leg.expiry).grossRealizedPnl).toBe(expected);
+      const noExercise = recordExpiryResolution(start, { ...request, outcome: 'no-exercise', settlementValue: null });
+      expect(projectPositionLots(noExercise).grossRealizedPnl).toBe(-200 * (side === 'long' ? 1 : -1));
+      expect(() => recordExpiryResolution(settled, { ...request, reason: 'Changed retry' })).toThrow();
+      expect(() => recordExpiryResolution(start, { ...request, extra: true } as typeof request)).toThrow();
+      for (const patch of [{ quantity: 3 }, { quantity: .5 }, { settlementValue: -1 }, { settlementValue: null }, { settlementValue: Infinity }, { recordedAt: at }, { recordedAt: '2099-01-01T00:00:00.000Z' }, { reason: '' }, { lotId: 'missing' }, { id: 'initial:option:0' }]) expect(() => recordExpiryResolution(start, { ...request, ...patch })).toThrow();
+      const wrong = structuredClone(start); wrong.legacy.initial.underlyingKind = undefined;
+      expect(() => recordExpiryResolution(wrong, request)).toThrow();
+      const equity = upgradePositionLots(marketFixture().base);
+      expect(() => recordExpiryResolution(equity, request)).toThrow();
+      expect(() => recordExpiryResolution(upgradePositionLots(fixture()), { ...request, outcome: 'no-exercise', settlementValue: null })).toThrow();
+    }
+  } finally { vi.useRealTimers(); }
+});
+
+it('keeps expiry audit ordering across later trades, restores and immutable retries', () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime('2026-09-22T12:00:00.000Z');
+  try {
+    const { base } = marketFixture(), early = '2026-09-19T12:00:00.000Z', late = '2026-09-21T12:00:00.000Z';
+    const request = { id: 'expiry', lotId: 'initial:option:0', quantity: 2, outcome: 'no-exercise' as const, settlementValue: null, recordedAt: early, reason: 'Broker record' };
+    const resolved = recordExpiryResolution(upgradePositionLots(base), request);
+    expect(() => recordLotTransaction(resolved, transaction({ opens: [{ id: 'too-early', asset: { kind: 'stock', symbol: 'SPY' }, side: 'long', quantity: 1, entryPrice: 100 }] }))).toThrow();
+    const laterTrade = transaction({ id: 'later', at: late, recordedAt: late, opens: [{ id: 'stock', asset: { kind: 'stock', symbol: 'SPY' }, side: 'long', quantity: 1, entryPrice: 100 }] });
+    const later = recordLotTransaction(resolved, laterTrade);
+    expect(recordExpiryResolution(later, request)).toEqual(later);
+    expect(() => recordExpiryVoid(later, { id: 'void', resolutionId: request.id, recordedAt: early, reason: 'Correction' })).toThrow();
+    const voided = recordExpiryVoid(later, { id: 'void', resolutionId: request.id, recordedAt: late, reason: 'Correction' });
+    expect(() => recordExpiryResolution(voided, { ...request, id: 'too-early' })).toThrow();
+    const replacement = recordExpiryResolution(voided, { ...request, id: 'replacement', recordedAt: late });
+    expect(projectPositionLots(replacement).grossRealizedPnl).toBe(-400);
+    const corrupt = structuredClone(replacement); corrupt.expiryResolutions![1].recordedAt = early;
+    expect(() => projectPositionLots(corrupt)).toThrow();
+    const restored = recordExpiryVoid(resolved, { id: 'void', resolutionId: request.id, recordedAt: late, reason: 'Correction' });
+    const reclosed = recordLotTransaction(restored, transaction({ id: 'backfilled', recordedAt: late, closes: [{ id: 'actual-close', lotId: request.lotId, quantity: 2, price: 3 }] }));
+    expect(projectPositionLots(reclosed).grossRealizedPnl).toBe(200);
+    expect(() => recordExpiryResolution(reclosed, { ...request, id: 'overlap', recordedAt: late })).toThrow();
+    const badClose = structuredClone(reclosed); badClose.transactions[0].recordedAt = early;
+    expect(() => projectPositionLots(badClose)).toThrow();
+  } finally { vi.useRealTimers(); }
+});
 
 it("marks all excluded lots and remaps only surviving initial selection without changing audit", () => {
   const { base, snapshot } = marketFixture(), leg = base.initial.legs[0];

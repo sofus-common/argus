@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added explicit saved-position expiry outcomes: no-exercise and recorded XSP
+  cash settlement, with preview/confirm, exact retry, audited voids and historical
+  reconciliation. Deterministic validation requires recorded contract terms for
+  cash settlement; physical exercise/assignment remains unsupported. Original
+  entry corrections and the single position allowance remain reconciled. No
+  provider request, AI call, dependency or database migration was added.
+  Verification: 713 tests, TypeScript/build, independent review, 44 desktop and
+  44 mobile workflow checks passed. Actual local synthetic import/expiry/reopen
+  produced -$200 gross and -$205 net; the exact temporary record was removed.
+  This does not establish live-data reliability or hosted readiness.
+
 - Added a saved-position tracking overview with loaded-record title/symbol/status
   filters and direct inspection into existing lot, roll and performance workflows.
   Owner-scoped paged reads derive remaining holdings and realized P/L from the

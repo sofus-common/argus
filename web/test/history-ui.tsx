@@ -9,7 +9,7 @@ import { LotManagement } from '../src/LotManagement'
 import type { SavedStrategy } from '../src/saved-strategies'
 import { buildPositionPerformance } from '../src/position-performance'
 import { createPosition } from '../src/position-lifecycle'
-import { projectPositionLots, recordLotTransaction, upgradePositionLots } from '../src/position-lots'
+import { projectPositionLots, recordLotTransaction, upgradePositionLots, recordExpiryResolution, recordExpiryVoid } from '../src/position-lots'
 import { calculateStrategy, compareSearchCandidate, parseComparisonIntent, renderCandidateComparison, createMarketStrategy, createStrategy, mergeAnalysisProposal, projectAnalysisPosition, searchCandidates, scenarioFacts, type MarketSnapshot } from '../src/options'
 import { buildIntradayHistory, buildIvHistory } from '../src/intraday-history'
 import { buildPriceHistory } from '../src/price-history'
@@ -245,6 +245,49 @@ async function run() {
         assert(overview().textContent?.includes('Closed') && overview().textContent?.includes('$120'), 'Refreshed closed accounting did not replace old revision');
         malformed = true; await click('Refresh saved positions'); await waitFor(() => fixture.querySelector('.workspace-notice.workspace-error')?.textContent?.includes('Saved tracking response is invalid') === true);
         assert(overview().textContent?.includes('$120') && !overview().textContent?.includes('$999') && overview().textContent?.includes('r2'), 'Malformed tracking replaced validated prior accounting');
+      } finally { await unmount(); window.fetch = priorFetch }
+    });
+    for (const cash of [false, true]) await test(`${cash ? 'XSP cash settlement' : 'SPY no-exercise'} previews, confirms and voids without editing the builder`, async () => {
+      await unmount(); const priorFetch = window.fetch;
+      const initial = createStrategy('long-call');
+      initial.pricing = { mode: 'market', entryMode: 'fixed', basis: 'mid', snapshotId: 'expiry-fixture' };
+      initial.legs[0] = { ...initial.legs[0], contractId: 'SPY   260902C00100000', expiry: '2026-09-02T20:00:00.000Z', entryPrice: 2 };
+      initial.feeAllowance = 5;
+      if (cash) { initial.underlying = 'XSP'; initial.underlyingKind = 'cash-index'; initial.valuationModel = 'european-bsm-v1'; initial.legs[0].contractId = 'XSP   260902C00100000'; }
+      const snapshot: MarketSnapshot = { id: 'expiry-fixture', underlying: initial.underlying, ...(cash ? { underlyingKind: 'cash-index', indexSourceTime: initial.valuationTimestamp, contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' } } as const : {}), source: 'Tastytrade', spot: initial.spot, retrievedAt: initial.valuationTimestamp, spotAsOf: initial.valuationTimestamp, availableExpiries: ['2026-09-02'], contracts: initial.legs.map(leg => ({ contractId: leg.contractId, type: leg.type, strike: leg.strike, expiry: leg.expiry, multiplier: 100, bid: 1, ask: 3, iv: leg.iv, quoteAsOf: initial.valuationTimestamp })) };
+      let ledger = upgradePositionLots(createPosition(initial)), revision = 1, writes = 0, loseResponse = true;
+      const submitted: string[] = [];
+      const record = () => ({ id: 'expiry-fixture', title: 'Recorded expired call', revision, createdAt: initial.valuationTimestamp, updatedAt: new Date(fixedNow).toISOString(), state: initial, snapshot, lifecycle: ledger });
+      window.fetch = (async (url, init) => {
+        if (url === '/api/strategies/expiry-fixture/lots') return Response.json({ record: record(), projection: projectPositionLots(ledger) });
+        if (String(url).includes('/expiry-resolutions') || String(url).includes('/expiry-voids')) {
+          const body = JSON.parse(String(init?.body)), next = body.resolution ? recordExpiryResolution(ledger, body.resolution) : recordExpiryVoid(ledger, body.void);
+          if (String(url).endsWith('/preview')) return Response.json({ revision, projection: projectPositionLots(next) });
+          submitted.push(String(init?.body));
+          if (JSON.stringify(next) !== JSON.stringify(ledger)) { ledger = next; revision++; writes++; }
+          if (loseResponse) { loseResponse = false; return Response.json({ error: { message: 'Recorded but response lost' } }, { status: 500 }); }
+          return Response.json({ record: record(), projection: projectPositionLots(ledger) });
+        }
+        throw new Error(`Unexpected expiry request: ${String(url)}`);
+      }) as typeof fetch;
+      const before = JSON.stringify(initial), waitFor = async (check: () => boolean) => { for (let i=0;i<400&&!check();i++) await settleTimers(); assert(check(), `Expiry UI: ${fixture.querySelector('[role="alert"]')?.textContent ?? ''}`) };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<LotManagement savedId="expiry-fixture" source={initial} onClose={() => {}} onRecorded={async () => {}} onAnalyze={() => false} />));
+        await waitFor(() => fixture.textContent?.includes('Expiry outcome unresolved') === true);
+        await change('Lot action', 'expiry'); await change('Expired option lot', 'initial:option:0'); await change('Expiry quantity', '1'); await change('Expiry reference', 'Broker statement: expired without exercise');
+        if (cash) { await change('Expiry outcome', 'cash-settlement'); await change('Official expiry settlement value', '110'); await change('Expiry reference', 'User-recorded official XSP settlement reference'); }
+        await click('Preview expiry outcome'); await waitFor(() => !!fixture.querySelector('[aria-label="Expiry outcome preview"]'));
+        assert(writes === 0 && JSON.stringify(initial) === before, 'Expiry preview wrote or mutated builder');
+        await click('Confirm expiry outcome'); await waitFor(() => writes === 1);
+        await waitFor(() => fixture.textContent?.includes('Retry identical expiry outcome') === true);
+        assert(fixture.querySelector('[aria-label="Lot action"]')!.getAttribute('disabled') !== null, 'Uncertain expiry allowed a new action');
+        await click('Retry identical expiry outcome'); await waitFor(() => !fixture.querySelector('[aria-label="Expiry outcome preview"]'));
+        assert(Number(writes) === 1 && submitted.length === 2 && submitted[0] === submitted[1], 'Retry changed expiry identity or duplicated the outcome');
+        assert(projectPositionLots(ledger).netClosedPnl === (cash ? 795 : -205) && JSON.stringify(initial) === before, 'Expiry accounting or builder preservation failed');
+        await change('Lot action', 'expiry-void'); await change('Recorded expiry outcome', ledger.expiryResolutions![0].id); await change('Expiry reference', 'Outcome entered against wrong contract');
+        await click('Preview expiry outcome'); await waitFor(() => !!fixture.querySelector('[aria-label="Expiry outcome preview"]'));
+        await click('Confirm expiry void'); await waitFor(() => writes === 2);
+        assert(projectPositionLots(ledger).lots.length === 1 && ledger.expiryResolutions!.length === 1 && ledger.expiryVoids!.length === 1, 'Expiry void lost audit or failed to restore unresolved holding');
       } finally { await unmount(); window.fetch = priorFetch }
     });
     await test('Saved revision automatically compares original holdings with unsaved edits', async () => {

@@ -287,6 +287,49 @@ it("previews and atomically records owner-scoped lot rolls with stable retry ide
   expect((await call(app, path, "POST", { ...body, transaction: { ...transaction, closes: [{ ...transaction.closes[0], price: 2 }] } })).status).toBe(400);
 });
 
+it('previews, records, voids and privately reimports explicit expiry outcomes without provider requests', async () => {
+  const provider = vi.fn<typeof fetch>(async () => Response.json({ keys: [jwk] })), app = createApp(provider), store = createSavedStore(db), owner = JSON.stringify([issuer, subjectOne]);
+  const at = '2026-09-01T18:00:00.000Z', expiry = '2026-09-04T20:00:00.000Z';
+  const snapshot: MarketSnapshot = { id: 'expiry-record', underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, indexSourceTime: at, contractTerms: { exerciseStyle: 'European', settlement: 'cash', multiplier: 100, settlementSession: 'PM' }, availableExpiries: ['2026-09-04'], contracts: [{ contractId: 'XSP   260904C00100000', type: 'call', strike: 100, expiry, multiplier: 100, bid: 2, ask: 3, iv: .2, quoteAsOf: at }] };
+  const state = createMarketStrategy('long-call', snapshot); state.pricing!.entryMode = 'fixed'; state.legs[0].entryPrice = 2; state.feeAllowance = 1;
+  const saved = await store.create(owner, 'Expiry outcome', state, snapshot), path = `/api/strategies/${saved.id}/expiry-resolutions`;
+  const resolution = { id: 'settled', lotId: 'initial:option:0', quantity: 1, outcome: 'cash-settlement', settlementValue: 105, recordedAt: '2026-09-05T12:00:00.000Z', reason: 'User entered official settlement reference' }, body = { revision: 1, resolution };
+  const preview = await call(app, `${path}/preview`, 'POST', body);
+  expect(preview.status).toBe(200);
+  expect(await preview.json()).toMatchObject({ revision: 1, projection: { status: 'closed', lots: [], grossRealizedPnl: 300, netClosedPnl: 299 } });
+  expect(await store.get(owner, saved.id)).toEqual(saved);
+  expect((await call(app, path, 'POST', body, jwtTwo)).status).toBe(404);
+  expect((await call(app, path, 'POST', body, '')).status).toBe(401);
+  expect((await call(app, `${path}/preview`, 'POST', { ...body, revision: 2 })).status).toBe(409);
+  expect((await call(app, `${path}/other`, 'POST', body)).status).toBe(404);
+  expect((await call(app, path, 'POST', { ...body, extra: true })).status).toBe(400);
+  expect((await call(app, path, 'POST', { ...body, resolution: { ...resolution, quantity: 2 } })).status).toBe(400);
+  expect((await app.request(`${application}${path}`, { method: 'POST', headers: { 'Cf-Access-Jwt-Assertion': jwtOne, Origin: 'https://attacker.example', 'Content-Type': 'application/json', 'X-ARGUS-Request': '1' }, body: JSON.stringify(body) }, bindings())).status).toBe(403);
+  expect((await call(app, path, 'POST', body, jwtOne, { ...bindings(), SAVED_RATE_LIMITER: { limit: async () => ({ success: false }) } })).status).toBe(429);
+  const missingTerms = await store.create(owner, 'Missing cash terms', state, { ...snapshot, contractTerms: undefined });
+  for (const suffix of ['', '/preview']) expect((await call(app, `/api/strategies/${missingTerms.id}/expiry-resolutions${suffix}`, 'POST', body)).status).toBe(400);
+  expect((await store.get(owner, missingTerms.id)).revision).toBe(1);
+  const responses = await Promise.all([call(app, path, 'POST', body), call(app, path, 'POST', body)]);
+  expect(responses.map(response => response.status)).toEqual([200, 200]);
+  const result = await responses[0].json(); expect(await responses[1].json()).toEqual(result);
+  expect(await (await call(app, path, 'POST', body)).json()).toEqual(result);
+  expect((await call(app, path, 'POST', { ...body, resolution: { ...resolution, settlementValue: 104 } })).status).toBe(400);
+  const voidPath = `/api/strategies/${saved.id}/expiry-voids`, voidBody = { revision: 2, void: { id: 'void-settlement', resolutionId: resolution.id, recordedAt: '2026-09-05T13:00:00.000Z', reason: 'Wrong settlement record' } };
+  expect((await call(app, `${voidPath}/preview`, 'POST', voidBody)).status).toBe(200);
+  expect((await store.get(owner, saved.id)).revision).toBe(2);
+  const voided = await call(app, voidPath, 'POST', voidBody); expect(voided.status).toBe(200);
+  expect(await voided.json()).toMatchObject({ record: { revision: 3, lifecycle: { expiryResolutions: [resolution], expiryVoids: [voidBody.void] } }, projection: { status: 'open', grossRealizedPnl: 0, lots: [{ quantity: 1 }] } });
+  expect((await call(app, voidPath, 'POST', voidBody)).status).toBe(200);
+  const exported = await (await call(app, `/api/strategies/${saved.id}/export`)).json() as any;
+  const imported = await call(app, '/api/strategies/import', 'POST', exported); expect(imported.status).toBe(201);
+  const importedRecord = (await imported.json() as any).record;
+  expect(importedRecord.lifecycle.expiryResolutions).toEqual([resolution]); expect(importedRecord.lifecycle.expiryVoids).toEqual([voidBody.void]);
+  expect((await call(app, `/api/strategies/${importedRecord.id}/lots`)).status).toBe(200);
+  const wrongTerms = structuredClone(exported); delete wrongTerms.record.snapshot.contractTerms;
+  expect((await call(app, '/api/strategies/import', 'POST', wrongTerms)).status).toBe(400);
+  expect(provider.mock.calls.every(([url]) => String(url) === `${issuer}/cdn-cgi/access/certs`)).toBe(true);
+});
+
 it('persists and reimports an index roll with owner isolation, retry identity and cash accounting', async () => {
   const app = authenticatedApp(), store = createSavedStore(db), owner = JSON.stringify([issuer, subjectOne]), at = new Date().toISOString();
   const snapshot: MarketSnapshot = { id: 'index-lifecycle', underlying: 'XSP', underlyingKind: 'cash-index', source: 'Tastytrade', spot: 100, retrievedAt: at, spotAsOf: at, indexSourceTime: at,

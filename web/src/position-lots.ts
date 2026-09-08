@@ -7,7 +7,9 @@ export interface LotClose { id: string; lotId: string; quantity: number; price: 
 export interface LotTransaction { id: string; at: string; recordedAt: string; closes: LotClose[]; opens: LotOpening[] }
 export type OpeningPriceCorrection = Omit<PriceCorrection, "closeId"> & { lotId: string };
 export type LotAmendment = ({ kind: "price-correction" } & PriceCorrection) | ({ kind: "close-void" } & CloseVoid) | ({ kind: "opening-price-correction" } & OpeningPriceCorrection);
-export interface PositionLots { schemaVersion: 2; legacy: PositionRecord; transactions: LotTransaction[]; amendments?: LotAmendment[] }
+export interface ExpiryResolution { id: string; lotId: string; quantity: number; outcome: "no-exercise" | "cash-settlement"; settlementValue: number | null; recordedAt: string; reason: string }
+export interface ExpiryVoid { id: string; resolutionId: string; recordedAt: string; reason: string }
+export interface PositionLots { schemaVersion: 2; legacy: PositionRecord; transactions: LotTransaction[]; amendments?: LotAmendment[]; expiryResolutions?: ExpiryResolution[]; expiryVoids?: ExpiryVoid[] }
 export interface RemainingLot extends LotOpening { at: string; recordedAt: string }
 
 const keys = (value: unknown, expected: string) => !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join() === expected;
@@ -18,7 +20,7 @@ const round = (value: number) => Number(value.toFixed(8));
 const multiplier = (asset: LotAsset) => asset.kind === "option" ? asset.multiplier : 1;
 const assetKey = (asset: LotAsset) => asset.kind === "stock" ? `stock:${asset.symbol}` : `option:${asset.contractId}`;
 const optionAsset = (leg: OptionLeg): LotAsset => ({ kind: "option", contractId: leg.contractId, type: leg.type, strike: leg.strike, expiry: leg.expiry, multiplier: leg.multiplier });
-const fingerprint = (value: LotAsset | LotTransaction | LotAmendment) => JSON.stringify(value, ["id", "at", "recordedAt", "closes", "opens", "lotId", "price", "quantity", "asset", "side", "entryPrice", "kind", "symbol", "contractId", "type", "strike", "expiry", "multiplier", "closeId", "reason"]);
+const fingerprint = (value: LotAsset | LotTransaction | LotAmendment | ExpiryResolution | ExpiryVoid) => JSON.stringify(value, ["id", "at", "recordedAt", "closes", "opens", "lotId", "price", "quantity", "asset", "side", "entryPrice", "kind", "symbol", "contractId", "type", "strike", "expiry", "multiplier", "closeId", "reason", "outcome", "settlementValue", "resolutionId"]);
 const assetFingerprint = (asset: LotAsset) => fingerprint(asset.kind === "option" ? { ...asset, expiry: new Date(asset.expiry).toISOString() } : asset);
 
 function validateAsset(asset: LotAsset, legacy: PositionRecord, at: string) {
@@ -43,7 +45,7 @@ export function upgradePositionLots(legacy: PositionRecord): PositionLots {
 }
 
 export function projectPositionLots(position: PositionLots) {
-  if (!(keys(position, "legacy,schemaVersion,transactions") || keys(position, "amendments,legacy,schemaVersion,transactions")) || position.schemaVersion !== 2 || !Array.isArray(position.transactions) || "amendments" in position && !Array.isArray(position.amendments)) throw new Error("Invalid lot ledger");
+  if (!position || Object.keys(position).some(key => !["legacy", "schemaVersion", "transactions", "amendments", "expiryResolutions", "expiryVoids"].includes(key)) || position.schemaVersion !== 2 || !Array.isArray(position.transactions) || ["amendments", "expiryResolutions", "expiryVoids"].some(key => key in position && !Array.isArray(position[key as keyof PositionLots]))) throw new Error("Invalid lot ledger");
   const legacy = position.legacy, originalBase = projectPosition(legacy), initial = legacy.initial;
   const events = [...legacy.closes, ...(legacy.priceCorrections ?? []), ...(legacy.closeVoids ?? [])];
   const ids = new Set(events.map(event => event.id));
@@ -156,8 +158,40 @@ export function projectPositionLots(position: PositionLots) {
     if (transaction.opens.length || transaction.closes.some(close => !voided.has(close.id))) asOf = transaction.at;
     executionAt = transaction.at; recordedAt = transaction.recordedAt;
   }
-  recordedAt = new Date(Math.max(Date.parse(recordedAt), Date.parse(amendmentAt))).toISOString();
-  const version = initial.version + legacy.closes.length + (legacy.closeVoids?.length ?? 0) + position.transactions.length + (position.amendments?.filter(event => event.kind !== "price-correction").length ?? 0);
+  const resolutions = position.expiryResolutions ?? [], expiryVoids = new Map<string, string>();
+  let expiryRecordedAt = initial.valuationTimestamp;
+  for (const event of position.expiryVoids ?? []) {
+    const target = resolutions.find(item => item?.id === event?.resolutionId);
+    if (!keys(event, "id,reason,recordedAt,resolutionId") || !target || expiryVoids.has(event.resolutionId) || !time(event.recordedAt) || Date.parse(event.recordedAt) < Math.max(Date.parse(target.recordedAt), Date.parse(expiryRecordedAt)) || Date.parse(event.recordedAt) > Date.now() || typeof event.reason !== "string" || !event.reason.trim() || event.reason.length > 500) throw new Error("Invalid expiry void");
+    claimId(event.id); expiryVoids.set(event.resolutionId, event.recordedAt); expiryRecordedAt = event.recordedAt;
+  }
+  let resolutionAt = initial.valuationTimestamp;
+  for (const event of resolutions) {
+    const original = originals.get(event?.lotId);
+    if (!keys(event, "id,lotId,outcome,quantity,reason,recordedAt,settlementValue") || !original || original.asset.kind !== "option" || !quantity(event.quantity) || !time(event.recordedAt) || Date.parse(event.recordedAt) < Math.max(Date.parse(original.asset.expiry), Date.parse(original.recordedAt), Date.parse(resolutionAt)) || Date.parse(event.recordedAt) > Date.now() || typeof event.reason !== "string" || !event.reason.trim() || event.reason.length > 500 || initial.pricing?.mode !== "market" || initial.pricing.entryMode !== "fixed" || !["no-exercise", "cash-settlement"].includes(event.outcome) || (event.outcome === "no-exercise" ? event.settlementValue !== null : !money(event.settlementValue!))) throw new Error("Invalid expiry resolution");
+    claimId(event.id); validateAsset({ ...original.asset, expiry: new Date(original.asset.expiry).toISOString() }, legacy, original.at);
+    // Saved-record admission separately validates recorded PM cash contract terms.
+    if (event.outcome === "cash-settlement" && (initial.underlying !== "XSP" || initial.underlyingKind !== "cash-index" || initial.valuationModel !== "european-bsm-v1" || original.asset.multiplier !== 100)) throw new Error("Unsupported cash settlement identity");
+    const lot = lots.find(item => item.id === event.lotId), isVoided = expiryVoids.has(event.id);
+    if (event.quantity > original.quantity || !isVoided && (!lot || event.quantity > lot.quantity)) throw new Error("Expiry exceeds unresolved quantity");
+    const price = event.outcome === "no-exercise" ? 0 : Math.max(0, (event.settlementValue! - original.asset.strike) * (original.asset.type === "call" ? 1 : -1));
+    const realized = (price - effectiveOpening(original).entryPrice) * event.quantity * original.asset.multiplier * (original.side === "long" ? 1 : -1);
+    if (!Number.isFinite(realized) || !Number.isFinite(grossRealizedPnl + realized)) throw new Error("Expiry exceeds numerical range");
+    if (!isVoided) { grossRealizedPnl += realized; lot!.quantity -= event.quantity; lots = lots.filter(item => item.quantity > 0); asOf = new Date(Math.max(Date.parse(asOf), Date.parse(original.asset.expiry))).toISOString(); }
+    resolutionAt = event.recordedAt;
+  }
+  const disposals = [
+    ...legacy.closes.map(close => ({ id: close.id, lotId: close.assetId === "stock" ? stockId! : initialIds[initial.legs.findIndex(leg => `option:${leg.id}` === close.assetId)], quantity: close.quantity, recordedAt: close.at, voidAt: voidTimes.get(close.id) })),
+    ...position.transactions.flatMap(transaction => transaction.closes.map(close => ({ ...close, recordedAt: transaction.recordedAt, voidAt: voidTimes.get(close.id) }))),
+    ...resolutions.map(event => ({ ...event, voidAt: expiryVoids.get(event.id) })),
+  ];
+  // ponytail: quadratic audit replay; index disposal times if large imported ledgers need it.
+  for (const event of resolutions.length ? disposals : []) {
+    const consumed = disposals.filter(other => other.lotId === event.lotId && Date.parse(other.recordedAt) <= Date.parse(event.recordedAt) && (!other.voidAt || Date.parse(other.voidAt) > Date.parse(event.recordedAt))).reduce((sum, other) => sum + other.quantity, 0);
+    if (!Number.isSafeInteger(consumed) || consumed > originals.get(event.lotId)!.quantity) throw new Error("Expiry allocation precedes recorded restoration");
+  }
+  recordedAt = new Date(Math.max(Date.parse(recordedAt), Date.parse(amendmentAt), Date.parse(expiryRecordedAt), Date.parse(resolutionAt))).toISOString();
+  const version = initial.version + legacy.closes.length + (legacy.closeVoids?.length ?? 0) + position.transactions.length + (position.amendments?.filter(event => event.kind !== "price-correction").length ?? 0) + resolutions.length + (position.expiryVoids?.length ?? 0);
   if (!Number.isSafeInteger(version) || !Number.isFinite(grossRealizedPnl) || !Number.isFinite(grossRealizedPnl - base.allowance) || !Number.isFinite(lots.reduce((sum, lot) => sum + lot.quantity * lot.entryPrice * multiplier(lot.asset), 0))) throw new Error("Lot totals exceed numerical range");
   const openings = [...originals.values()].map(original => ({ ...effectiveOpening(original), originalEntryPrice: original.entryPrice }));
   return { initial: structuredClone(initial), lots, openings, version, asOf, recordedAt, grossRealizedPnl: round(grossRealizedPnl), allowance: base.allowance, netClosedPnl: lots.length ? null : round(grossRealizedPnl - base.allowance), status: lots.length ? "open" as const : "closed" as const };
@@ -188,6 +222,13 @@ export function projectPositionLotsAt(position: PositionLots, cutoff: string) {
     closeLot({ ...close, lotId: full.openings[index].id });
   }
   for (const transaction of position.transactions) if (Date.parse(transaction.at) <= at) transaction.closes.forEach(closeLot);
+  const expiredVoids = new Set(position.expiryVoids?.map(event => event.resolutionId));
+  for (const event of position.expiryResolutions ?? []) {
+    const original = full.openings.find(lot => lot.id === event.lotId)!;
+    if (expiredVoids.has(event.id) || original.asset.kind !== "option" || Date.parse(original.asset.expiry) > at) continue;
+    const price = event.outcome === "no-exercise" ? 0 : Math.max(0, (event.settlementValue! - original.asset.strike) * (original.asset.type === "call" ? 1 : -1));
+    closeLot({ id: event.id, lotId: event.lotId, quantity: event.quantity, price });
+  }
   const remaining = lots.filter(lot => lot.quantity > 0);
   if (!Number.isFinite(grossRealizedPnl - full.allowance)) throw new Error("Historical totals exceed numerical range");
   return { cutoff, lots: remaining, grossRealizedPnl: round(grossRealizedPnl), allowance: full.allowance, netClosedPnl: remaining.length ? null : round(grossRealizedPnl - full.allowance), status: remaining.length ? "open" as const : "closed" as const,
@@ -205,6 +246,24 @@ export function recordLotTransaction(position: PositionLots, request: LotTransac
   if (!request || Date.parse(request.recordedAt) < Date.parse(projection.recordedAt)) throw new Error("Transaction recording precedes existing audit history");
   const next = { ...structuredClone(position), transactions: [...structuredClone(position.transactions), structuredClone(request)] };
   projectPositionLots(next);
+  return next;
+}
+
+export function recordExpiryResolution(position: PositionLots, request: ExpiryResolution): PositionLots {
+  const projection = projectPositionLots(position), existing = position.expiryResolutions?.find(event => event.id === request?.id);
+  const next = { ...structuredClone(position), expiryResolutions: existing ? position.expiryResolutions!.map(event => event.id === request.id ? structuredClone(request) : structuredClone(event)) : [...structuredClone(position.expiryResolutions ?? []), structuredClone(request)] };
+  if (!existing && (!request || Date.parse(request.recordedAt) < Date.parse(projection.recordedAt))) throw new Error("Expiry recording precedes audit history");
+  projectPositionLots(next);
+  if (existing && fingerprint(existing) !== fingerprint(request)) throw new Error("Expiry event ID conflict");
+  return next;
+}
+
+export function recordExpiryVoid(position: PositionLots, request: ExpiryVoid): PositionLots {
+  const projection = projectPositionLots(position), existing = position.expiryVoids?.find(event => event.id === request?.id);
+  const next = { ...structuredClone(position), expiryVoids: existing ? position.expiryVoids!.map(event => event.id === request.id ? structuredClone(request) : structuredClone(event)) : [...structuredClone(position.expiryVoids ?? []), structuredClone(request)] };
+  if (!existing && (!request || Date.parse(request.recordedAt) < Date.parse(projection.recordedAt))) throw new Error("Expiry void recording precedes audit history");
+  projectPositionLots(next);
+  if (existing && fingerprint(existing) !== fingerprint(request)) throw new Error("Expiry void ID conflict");
   return next;
 }
 

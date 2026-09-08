@@ -4,7 +4,7 @@ import { calculateLotScenarioComparison, type LotScenario } from "./lot-scenario
 import { AuthError, checkRequestOrigin, createAuthenticator, type AuthBindings, type Session } from "./auth";
 import { createSavedStore, savedPosition, SavedStoreError } from "./saved-strategies";
 import { projectPosition, recordClose, recordCloseVoid, recordPriceCorrection, valuePosition, type CloseRequest, type CloseVoid, type PriceCorrection } from "./position-lifecycle";
-import { projectPositionLots, upgradePositionLots, valuePositionLots, recordLotTransaction, recordLotPriceCorrection, recordLotOpeningPriceCorrection, recordLotCloseVoid, type OpeningPriceCorrection, type LotTransaction } from "./position-lots";
+import { projectPositionLots, upgradePositionLots, valuePositionLots, recordLotTransaction, recordLotPriceCorrection, recordLotOpeningPriceCorrection, recordLotCloseVoid, recordExpiryResolution, recordExpiryVoid, type ExpiryResolution, type ExpiryVoid, type OpeningPriceCorrection, type LotTransaction } from "./position-lots";
 import { createMarketContextLoader, type MarketBindings } from "./market-context";
 import { createBrokerContextLoader, createBrokerRequest, createThetaRequest, thetaRelayConfig, searchSymbols, type BrokerBindings } from "./broker-context";
 import { buildPriceHistory, loadPriceHistory } from "./price-history";
@@ -290,6 +290,28 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     }
     const record = await store.transact(owner, id, body.revision, body.transaction);
     if (record.lifecycle?.schemaVersion !== 2) throw new Error("Lot transaction did not produce a lot ledger");
+    return c.json({ record, projection: projectPositionLots(record.lifecycle) });
+  });
+  for (const [path, key] of [['expiry-resolutions', 'resolution'], ['expiry-voids', 'void']] as const) app.post(`/api/strategies/:id/${path}/:preview?`, async c => {
+    if (c.req.param('preview') && c.req.param('preview') !== 'preview') return c.notFound();
+    let body: { revision: number; resolution: ExpiryResolution; void: ExpiryVoid };
+    try {
+      body = await readJson(c.req.raw) as typeof body;
+      if (!body || Object.keys(body).sort().join() !== [key, 'revision'].sort().join() || !Number.isSafeInteger(body.revision) || body.revision < 1) throw new Error();
+    } catch (error) { return c.json({ error: { code: error instanceof Error && error.message === 'too_large' ? 'request_too_large' : 'invalid_request' } }, error instanceof Error && error.message === 'too_large' ? 413 : 400); }
+    const store = createSavedStore(c.env.DB!), owner = c.get('session').owner, id = c.req.param('id');
+    if (c.req.param('preview')) {
+      const record = await store.get(owner, id);
+      if (record.revision !== body.revision) throw new SavedStoreError('conflict', 409);
+      try {
+        const saved = savedPosition(record), position = saved.schemaVersion === 2 ? saved : upgradePositionLots(saved);
+        const next = key === 'resolution' ? recordExpiryResolution(position, body.resolution) : recordExpiryVoid(position, body.void);
+        savedPosition({ ...record, lifecycle: next });
+        return c.json({ revision: record.revision, projection: projectPositionLots(next) });
+      } catch { throw new SavedStoreError('invalid_request', 400); }
+    }
+    const record = key === 'resolution' ? await store.resolveExpiry(owner, id, body.revision, body.resolution) : await store.voidExpiry(owner, id, body.revision, body.void);
+    if (record.lifecycle?.schemaVersion !== 2) throw new Error('Expiry event did not retain its lot ledger');
     return c.json({ record, projection: projectPositionLots(record.lifecycle) });
   });
   for (const [path, key] of [["lot-price-corrections", "correction"], ["lot-close-voids", "void"], ["lot-opening-price-corrections", "correction"]] as const) app.post(`/api/strategies/:id/${path}/:preview?`, async c => {
