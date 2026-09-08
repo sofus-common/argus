@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added automatic saved-revision comparison while editing a reopened or newly
+  saved position, with read-only original inputs and an on-demand original curve.
+  Accepted saves advance the baseline; Undo, conflicts, altered responses and
+  late saves cannot silently replace it. Manual comparisons and proposals retain
+  priority. Incompatible scenarios are not overlaid, and cash-index chart levels
+  use points rather than dollars. Verification: 705 tests, TypeScript/build,
+  41 desktop workflow checks and independent review passed; the unchanged source
+  also passed 41 mobile checks before this checkpoint. A temporary local sample
+  save/edit/update record was verified and removed. No live-data or hosting claim.
+
 - Fixed the save API dropping cash-index identity during canonicalization, which
   made an accepted XSP save fail on reopening. Actual Worker/database tests now
   cover save, reopen, revision update and second reopen, preserving model, terms

@@ -212,6 +212,68 @@ async function run() {
         assert(fixture.querySelectorAll('[aria-label="Saved positions"] option').length === 51, 'Stale next page survived refresh');
       } finally { release?.(); refreshRelease?.(); loadRelease?.(); await unmount(); window.fetch = priorFetch }
     });
+    await test('Saved revision automatically compares original holdings with unsaved edits', async () => {
+      await unmount(); const priorFetch = window.fetch, priorConfirm = window.confirm;
+      const state = createStrategy('long-call'), stamp = new Date(fixedNow).toISOString();
+      const seed = { id: 'revision-baseline', title: 'Saved original', revision: 1, updatedAt: stamp, state, snapshot: null };
+      let stored = structuredClone(seed), mode: 'normal' | 'conflict' | 'late' | 'invalid' | 'altered' = 'normal', release: (() => void) | undefined, deleted = false;
+      window.confirm = () => true;
+      window.fetch = (async (url, init) => {
+        if (url === '/api/bootstrap') return Response.json({ session: { label: 'Saved comparison fixture', local: true, recoveryKey: 'disabled-in-test' } });
+        if (url === '/api/strategies') return Response.json({ strategies: deleted ? [] : [stored] });
+        if (url === '/api/strategies/revision-baseline' && init?.method === 'PUT') {
+          const body = JSON.parse(String(init.body));
+          if (mode === 'conflict') return Response.json({ error: { message: 'Revision conflict' } }, { status: 409 });
+          const next = { ...stored, revision: stored.revision + 1, title: body.title, state: Object.fromEntries(Object.entries(body.state).reverse()) as unknown as typeof state };
+          if (mode === 'invalid') return Response.json({ record: { ...next, id: 'unexpected-record' } });
+          if (mode === 'altered') return Response.json({ record: { ...next, state: { ...next.state, legs: next.state.legs.map(leg => ({ ...leg, entryPrice: leg.entryPrice + 1 })) } } });
+          if (mode === 'late') return new Promise<Response>(resolve => { release = () => { stored = next; resolve(Response.json({ record: next })); }; });
+          stored = next; return Response.json({ record: stored });
+        }
+        if (url === '/api/strategies/revision-baseline' && init?.method === 'DELETE') { deleted = true; return new Response(null, { status: 204 }); }
+        if (url === '/api/strategies/revision-baseline') return Response.json({ record: stored });
+        throw new Error(`Unexpected saved comparison request: ${String(url)}`);
+      }) as typeof fetch;
+      const waitFor = async (check: () => boolean, stage: string) => { for (let i = 0; i < 400 && !check(); i++) await settleTimers(); assert(check(), `Saved comparison ${stage}: ${fixture.querySelector('.workspace-error')?.textContent ?? ''}`) };
+      try {
+        root = createRoot(fixture); await act(async () => root!.render(<App />));
+        await waitFor(() => !!fixture.querySelector('option[value="revision-baseline"]'), 'list');
+        await change('Saved positions', seed.id); await click('Load');
+        await waitFor(() => fixture.querySelector('.leg-list [aria-label="Contracts"]')?.getAttribute('value') === '1', 'load');
+        await change('Saved strategy title', 'Title-only edit'); assert(!fixture.querySelector('.comparison-banner'), 'Title-only change created a holdings comparison'); await change('Saved strategy title', seed.title);
+        await change('Contracts', '2');
+        assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 1'), 'Editing a loaded saved position did not expose its original revision without manual Freeze');
+        assert(!fixture.querySelector('[aria-label="Original saved curve"] svg'), 'Original curve was calculated before explicit inspection');
+        await waitFor(() => !!fixture.querySelector('#workspace-chart path.proposal-line')?.getAttribute('d'), 'original versus edited overlay');
+        assert(state.legs[0].contracts === 1 && fixture.querySelector<HTMLInputElement>('.leg-list [aria-label="Contracts"]')?.value === '2', 'Saved comparison changed original or edited quantities');
+        await change('Entry premium', '7'); assert(state.legs[0].entryPrice !== 7, 'Editing mutated saved entry cost');
+        await click('Save'); await waitFor(() => stored.revision === 2 && !fixture.querySelector('.comparison-banner'), 'save establishes reordered revision baseline');
+        await change('Contracts', '3'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 2'), 'Accepted save did not advance original revision');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(!fixture.querySelector('.comparison-banner'), 'Undo to saved inputs left a false comparison');
+        await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 2') && stored.state.legs[0].entryPrice === 7, 'Undo rewound saved revision or entry costs');
+        await click('Freeze comparison'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Frozen baseline'), 'Manual baseline did not take precedence');
+        await change('Contracts', '4'); await click('Use saved baseline'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 2'), 'Clearing manual baseline did not restore saved original');
+        const checkbox = fixture.querySelector<HTMLInputElement>('.leg-list input[type="checkbox"]')!;
+        await act(async () => checkbox.click()); assert(stored.state.excludedLegIds === undefined && fixture.querySelector('[aria-label="Empty analysis selection"]'), 'Exclusion changed saved analysis selection');
+        await act(async () => checkbox.click());
+        const changedDate = new Date(Date.parse(state.scenarioDate) + 86400000).toISOString().slice(0, -1);
+        await change('Scenario date UTC', changedDate);
+        assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Curve overlay hidden') && !fixture.querySelector('#workspace-chart path.proposal-line'), 'Incompatible saved date overlay was admitted');
+        const currentDate = fixture.querySelector<HTMLInputElement>('[aria-label="Scenario date UTC"]')!.value;
+        await act(async () => fixture.querySelector<HTMLDetailsElement>('[aria-label="Original saved curve"]')!.querySelector('summary')!.click());
+        await waitFor(() => !!fixture.querySelector('[aria-label="Original saved curve"] svg'), 'read-only original inspection');
+        assert(fixture.querySelector<HTMLInputElement>('[aria-label="Scenario date UTC"]')!.value === currentDate && fixture.querySelector('.comparison-banner')?.textContent?.includes(stored.state.scenarioDate), 'Original inspection changed controls or lost saved date');
+        mode = 'conflict'; await click('Save'); await waitFor(() => !!fixture.querySelector('.workspace-error'), 'conflict'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 2'), 'Conflict replaced original revision');
+        mode = 'invalid'; await click('Save'); await waitFor(() => fixture.querySelector('.workspace-error')?.textContent?.includes('response failed validation') === true, 'invalid response'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 2'), 'Malformed save response replaced original revision');
+        mode = 'altered'; await click('Save'); await waitFor(() => fixture.querySelector('.workspace-error')?.textContent?.includes('differs from submitted holdings') === true, 'altered valid response'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 2'), 'Valid-but-different save response replaced original revision');
+        mode = 'late'; await click('Save'); await waitFor(() => !!release, 'pending save'); await change('Contracts', '5'); await act(async () => release!()); release = undefined;
+        await waitFor(() => fixture.querySelector('.workspace-notice')?.textContent?.includes('newer workspace edits') === true, 'late save ignored'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 2'), 'Late save replaced comparison anchor');
+        await click('New'); assert(!fixture.querySelector('.comparison-banner'), 'New workspace retained saved original');
+        await change('Saved positions', seed.id); await click('Load'); await waitFor(() => fixture.querySelector<HTMLInputElement>('[aria-label="Contracts"]')?.value === '4', 'reload latest saved revision');
+        await change('Contracts', '6'); assert(fixture.querySelector('.comparison-banner')?.textContent?.includes('Saved revision 3'), 'Reload did not select actual latest saved revision');
+        await click('Delete'); await waitFor(() => deleted && !fixture.querySelector('.comparison-banner'), 'deleted active identity clears baseline'); assert(fixture.querySelector<HTMLInputElement>('[aria-label="Contracts"]')?.value === '6', 'Deleting original changed open holdings');
+      } finally { release?.(); await unmount(); window.fetch = priorFetch; window.confirm = priorConfirm }
+    });
     for (const symbol of ['SPY', 'XSP']) await test(`${symbol} calendar discovery preserves bound scope through comparison, save, reopen and Undo`, async () => {
       await unmount(); const priorFetch = window.fetch, priorSocket = window.WebSocket;
       const priorDate = Date, priorNow = Date.now;
@@ -298,6 +360,17 @@ async function run() {
         await click('Apply proposal'); await click('Save as new'); await waitFor(() => !!saved, 'save');
         assert(saved!.state.legs.length === 2 && new Set(saved!.state.legs.map(leg => leg.expiry)).size === 2 && saved!.state.valuationModel === model && saved!.state.underlyingKind === held.underlyingKind && saved!.state.dividendYield === held.dividendYield && saved!.state.legs.every(leg => leg.type === type), 'Calendar transfer lost expiries, explicit model or underlying identity');
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Calendar Undo lost held inputs');
+        const savedComparison = fixture.querySelector('.comparison-banner');
+        assert(savedComparison && savedComparison.textContent?.includes('Saved revision 1'), 'Undo after candidate save lost saved original baseline');
+        if (symbol === 'XSP') {
+          const originals = savedComparison.querySelector('details')?.textContent ?? '';
+          assert(originals.includes('index points') && originals.includes('premium points') && !originals.includes('$100'), 'Saved index original inputs have incorrect spot or premium units');
+        }
+        assert(!fixture.querySelector('[aria-label="Original saved curve"] svg'), 'Saved candidate original curve ran before inspection');
+        await act(async () => fixture.querySelector('[aria-label="Original saved curve"] summary')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+        await waitFor(() => !!fixture.querySelector('[aria-label="Original saved curve"] svg'), 'saved candidate original curve');
+        const originalAxis = [...fixture.querySelectorAll('[aria-label="Original saved curve"] svg .grid.vertical')].map(line => line.parentElement!.querySelector('text')!.textContent ?? '');
+        assert(originalAxis.length === 5 && originalAxis.every(label => symbol === 'XSP' ? label.endsWith('pts') && !label.includes('$') : label.startsWith('$') && !label.includes('pts')), 'Original saved curve spot-axis units incorrect');
         await change('Saved positions', 'mixed-copy'); await click('Load'); await waitFor(() => fixture.querySelectorAll('.leg-row').length === 2, 'reopen');
         await act(async () => fixture.querySelector<HTMLButtonElement>('[aria-label="Undo"]')!.click()); assert(inputs() === before, 'Reopened calendar Undo changed holding');
         await configure(); mode = 'altered'; await click('Find strategies'); await waitFor(() => !!fixture.querySelector('[aria-label="Strategy optimizer"] [role="alert"]'), 'tamper');

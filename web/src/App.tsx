@@ -542,6 +542,7 @@ function PayoffChart({ state: sourceState, comparison, comparisonLabel = 'Propos
   const unit = metric === 'pnl' ? basis?.unit ?? '' : chartMetrics[metric].unit
   const profitColor = metric === 'pnl' && pnlDisplay !== 'position-value'
   const format = (value: number) => metric === 'pnl' ? unit === '%' ? `${signed(value, 2)}%` : money(value) : signed(value, metric === 'gamma' ? 3 : 2)
+  const formatSpot = (value: number, decimals = 2) => state.underlyingKind === 'cash-index' ? `${value.toFixed(decimals)} pts` : `$${value.toFixed(decimals)}`
   const chart = useRef<SVGSVGElement>(null)
   const [{ width, height }, setSize] = useState({ width: 800, height: 215 })
   useEffect(() => {
@@ -675,7 +676,7 @@ function PayoffChart({ state: sourceState, comparison, comparisonLabel = 'Propos
         {[0, .25, .5, .75, 1].map((t) => {
           const xx = pad.left + t * (width - pad.left - pad.right)
           const value = minSpot + t * (maxSpot - minSpot)
-          return <g key={t}><line x1={xx} x2={xx} y1={pad.top} y2={height - pad.bottom} className="grid vertical" /><text x={xx} y={height - 17} textAnchor="middle" className="axis-label">${value.toFixed(range ? 2 : 0)}</text></g>
+          return <g key={t}><line x1={xx} x2={xx} y1={pad.top} y2={height - pad.bottom} className="grid vertical" /><text x={xx} y={height - 17} textAnchor="middle" className="axis-label">{formatSpot(value, range ? 2 : 0)}</text></g>
         })}
         {profitColor ? <>
         <path d={area} fill={`url(#${svgId}-profitArea)`} clipPath={`url(#${svgId}-profitClip)`} />
@@ -688,8 +689,8 @@ function PayoffChart({ state: sourceState, comparison, comparisonLabel = 'Propos
         {metric === 'pnl' && !profitColor && <path d={expiryPath} className="expiry-reference" fill="none" stroke="#a0adc1" strokeWidth="1.5" strokeDasharray="3 5" />}
         {comparison && <path d={comparisonPath} className="proposal-line" fill="none" stroke="#b2a0ff" strokeWidth="3" strokeDasharray="8 6" />}
         {showBreakevens && <g className="breakeven-markers" data-as-of={breakevens.date} clipPath={`url(#${svgId}-plotClip)`}>
-          {breakevens.candidates.filter(candidate => candidate.upper >= minSpot && candidate.lower <= maxSpot).map(candidate => <rect key={candidate.lower} className={candidate.kind} data-lower={candidate.lower} data-upper={candidate.upper} x={x(Math.max(minSpot, candidate.lower)) - 1} width={Math.max(2, x(Math.min(maxSpot, candidate.upper)) - x(Math.max(minSpot, candidate.lower)))} y={y(0) - 8} height="16"><title>First-expiry {candidate.kind} candidate: ${candidate.lower.toFixed(4)} to ${candidate.upper.toFixed(4)}</title></rect>)}
-          {breakevens.evaluatedZeros.filter(spot => spot >= minSpot && spot <= maxSpot).map(spot => <circle key={spot} cx={x(spot)} cy={y(0)} r="4"><title>First-expiry evaluated zero P/L at ${spot.toFixed(4)}</title></circle>)}
+          {breakevens.candidates.filter(candidate => candidate.upper >= minSpot && candidate.lower <= maxSpot).map(candidate => <rect key={candidate.lower} className={candidate.kind} data-lower={candidate.lower} data-upper={candidate.upper} x={x(Math.max(minSpot, candidate.lower)) - 1} width={Math.max(2, x(Math.min(maxSpot, candidate.upper)) - x(Math.max(minSpot, candidate.lower)))} y={y(0) - 8} height="16"><title>First-expiry {candidate.kind} candidate: {formatSpot(candidate.lower, 4)} to {formatSpot(candidate.upper, 4)}</title></rect>)}
+          {breakevens.evaluatedZeros.filter(spot => spot >= minSpot && spot <= maxSpot).map(spot => <circle key={spot} cx={x(spot)} cy={y(0)} r="4"><title>First-expiry evaluated zero P/L at {formatSpot(spot, 4)}</title></circle>)}
         </g>}
         {state.spot >= minSpot && state.spot <= maxSpot && <g><line x1={x(state.spot)} x2={x(state.spot)} y1={pad.top} y2={height - pad.bottom} className="spot-line" />
         <text x={x(state.spot)} y={15} textAnchor="middle" className="spot-label">SPOT {state.spot.toFixed(2)}</text></g>}
@@ -734,14 +735,14 @@ function PayoffChart({ state: sourceState, comparison, comparisonLabel = 'Propos
             <text y={height - pad.bottom - 26 - index * 30} textAnchor="middle" fontSize="13">{leg.side === 'long' ? 'B' : 'S'} {leg.strike}</text>
           </g>
         ))}
-        {curve && hover && <g className="chart-hover"><line x1={hover.px} x2={hover.px} y1={pad.top} y2={height - pad.bottom} /><circle cx={hover.px} cy={hover.py} r="5" /><g transform={`translate(${Math.min(width - 168, hover.px + 12)} ${Math.max(12, hover.py - 54)})`}><rect width="148" height="44" rx="6" /><text x="10" y="17">{state.underlying} ${hover.spot.toFixed(2)}</text><text x="10" y="34" className={!profitColor ? undefined : hover.value >= 0 ? 'positive-text' : 'negative-text'}>{format(hover.value)} {metric === 'pnl' && pnlDisplay !== 'pnl' ? '' : label}</text></g></g>}
+        {curve && hover && <g className="chart-hover"><line x1={hover.px} x2={hover.px} y1={pad.top} y2={height - pad.bottom} /><circle cx={hover.px} cy={hover.py} r="5" /><g transform={`translate(${Math.min(width - 168, hover.px + 12)} ${Math.max(12, hover.py - 54)})`}><rect width="148" height="44" rx="6" /><text x="10" y="17">{state.underlying} {formatSpot(hover.spot)}</text><text x="10" y="34" className={!profitColor ? undefined : hover.value >= 0 ? 'positive-text' : 'negative-text'}>{format(hover.value)} {metric === 'pnl' && pnlDisplay !== 'pnl' ? '' : label}</text></g></g>}
       </svg>
       {dragError && <p role="alert">{dragError}</p>}
       {!readOnly && <label><input type="checkbox" checked={moveAll} onChange={event => setMoveAll(event.target.checked)} /> Move all strikes</label>}
       {!readOnly && <p className="heatmap-help">Hypothetical editing · Shift-drag a strike or use Shift + arrow keys to move all option strikes together. Escape cancels a drag.</p>}
       {state !== sourceState && <p role="status">Hypothetical chart preview · release to apply; Escape cancels. Position totals remain unchanged until applied.</p>}
       {showBreakevens && <p className="breakeven-caption">First-expiry candidates · {shortDate(breakevens.date)} · outlined intervals, dots for evaluated zeros. Not exact breakevens.</p>}
-      {curve && hover && <output className="sr-only" aria-live="polite">On {state.scenarioDate}, {state.underlying} ${hover.spot.toFixed(2)}, modeled {metric === 'pnl' && pnlDisplay === 'pnl' ? 'profit and loss' : label} {format(hover.value)} {unit}</output>}
+      {curve && hover && <output className="sr-only" aria-live="polite">On {state.scenarioDate}, {state.underlying} {formatSpot(hover.spot)}, modeled {metric === 'pnl' && pnlDisplay === 'pnl' ? 'profit and loss' : label} {format(hover.value)} {unit}</output>}
       <div className="chart-caption"><span><i className={profitColor ? 'key curve' : 'key greek'} />Scenario · {shortDate(state.scenarioDate)}</span>{metric === 'pnl' && state.legs.length > 0 && <span><i className="key current" />{state.legs.some((leg) => leg.expiry !== state.legs[0].expiry) ? 'First-expiry reference' : 'Expiration reference'}</span>}{comparison && <span><i className="comparison-key" />{comparisonLabel} · same date</span>}{metric !== 'pnl' && <span>{label} · {chartMetrics[metric].unit} · modeled exposure, not P/L</span>}<span className="drag-hint">{readOnly ? 'Read-only · arrow keys to inspect' : 'Drag a strike · arrow keys to inspect'}</span></div>
     </div>
   )
@@ -900,7 +901,7 @@ type ChatMessage = { role: 'guide' | 'user' | 'argus'; text: string; note?: stri
 type PendingProposal = Omit<SparringSuccess, 'calculated' | 'market_context'> & Partial<Pick<SparringSuccess, 'calculated' | 'market_context'>> & { before: SparringSuccess['metrics']; comparisonBaseline?: StrategyState; comparisonUnavailable?: string; lossBound?: ReturnType<typeof firstExpirySpreadLossBound>; candidateSelection?: CandidateSelection }
 type SavedSummary = { id: string; title: string; revision: number; updatedAt: string }
 type SavedRecord = SavedSummary & { state: StrategyState; snapshot: MarketSnapshot | null }
-const workspaceContent = (state: StrategyState, title: string) => JSON.stringify([title.trim() || state.name, { ...state, version: 0 }])
+const workspaceContent = (state: StrategyState, title: string) => JSON.stringify([title.trim() || state.name, { ...state, version: 0 }], (_key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value)
 
 const initialTemplate = (): TemplateId => {
   const requested = new URLSearchParams(window.location.search).get('template')
@@ -985,13 +986,14 @@ export function App() {
   const [editError, setEditError] = useState('')
   const [proposal, setProposal] = useState<PendingProposal | null>(null)
   const [manualBaseline, setManualBaseline] = useState<StrategyState>()
+  const [originalCurveOpen, setOriginalCurveOpen] = useState(false)
   const [session, setSession] = useState<{ label: string; local: boolean; recoveryKey: string } | null>(null)
   const [saved, setSaved] = useState<SavedSummary[]>([])
   const savedListRequest = useRef(0)
   const savedListController = useRef<AbortController | null>(null)
   const [savedCursor, setSavedCursor] = useState<string | null>(null)
   const [savedListPending, setSavedListPending] = useState(false)
-  const [savedIdentity, setSavedIdentity] = useState<SavedSummary | null>(null)
+  const [savedIdentity, setSavedIdentity] = useState<SavedRecord | null>(null)
   const [savedTitle, setSavedTitle] = useState('')
   const [savedContent, setSavedContent] = useState<string | null>(() => workspaceContent(strategy, ''))
   const unsavedChanges = savedContent !== workspaceContent(strategy, savedTitle)
@@ -1293,19 +1295,22 @@ export function App() {
         return
       }
       const record = body.record as SavedRecord
+      if (!record || typeof record.id !== 'string' || !record.id || typeof record.title !== 'string' || !Number.isSafeInteger(record.revision) || record.revision < 1 || !Number.isFinite(Date.parse(record.updatedAt)) || !record.state || (action === 'load' || updating) && record.id !== target!.id) throw new Error('Saved response failed validation. Your position and comparison are unchanged.')
+      if (updating && record.revision !== target!.revision + 1 || action === 'load' && record.revision < target!.revision || !updating && action !== 'load' && record.revision !== 1) throw new Error('Saved revision failed validation. Your position and comparison are unchanged.')
+      const errors = validateConstruction(record.state)
+      if (record.state.pricing) {
+        if (!record.snapshot) throw new Error('Saved quote snapshot is missing. Your position is unchanged.')
+        errors.push(...validateMarketConstruction(record.state, record.snapshot))
+      }
+      if (errors.length) throw new Error('Saved position failed validation. Your position is unchanged.')
+      if (action !== 'load' && workspaceContent(record.state, '') !== workspaceContent(before, '')) throw new Error('Saved response differs from submitted holdings. Your edits and comparison are unchanged; reload the saved copy to inspect it.')
       if (action === 'load') {
-        const errors = validateConstruction(record.state)
-        if (record.state.pricing) {
-          if (!record.snapshot) throw new Error('Saved quote snapshot is missing. Your position is unchanged.')
-          errors.push(...validateMarketConstruction(record.state, record.snapshot))
-        }
-        if (errors.length) throw new Error('Saved position failed validation. Your position is unchanged.')
         if (!commit(record.state)) return
         if (record.snapshot) setSnapshots(items => ({ ...items, [record.snapshot!.id]: record.snapshot! }))
         chainRequest.current++
         setChainPending(false)
       }
-      setSavedIdentity(record)
+      setSavedIdentity(structuredClone(record))
       setSaved(items => items.some(item => item.id === record.id) ? items : [...items, record])
       setSavedContent(workspaceContent(strategyRef.current, record.title))
       setSelectedSaved(record.id)
@@ -1495,8 +1500,12 @@ export function App() {
   const valuation = Date.parse(strategy.valuationTimestamp)
   const profitValue = !metrics ? '—' : mixedExpiry ? money(metrics.modeledHigh) : metrics.maxProfit == null ? 'Unbounded' : money(metrics.maxProfit)
   const lossValue = !metrics ? '—' : mixedExpiry ? money(metrics.modeledLow) : metrics.maxLoss == null ? 'Unbounded' : money(-Math.abs(metrics.maxLoss))
-  const comparedPosition = useMemo(() => proposal ? projectAnalysisPosition(proposal.next_state) ?? undefined : manualBaseline, [proposal, manualBaseline])
-  const comparisonCompatible = analysisState && comparedPosition && strategy.underlying === comparedPosition.underlying && strategy.valuationTimestamp === comparedPosition.valuationTimestamp && (strategy.valuationModel ?? 'european-bsm-v1') === (comparedPosition.valuationModel ?? 'european-bsm-v1') && Date.parse(strategy.scenarioDate) === Date.parse(comparedPosition.scenarioDate) && (!analysisState.legs.length || !comparedPosition.legs.length || firstExpiry === Math.min(...comparedPosition.legs.map((leg) => Date.parse(leg.expiry))))
+  const savedProjection = useMemo(() => savedIdentity ? projectAnalysisPosition(savedIdentity.state) ?? undefined : undefined, [savedIdentity])
+  const savedBaseline = savedIdentity && workspaceContent(strategy, '') !== workspaceContent(savedIdentity.state, '') ? savedProjection : undefined
+  const comparedPosition = useMemo(() => proposal ? projectAnalysisPosition(proposal.next_state) ?? undefined : manualBaseline ?? savedBaseline, [proposal, manualBaseline, savedBaseline])
+  const comparingSaved = !!savedBaseline && !proposal && !manualBaseline
+  useEffect(() => setOriginalCurveOpen(false), [savedIdentity, comparingSaved])
+  const comparisonCompatible = analysisState && comparedPosition && strategy.underlying === comparedPosition.underlying && strategy.underlyingKind === comparedPosition.underlyingKind && strategy.valuationTimestamp === comparedPosition.valuationTimestamp && (strategy.valuationModel ?? 'european-bsm-v1') === (comparedPosition.valuationModel ?? 'european-bsm-v1') && Date.parse(strategy.scenarioDate) === Date.parse(comparedPosition.scenarioDate) && (!analysisState.legs.length || !comparedPosition.legs.length || firstExpiry === Math.min(...comparedPosition.legs.map((leg) => Date.parse(leg.expiry))))
   const brief = !metrics ? '' : stockOnly ? 'Stock-only mark P/L: no option expiry, time decay or IV sensitivity. Dividends, financing and borrow are excluded.' : metrics.breakevens.length === 2
     ? `At expiration, the position breaks even at $${metrics.breakevens[0].toFixed(2)} and $${metrics.breakevens[1].toFixed(2)}.`
     : mixedExpiry ? 'In P/L view, the solid curve models both legs at the selected scenario date. The dashed first-expiry reference values the remaining option theoretically; its value still depends on volatility.'
@@ -1629,9 +1638,9 @@ export function App() {
             {stockOnly && <p role="status">Stock-only · No option expiry. Curve and table show share-price scenarios; dividends, financing and borrow are excluded.</p>}
             {!analysisState?.legs.length && strategy.scenarioDate !== strategy.valuationTimestamp && <button className="undo-button" onClick={() => updateScenario({ scenarioDate: strategy.valuationTimestamp })}>Reset scenario to valuation</button>}
             {editError && <div className="calculation-error" role="alert"><strong>Edit not applied</strong><span>{editError}</span><button onClick={() => setEditError('')}>Dismiss</button></div>}
-            <div className="chart-controls comparison-controls"><button className="undo-button" disabled={!!proposal || !analysisState} onClick={() => { if (!analysisState) return; setManualBaseline(structuredClone(analysisState)); setView('curve') }}>{manualBaseline ? 'Replace baseline' : 'Freeze comparison'}</button>{manualBaseline && <button className="undo-button" onClick={() => setManualBaseline(undefined)}>Clear baseline</button>}</div>
-            {comparedPosition && <div className="comparison-banner" role="status"><strong>{proposal ? 'Comparing proposed position' : `Frozen baseline · ${comparedPosition.underlying} · ${comparedPosition.name}`}</strong><span>{comparisonCompatible ? view === 'curve' ? 'Both curves share the selected date, valuation time and model; option expiry horizons match where both positions contain options.' : 'Switch to Curve to see the overlay.' : 'Different symbol, date, valuation time, model or expiry horizon. Curve overlay hidden.'}</span>{!proposal && <details><summary>Frozen inputs · not saved or sent to AI</summary><p>{comparedPosition.scenarioDate} · {comparedPosition.valuationModel ?? 'european-bsm-v1'} · rate {comparedPosition.rate} · yield {comparedPosition.dividendYield} · IV shift {signed(comparedPosition.ivShift * 100, 2)} pts · allowance {money(comparedPosition.feeAllowance ?? 0)}. Entry costs, shares and all leg assumptions remain frozen; differences are not realized P/L or trading edge.</p>{comparedPosition.expiryIvShifts?.map(shift => <p key={shift.expiry}>{shift.expiry}: additional IV shift {signed(shift.ivShift * 100, 2)} pts</p>)}<p>{holdingDescription(comparedPosition.stock, comparedPosition.underlying)}</p>{comparedPosition.legs.map(leg => <p key={leg.id}>{legDescription(leg)}</p>)}</details>}</div>}
-            {!analysisState ? <section aria-label="Empty analysis selection" role="status"><h3>No holdings included in analysis</h3><p>Add an option or shares, or include retained legs below. No P/L, Greeks or expiry probabilities are calculated for an empty selection.</p>{hasExclusions && <button onClick={() => commit({ ...strategyRef.current, excludedLegIds: undefined })}>Include all legs</button>}</section> : !displayBasis ? <p role="status">Risk percent unavailable: choose P/L or position value. This position has no positive exact expiry loss bound.</p> : view === 'curve' ? <PayoffChart range={chartRange} pnlDisplay={activePnlDisplay} metric={chartMetric} state={analysisState} breakevens={breakevenResult?.source === analysisState ? breakevenResult.value : undefined} comparison={comparisonCompatible ? comparedPosition : undefined} comparisonLabel={proposal ? 'Proposed' : 'Frozen baseline'} onDragStart={stopAutomatic} onStrikeCommit={(source, next) => {
+            <div className="chart-controls comparison-controls"><button className="undo-button" disabled={!!proposal || !analysisState} onClick={() => { if (!analysisState) return; setManualBaseline(structuredClone(analysisState)); setView('curve') }}>{manualBaseline ? 'Replace baseline' : 'Freeze comparison'}</button>{manualBaseline && <button className="undo-button" onClick={() => setManualBaseline(undefined)}>{savedBaseline ? 'Use saved baseline' : 'Clear baseline'}</button>}</div>
+            {comparedPosition && <div className="comparison-banner" role="status"><strong>{proposal ? 'Comparing proposed position' : comparingSaved ? `Saved revision ${savedIdentity!.revision} · ${savedIdentity!.title} · original versus edits` : `Frozen baseline · ${comparedPosition.underlying} · ${comparedPosition.name}`}</strong><span>{comparisonCompatible ? view === 'curve' ? 'Both curves share the selected date, valuation time and model; option expiry horizons match where both positions contain options.' : 'Switch to Curve to see the overlay.' : 'Different symbol, date, valuation time, model or expiry horizon. Curve overlay hidden.'}</span>{!proposal && <><details><summary>{comparingSaved ? 'Original saved inputs · read-only' : 'Frozen inputs · not saved or sent to AI'}</summary><p>{comparedPosition.underlying} · {comparedPosition.underlyingKind === 'cash-index' ? `${comparedPosition.scenarioSpot.toFixed(2)} index points` : `$${comparedPosition.scenarioSpot.toFixed(2)}`} · {comparedPosition.scenarioDate} · {comparedPosition.valuationModel ?? 'european-bsm-v1'} · rate {comparedPosition.rate} · yield {comparedPosition.dividendYield} · IV shift {signed(comparedPosition.ivShift * 100, 2)} pts · allowance {money(comparedPosition.feeAllowance ?? 0)}. Entry costs, shares and all leg assumptions remain frozen; differences are not realized P/L or trading edge.</p>{comparedPosition.expiryIvShifts?.map(shift => <p key={shift.expiry}>{shift.expiry}: additional IV shift {signed(shift.ivShift * 100, 2)} pts</p>)}<p>{holdingDescription(comparedPosition.stock, comparedPosition.underlying)}</p>{comparedPosition.legs.map(leg => <p key={leg.id}>{comparedPosition.underlyingKind === 'cash-index' ? `${leg.side === 'long' ? 'Buy' : 'Sell'} ${leg.contracts} × ${leg.strike} index points ${leg.type} · ${shortDate(leg.expiry)} · ${leg.entryPrice.toFixed(2)} premium points · IV ${(leg.iv * 100).toFixed(0)}%` : legDescription(leg)}</p>)}</details>{comparingSaved && <details key={`${savedIdentity!.id}:${savedIdentity!.revision}`} aria-label="Original saved curve" onToggle={event => setOriginalCurveOpen(event.currentTarget.open)}><summary>Inspect original curve</summary><p>Original saved scenario and model, in total USD P/L. Current builder controls remain unchanged. Only the saved analysis selection is included; no realized closing proceeds or lifecycle events are inferred.</p>{originalCurveOpen && <PayoffChart state={comparedPosition} metric="pnl" readOnly />}</details>}</>}</div>}
+            {!analysisState ? <section aria-label="Empty analysis selection" role="status"><h3>No holdings included in analysis</h3><p>Add an option or shares, or include retained legs below. No P/L, Greeks or expiry probabilities are calculated for an empty selection.</p>{hasExclusions && <button onClick={() => commit({ ...strategyRef.current, excludedLegIds: undefined })}>Include all legs</button>}</section> : !displayBasis ? <p role="status">Risk percent unavailable: choose P/L or position value. This position has no positive exact expiry loss bound.</p> : view === 'curve' ? <PayoffChart range={chartRange} pnlDisplay={activePnlDisplay} metric={chartMetric} state={analysisState} breakevens={breakevenResult?.source === analysisState ? breakevenResult.value : undefined} comparison={comparisonCompatible ? comparedPosition : undefined} comparisonLabel={proposal ? 'Proposed' : comparingSaved ? `Saved revision ${savedIdentity!.revision}` : 'Frozen baseline'} onDragStart={stopAutomatic} onStrikeCommit={(source, next) => {
               if (strategyRef.current.version === source.version && next !== source) commit(pruneExpiryIvShifts({ ...strategyRef.current, name: next.name, legs: strategyRef.current.legs.map(leg => next.legs.find(updated => updated.id === leg.id) ?? leg) }))
             }} onStrike={(source, id, strike, group, step) => {
               if (strategyRef.current.version !== source.version) return source
