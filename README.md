@@ -107,10 +107,10 @@ They have no option expiry or expiry probability. Capture and refresh preserve
 entry cost; Undo restores the prior position. Streaming limits apply to the
 underlying bid/ask timestamps even when no options remain.
 
-Hosting is not deployed or configured by this change. Before release, configure a
-Cloudflare Access application and explicit user allowlist, `ACCESS_TEAM_DOMAIN`
+The private app is deployed at https://easyoptions.trading behind Cloudflare
+Access and an explicit user allowlist. Required production settings are `ACCESS_TEAM_DOMAIN`
 (full HTTPS team origin), `ACCESS_AUD`, `APP_ORIGIN` (exact HTTPS app origin), and
-a real `DB` D1 binding with the migration applied. The Worker verifies Access JWTs
+a real `DB` D1 binding with migrations applied. The Worker verifies Access JWTs
 for HTML, assets and APIs. Missing configuration fails closed; workers.dev and
 preview URLs are disabled. Production output contains no development identity or
 local database binding. Do not use `wrangler.local.json` as a deployment config.

@@ -1,17 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-09-09
+
+- Deployed release commit `3d12b49` to https://easyoptions.trading following user
+  approval. Worker version `320ac0ae-06e5-42d4-9abe-1c1c48e9c7a3` serves 100%.
+  Verified authenticated app/calculation, bootstrap and saved-library reads,
+  new client asset `index-RibFg0no.js`, unauthenticated HTML/API/asset redirects,
+  disabled worker/preview URLs and persisted successful invocation logs.
+  Access, eight secrets, D1, rate limits and observability settings are preserved.
+  No data migration, saved-position writes or paid inference canary was performed.
+  Rollback version: `2740f6ea-da88-4613-8bab-6cacb4ec4ef0`.
 
 - Added chart-adjacent selection of calculated what-if scenarios, with a read-only
   overlay of captured assumptions and the reviewed baseline. Position changes
   cancel pending reviews while preserving the question; starting a new discussion
   closes the preview, and pending discussions reject preview reselection.
   Added a direct loaded-position adjustment entry using the existing lot workflow;
-  no pricing, prompt, provider, accounting or database changes. Production unchanged.
+  no pricing, prompt, provider, accounting or database changes.
   Verified 764 offline tests, build, desktop/narrow previews and focused browser
   regressions for stale responses, partial closes and changed-expiry rolls.
   The legacy full lots-browser fixture still has synthetic projection drift;
   its broader UI coverage is not claimed. Independent App review cleared.
+
+## Unreleased
 
 - Revised the web delivery plan around visual position comparison, context-bound
   AI discussion and existing partial-close/roll previews, grounded in first-person

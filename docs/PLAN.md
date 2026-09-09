@@ -2,7 +2,7 @@
 
 ## Active web product plan — visual workbench (9 September 2026)
 
-Status: W1 and W2 implemented; local W3 checks passed. User approved implementation on 9 September 2026 ("execute the plan"). Production release confirmation and WB-7 remain pending.
+Status: W1–W3 released as 0.2.0 on 9 September 2026 after explicit user deployment approval. WB-7 authenticated app/API, unauthenticated denial and persisted log checks passed. Release evidence and rollback version are in docs/changelogs/CHANGELOG.md.
 This section supersedes the delivery priorities below for `web/` only. The legacy
 Python experiment remains separate and unchanged. Integration owner: root agent.
 Controlled lane: financial analysis, user-owned records and production release.
