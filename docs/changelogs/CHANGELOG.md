@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Enabled native Cloudflare persisted invocation logs (100%) and traces (10%),
+  with request URL query-string redaction and no external telemetry exporter.
+  Verified authenticated production page/bootstrap/strategies requests, timing,
+  redacted Access headers, and a persisted trace. TypeScript and build passed.
+  Native logs still contain network metadata and Referer headers; do not put
+  secrets or private conversation text in application URLs.
+
 - Deployed the initial private release to easyoptions.trading with Cloudflare
   Access, a separate production D1 database and server-side provider secrets.
   Worker and preview URLs are disabled; unauthenticated HTML, assets and API
