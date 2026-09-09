@@ -2,6 +2,15 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added a deterministic sample optimizer: 120 bull-call strike pairs in the
+  $95–$110 range, fixed expiry/quantity, maximum-loss budget, profit or return-on-risk
+  ranking, and up to three alternatives. Current structure and candidates use the
+  same model-derived entry prices. Preview is non-mutating; explicit Apply replaces
+  draft strikes/premiums. Input changes invalidate previews. No live quote search,
+  probability ranking, AI calls, saved-account writes or production deployment.
+  Verified 124 focused tests, TypeScript and browser coverage of search, preview,
+  stale-result guards, Apply, empty results and mobile overflow.
+
 - Added a separate, saved thesis horizon and deterministic target/date guidance,
   with unsupported post-expiry outcomes withheld. Added selected-scenario Greeks,
   a scenario/expiry P/L table, a flat cost allowance, and visible pricing/assignment

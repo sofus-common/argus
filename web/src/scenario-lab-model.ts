@@ -51,3 +51,38 @@ export function assertLabPosition(state: StrategyState) {
   if (state.legs[0].strike >= state.legs[1].strike || state.legs[0].contracts !== state.legs[1].contracts) throw new Error('Keep the long strike below the short strike and quantities equal for this spread.')
   if (state.scenarioSpot < 80 || state.scenarioSpot > 120) throw new Error('Prototype target must be between $80 and $120.')
 }
+
+export function optimizeLab(position: StrategyState, horizon: string, budget: number, objective: 'profit' | 'return') {
+  if (labThesisFit(position, horizon).status !== 'calculated') throw new Error('Set a thesis horizon between valuation and the selected expiry.')
+  if (!Number.isFinite(budget) || budget <= 0 || budget > 100000 || !['profit', 'return'].includes(objective)) throw new Error('Enter a maximum loss between $0.01 and $100,000 and a supported objective.')
+  const date = `${horizon}T20:00:00.000Z`
+  const premium = (strike: number) => {
+    const leg = { ...position.legs[0], contracts: 1, strike, contractId: sampleContractId('call', strike, position.legs[0].expiry), entryPrice: 0 }
+    return Math.round(evaluateScenario({ ...position, legs: [leg], feeAllowance: 0, ivShift: 0, scenarioSpot: position.spot, scenarioDate: position.valuationTimestamp }).pnl) / 100
+  }
+  const prices = new Map<number, number>()
+  for (const strike of new Set([...Array.from({ length: 16 }, (_, i) => 95 + i), ...position.legs.map(l => l.strike)])) prices.set(strike, premium(strike))
+  const candidate = (long: number, short: number) => {
+    const state = { ...position, scenarioDate: date, legs: position.legs.map((leg, i) => {
+      const strike = i ? short : long
+      return { ...leg, strike, contractId: sampleContractId('call', strike, leg.expiry), entryPrice: prices.get(strike)! }
+    }) }
+    const debit = Number(((prices.get(long)! - prices.get(short)!) * 100 * state.legs[0].contracts).toFixed(2))
+    const maxLoss = Number((debit + (state.feeAllowance ?? 0)).toFixed(2))
+    const pnl = evaluateScenario(state).pnl
+    const smaller = evaluateScenario({ ...state, scenarioSpot: state.spot + (state.scenarioSpot - state.spot) / 3 }).pnl
+    const later = evaluateScenario({ ...state, scenarioDate: state.legs[0].expiry }).pnl
+    return { state, debit, maxLoss, pnl, smaller, later, returnOnRisk: maxLoss > 0 ? pnl / maxLoss : null }
+  }
+  const current = candidate(position.legs[0].strike, position.legs[1].strike)
+  const candidates: ReturnType<typeof candidate>[] = []
+  let searched = 0
+  for (let long = 95; long < 110; long++) for (let short = long + 1; short <= 110; short++) {
+    searched++
+    const result = candidate(long, short)
+    if (result.maxLoss > 0 && result.maxLoss <= budget && !(long === position.legs[0].strike && short === position.legs[1].strike)) candidates.push(result)
+  }
+  const score = (c: typeof current) => objective === 'profit' ? c.pnl : c.returnOnRisk!
+  candidates.sort((a, b) => score(b) - score(a) || a.maxLoss - b.maxLoss || a.state.legs[0].strike - b.state.legs[0].strike || a.state.legs[1].strike - b.state.legs[1].strike)
+  return { current, candidates: candidates.slice(0, 3), searched, eligible: candidates.length }
+}
