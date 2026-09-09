@@ -4,6 +4,7 @@
   "version": "0.2.0",
   "type": "module",
   "scripts": {
+    "prototype": "vite --config vite.prototype.config.mjs",
     "dev": "vite --host 127.0.0.1",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.json",
     "build": "tsc --noEmit && vite build",

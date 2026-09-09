@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — local Scenario Lab prototype
+
+- Added an isolated `pnpm prototype` entry at `/prototype.html` for design C:
+  optional thesis, full-width payoff chart, editable synthetic call spread,
+  explicit base/smaller/later scenarios and browser-local thesis/draft saving.
+  Reuses the existing option engine; later scenarios stop at expiry. Conversation
+  context is preview-only, with no AI request, live quotes or account writes.
+  Production entry, deployment and provider configuration are unchanged.
+- Verified 120 focused calculation tests, TypeScript, and headless browser checks
+  for scenario results, target editing, save/reload and mobile overflow.
+
 ## 0.2.0 — 2026-09-09
 
 - Deployed release commit `3d12b49` to https://easyoptions.trading following user
