@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Revised the web delivery plan around visual position comparison, context-bound
+  AI discussion and existing partial-close/roll previews, grounded in first-person
+  trader accounts. Added acceptance tests, release gates and rollback boundaries;
+  retained the historical Python experiment plan separately. Planning only.
+
 - Enabled native Cloudflare persisted invocation logs (100%) and traces (10%),
   with request URL query-string redaction and no external telemetry exporter.
   Verified authenticated production page/bootstrap/strategies requests, timing,

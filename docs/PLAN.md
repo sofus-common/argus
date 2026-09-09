@@ -1,5 +1,140 @@
 # ARGUS implementation plan
 
+## Active web product plan — visual workbench (9 September 2026)
+
+Status: prepared for human plan approval; not an implementation or release claim.
+This section supersedes the delivery priorities below for `web/` only. The legacy
+Python experiment remains separate and unchanged. Integration owner: root agent.
+Controlled lane: financial analysis, user-owned records and production release.
+
+### Outcome and evidence
+
+Open or build a position, explore an adjustment visually, discuss that exact
+comparison, then apply a draft change or explicitly record an actual fill.
+Conversation is optional assistance, never a prerequisite to using the builder.
+
+First-person workflow evidence, not verified profitability:
+- Partial exits and rolling an iron-condor side:
+  https://www.reddit.com/r/options/comments/1ns9m6s/comment/ngndi00/
+- Pre-entry price/date/IV exploration and liquidity inspection:
+  https://www.reddit.com/r/thetagang/comments/swxi4e/anybody_using_optionstrat/
+- Screenshot-to-AI handoff described in the app discussion:
+  https://www.reddit.com/r/options/comments/1ns9m6s/options_strat_app/
+- After-hours quote caveat:
+  https://www.reddit.com/r/options/comments/1jg12cu/comment/miwjl3x/
+
+These anecdotes justify testing the workflow, not claiming a trading edge or
+representative demand. Earlier thesis-first/three-candidate ideas are deferred.
+
+### Capability classification and invariants
+
+| Component | Class | Responsibility |
+|---|---|---|
+| Chart/leg edits, preview, Apply, Undo | DETERMINISTIC | One validated position state; no implicit recording. |
+| Quotes, quantities, costs, scenarios, comparisons | DETERMINISTIC | Existing engines; shared snapshot, basis, date and model. |
+| State identity and stale-result rejection | DETERMINISTIC | Bind result to position version, saved revision and comparison inputs. |
+| Natural-language scenario interpretation | PROBABILISTIC | Propose bounded typed coordinates; ask when materially ambiguous. |
+| Explanation and objections | PROBABILISTIC | Interpret server-computed facts; do not supply authoritative arithmetic. |
+| Validation, permissions, persistence and rate limits | DETERMINISTIC | Enforce before provider calls, state changes or saved writes. |
+| Tracing, evals and release checks | DETERMINISTIC | Observable evidence, not model self-assessment. |
+
+No classification is unresolved. No new autonomous loop. Reuse the existing
+bounded scenario-call path; direct interactions require zero inference calls.
+Do not increase its call/token caps or introduce agents in the runtime. Any such
+change requires a measured per-question cost multiplier and explicit approval.
+Prompts remain versioned in the existing prompt-bundle mechanism; new bundles
+must pass offline regression tests before production activation.
+
+### Existing seams to reuse
+
+- `web/src/App.tsx`: `commit`, proposal request/version checks, Apply/Undo,
+  chart context, frozen comparisons and candidate preview. Do not replace these.
+- `web/src/LotManagement.tsx`: hypothetical transaction comparison,
+  `LotScenarios`, read-only discussion and Show scenario on chart.
+- `web/src/lot-scenarios.ts`: `prepareLotScenarioComparison` and
+  `calculateLotScenarioComparison` already require matched basis and inventories.
+- `web/src/position-lots.ts`: lot projection/valuation and realized accounting.
+- `web/src/sparring.ts` and `web/src/worker.ts`: typed discussion/scenario boundary,
+  server calculation, guarded requests and bounded provider calls.
+- `web/src/analysis-prompts.ts` and existing prompt bundles/traces: preserve active
+  baseline until a separately evaluated prompt change is actually needed.
+
+### Ordered build and proof
+
+**W1 — One chart-bound comparison, first shippable tracer.** Characterize current
+behavior before editing. In App.tsx/styles.css, promote `RequestedScenarios` and
+the validated `ScenarioPreview` from disclosure/modal into a chart-adjacent
+selection using `PayoffChart`'s existing comparison support. Ask an explicit
+price/date/IV question, select the calculated result and see its preview without
+leaving the workspace. Dismiss restores the normal chart. Show reviewed version,
+scenario and quote basis beside the answer. No new prompt or model call is needed.
+Reuse existing validation/recalculation; preserve original legs, entry prices and
+scenario inputs. Draft edits, quote refresh, scenario changes and load/Undo must discard
+in-flight stale output and mark older explanations as historical. Preserve any
+user question text when rejecting a stale result. No new discovery wizard.
+
+**W2 — Position adjustment entry points.** After W1, improve access to existing
+LotManagement hold-versus-close/partial-close/roll previews. Compare one proposed
+adjustment against held inventory first, not a new multi-candidate engine.
+Show remaining quantity, realized P/L, remaining modeled P/L and allowance once.
+Discussion and plotting never record transactions. Recording requires explicit
+actual-fill inputs and the existing saved revision check. A draft replacement is
+not a roll. Unsupported dates/inventories return unavailable, not invented values.
+
+**W3 — Integrated verification and release.** Independent review of the combined
+diff, offline response/tool regressions if those contracts changed, full test/build,
+and browser checks at desktop and narrow width. No production schema migration is
+planned. Reuse saved state/lifecycle data; a new durable decision journal is deferred.
+
+| Acceptance | Proof required before release |
+|---|---|
+| WB-1: Direct builder remains usable without AI | Browser: edit legs/scenario with inference unavailable; chart updates; keyboard controls work. |
+| WB-2: Discussion and chart describe identical inputs | Fixture assertion of exact request context plus browser before/after chart and answer inspection. |
+| WB-3: Stale responses cannot act | Delayed response, then edit/refresh/Undo/load; no stale overlay/Apply/write; question retained. |
+| WB-4: Adjustment preserves accounting | Existing position-lots and lifecycle tests plus partial close and changed-expiry roll; costs once, held record unchanged before confirmation. |
+| WB-5: Comparison is like-for-like | Matched snapshot/date/basis/model tests; quantity/exposure shown; incompatible horizons fail closed. |
+| WB-6: Language stays untrusted | Existing API/market-sparring/analysis-tracing tests plus changed-contract evals for ambiguity, invalid coordinates and fabricated values. |
+| WB-7: Production remains private and observable | Authenticated browser canary, unauthenticated HTML/assets/API denial, persisted Cloudflare logs, no sensitive payload logging. |
+
+Run focused suites from `web/`: `pnpm exec vitest run test/api.test.ts
+test/market-sparring.test.ts test/workspace-valuation.test.ts
+test/position-lots.test.ts test/position-lifecycle.test.ts
+test/private-api.test.ts test/analysis-tracing.test.ts`; then `pnpm test` and
+`pnpm build` for the integrated release. Extend the existing browser test scripts
+only where their current assertions do not prove WB-1 through WB-5.
+
+### Delivery, cost and recovery
+
+- First task is baseline characterization, not a rewrite. Target W1 to existing
+  App.tsx/styles.css and relevant tests; expand server files only for a proven gap.
+- No dependencies, logging SDK, pricing engine, data provider or parallel state
+  store added. Root owns shared files/Git; independent read-only review can run in
+  parallel. Keep implementation in the existing isolated product worktree.
+- Commit/push each verified coherent increment to the existing
+  `product/ai-sparring-partner` branch, explicitly staging only scoped files.
+  Do not merge, tag, or publish private `.sdlc`/screenshots as part of checkpoints.
+- Baseline manifest version is 0.1.0. Proposed additive feature release is 0.2.0;
+  confirm release-history availability and manifest/lock consistency at release,
+  not during this documentation-only checkpoint.
+- This request prepares the plan. Human plan acceptance precedes implementation;
+  obtain release confirmation for this feature before changing production.
+- Release to existing easyoptions.trading/Worker with unchanged Access, D1,
+  secrets, canonical-origin checks and observability. One bounded synthetic AI
+  canary only when needed; no benchmark sweep and no real record mutation.
+- Record the previous Worker version before release. Roll back to that version
+  if the canary fails, preserving auth, secrets, logs and all saved data; verify
+  the restored domain. Never use an unprotected preview as recovery.
+
+Independent read-only code review confirmed these reuse points. In particular,
+`PositionComparison` is a hypothetical replacement, not roll accounting; real
+adjustment comparisons must remain on the LotManagement transaction path.
+
+Out of scope: options flow, autonomous trading, broker execution, new discovery
+engine, historical data expansion/Theta, billing, broad visual redesign, performance
+claims and a new journaling subsystem. Native error alerting is a separate task.
+
+## Historical Python experiment plan (retained)
+
 ## Status (2 Sep 2026, 14:00 CEST)
 
 M0–M5 are implemented as a vertical slice in `src/argus/` (10 passing tests,
