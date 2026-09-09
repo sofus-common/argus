@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added chart-adjacent selection of calculated what-if scenarios, with a read-only
+  overlay of captured assumptions and the reviewed baseline. Position changes
+  cancel pending reviews while preserving the question; starting a new discussion
+  closes the preview, and pending discussions reject preview reselection.
+  Added a direct loaded-position adjustment entry using the existing lot workflow;
+  no pricing, prompt, provider, accounting or database changes. Production unchanged.
+  Verified 764 offline tests, build, desktop/narrow previews and focused browser
+  regressions for stale responses, partial closes and changed-expiry rolls.
+  The legacy full lots-browser fixture still has synthetic projection drift;
+  its broader UI coverage is not claimed. Independent App review cleared.
+
 - Revised the web delivery plan around visual position comparison, context-bound
   AI discussion and existing partial-close/roll previews, grounded in first-person
   trader accounts. Added acceptance tests, release gates and rollback boundaries;

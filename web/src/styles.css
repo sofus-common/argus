@@ -143,8 +143,12 @@ input, select, textarea { accent-color: var(--cobalt); }
 .scenario-target circle { fill: var(--amber); stroke: var(--ink-0); stroke-width: 2; }
 .scenario-target text { fill: var(--amber); font: 11px var(--font-data); }
 .preview-chart-button { display: block; margin: 8px 0; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--ink-3); }
-.scenario-preview { width: min(1050px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); padding: 20px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--ink-1); color: var(--paper); overflow: auto; }
-.scenario-preview::backdrop { background: #05090dc9; }
+.scenario-preview { min-width: 0; padding: 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--ink-1); color: var(--paper); }
+.scenario-selection { margin: 12px 0; padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; }
+.scenario-selection p { margin: 6px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.scenario-selection > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.scenario-selection button { padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--ink-3); text-align: left; }
+.scenario-selection button[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
 .scenario-preview > header, .preview-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .scenario-preview h2 { margin: 0; font: 600 21px var(--font-display); }
 .scenario-preview header small { color: var(--amber); font-size: 10px; letter-spacing: .08em; }

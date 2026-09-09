@@ -7,7 +7,7 @@ require('node:module').registerHooks({ resolve(specifier, context, next) {
 (async () => {
   const { createStrategy, createMarketStrategy } = await import('../src/options.ts');
   const { calculateLotScenarioComparison } = await import('../src/lot-scenarios.ts');
-  const { projectPositionLots, valuePositionLots } = await import('../src/position-lots.ts');
+  const { projectPositionLots, valuePositionLots, recordLotTransaction } = await import('../src/position-lots.ts');
   const state = createStrategy('long-put'); state.legs[0].entryPrice = 2;
   const leg = state.legs[0], at = '2026-09-05T12:00:00.000Z';
   const record = { id: 'lots-browser', title: 'Recorded roll', revision: 1, state, snapshot: null, lifecycle: null, createdAt: at, updatedAt: at };
@@ -16,10 +16,16 @@ require('node:module').registerHooks({ resolve(specifier, context, next) {
   const snapshot = { id: 'lots-dated-quotes', underlying: 'SPY', source: 'Tastytrade', retrievedAt: '2026-09-05T18:00:00.000Z', spotAsOf: '2026-09-05T17:59:58.000Z', spot: 100, availableExpiries: ['2026-09-18'], contracts: [{ contractId: 'SPY   260918P00100000', type: 'put', strike: 100, expiry: '2026-09-18T20:00:00.000Z', multiplier: 100, bid: 2, ask: 2.1, iv: .2, quoteAsOf: '2026-09-05T17:59:57.000Z' }] };
   snapshot.retrievedAt = '2026-09-05T18:00:00.123Z';
   const quotes = { ...record, id: 'quotes', title: 'Dated workspace quotes', state: createMarketStrategy('long-put', snapshot), snapshot };
+  if (process.argv.includes('--entry-only')) {
+    quotes.state.pricing.entryMode = 'fixed'; quotes.state.legs[0].contracts = 2;
+    snapshot.availableExpiries.push('2026-09-25');
+    snapshot.contracts.push({ ...snapshot.contracts[0], contractId: 'SPY   260925P00100000', expiry: '2026-09-25T20:00:00.000Z' });
+  }
   const browser = await chromium.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     const errors = [], writes = []; let previewBody, confirmed, reloads = 0;
+    const entryPreviews = [];
     let valuationCalls = 0, wrongValuation = false, comparisonCalls = 0, wrongComparison = true;
     let discussionCalls = 0, discussionComparison;
     const amendmentWrites = [], openingWrites = []; let amendmentProjection, openingPreviewBody;
@@ -37,6 +43,7 @@ require('node:module').registerHooks({ resolve(specifier, context, next) {
         return route.fulfill({ json: { strategies: [confirmed ?? record, quotes] } });
       }
       if (path === '/api/strategies/quotes') return route.fulfill({ json: { record: quotes } });
+      if (path === '/api/strategies/quotes/lots') return route.fulfill({ json: { record: quotes, projection: projectPositionLots({ schemaVersion: 2, legacy: { schemaVersion: 1, initial: quotes.state, closes: [] }, transactions: [] }) } });
       if (path.endsWith('/lots')) {
         reloads++;
         if (confirmed && openingWrites.length === 1) return route.fulfill({ json: { record: { ...confirmed, revision: confirmed.revision + 1, lifecycle: { ...confirmed.lifecycle, amendments: [{ kind: 'opening-price-correction', ...openingWrites[0].correction, lotId: confirmed.lifecycle.transactions[0].opens[0].id }] } }, projection: after({ transaction: confirmed.lifecycle.transactions[0] }) } });
@@ -50,6 +57,14 @@ require('node:module').registerHooks({ resolve(specifier, context, next) {
         return route.fulfill({ json: { record, projection } });
       }
       const body = request.postDataJSON();
+      if (process.argv.includes('--entry-only')) {
+        assert.equal(path, '/api/strategies/quotes/transactions/preview');
+        assert.equal(body.revision, quotes.revision);
+        const lifecycle = { schemaVersion: 2, legacy: { schemaVersion: 1, initial: quotes.state, closes: [] }, transactions: [] };
+        const projected = projectPositionLots(recordLotTransaction(lifecycle, body.transaction));
+        entryPreviews.push({ transaction: body.transaction, projection: projected });
+        return route.fulfill({ json: { revision: quotes.revision, projection: projected } });
+      }
       if (path.includes('/lot-opening-price-corrections')) {
         assert.deepEqual(Object.keys(body).sort(), ['correction', 'revision']);
         assert.deepEqual(Object.keys(body.correction).sort(), ['id', 'lotId', 'price', 'reason', 'recordedAt']);
@@ -136,7 +151,64 @@ require('node:module').registerHooks({ resolve(specifier, context, next) {
       return route.fulfill({ json: { record: confirmed, projection: after(body) } });
     });
     await page.goto('http://127.0.0.1:5173');
-    await page.locator('.saved-workspace summary').click();
+    assert.equal(await page.getByRole('button', { name: 'Compare adjustment', exact: true }).isDisabled(), true);
+    await page.locator('.saved-workspace > summary').click();
+    if (process.argv.includes('--entry-only')) {
+      await page.getByLabel('Saved positions', { exact: true }).selectOption(quotes.id);
+      await page.getByRole('button', { name: 'Load', exact: true }).click();
+      await page.getByText('Loaded saved position. Undo restores the previous position.').waitFor();
+      const held = await page.locator('.leg-list').textContent();
+      await page.getByLabel('Saved positions', { exact: true }).selectOption(record.id);
+      await page.locator('.saved-workspace > summary').click();
+      const adjustment = page.getByRole('group', { name: 'Saved position adjustment', exact: true });
+      assert.match(await adjustment.innerText(), /Dated workspace quotes/);
+      await adjustment.getByRole('button', { name: 'Compare adjustment', exact: true }).click();
+      const panel = page.getByRole('dialog', { name: 'Manage lots and rolls' });
+      await panel.getByRole('heading', { name: quotes.title, exact: true }).waitFor();
+      await panel.getByLabel('Close lot initial:option:0', { exact: true }).check();
+      await panel.getByLabel('Close quantity initial:option:0', { exact: true }).fill('1');
+      await panel.getByLabel('Close price initial:option:0', { exact: true }).fill('3');
+      await panel.getByLabel('Transaction UTC datetime').fill('2026-09-06T12:00');
+      await panel.getByRole('button', { name: 'Preview transaction', exact: true }).click();
+      await panel.getByRole('button', { name: 'Confirm recorded transaction', exact: true }).waitFor();
+      assert.equal(entryPreviews[0].projection.lots[0].quantity, 1);
+      assert.equal(entryPreviews[0].transaction.opens.length, 0);
+      assert.equal(entryPreviews[0].projection.grossRealizedPnl, 95);
+      assert.equal(quotes.lifecycle, null);
+      assert.deepEqual(writes, []);
+      await panel.screenshot({ path: '.wrangler/adjustment-entry-desktop.png' });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await panel.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+      await panel.getByRole('button', { name: 'Close lot-management panel' }).click();
+      assert.equal(await page.locator('.leg-list').textContent(), held);
+      assert.equal(await adjustment.isVisible(), true);
+      await adjustment.screenshot({ path: '.wrangler/adjustment-entry-mobile.png' });
+      await page.getByLabel('Expiry', { exact: true }).selectOption('2026-09-25T20:00:00.000Z');
+      const proposed = await page.locator('.leg-list').textContent();
+      await adjustment.getByRole('button', { name: 'Compare adjustment', exact: true }).click();
+      await panel.getByRole('heading', { name: quotes.title, exact: true }).waitFor();
+      await panel.getByLabel('Close lot initial:option:0', { exact: true }).check();
+      await panel.getByLabel('Close price initial:option:0', { exact: true }).fill('3');
+      const opening = panel.locator('input[aria-label^="Open leg "]').first();
+      const openingId = (await opening.getAttribute('aria-label')).slice('Open leg '.length);
+      await opening.check();
+      await panel.getByLabel(`Open price ${openingId}`, { exact: true }).fill('4');
+      await panel.getByLabel('Transaction UTC datetime').fill('2026-09-06T12:00');
+      await panel.getByRole('button', { name: 'Preview transaction', exact: true }).click();
+      await panel.getByRole('button', { name: 'Confirm recorded transaction', exact: true }).waitFor();
+      assert.equal(entryPreviews.length, 2);
+      assert.equal(entryPreviews[1].transaction.closes[0].quantity, 2);
+      assert.equal(entryPreviews[1].projection.lots.length, 1);
+      assert.equal(entryPreviews[1].projection.lots[0].asset.expiry, '2026-09-25T20:00:00.000Z');
+      assert.equal(entryPreviews[1].projection.grossRealizedPnl, 190);
+      assert.equal(quotes.state.legs[0].expiry, '2026-09-18T20:00:00.000Z');
+      assert.equal(quotes.lifecycle, null);
+      await panel.getByRole('button', { name: 'Close lot-management panel' }).click();
+      assert.equal(await page.locator('.leg-list').textContent(), proposed);
+      assert.deepEqual(writes, []); assert.deepEqual(errors, []);
+      console.log('Adjustment entry PASS: loaded identity, collapsed library, narrow layout, authoritative partial-close and changed-expiry roll previews, no writes.');
+      return;
+    }
     await page.getByLabel('Saved positions', { exact: true }).selectOption(record.id);
     const builder = await page.locator('.leg-list').textContent();
     await page.getByRole('button', { name: 'Manage lots & rolls', exact: true }).click();
@@ -464,7 +536,7 @@ require('node:module').registerHooks({ resolve(specifier, context, next) {
       return route.fulfill({ status: 500, json: { error: { message: 'Unexpected saved-position write' } } });
     });
     await analysisPage.goto('http://127.0.0.1:5173');
-    await analysisPage.locator('.saved-workspace summary').click();
+    await analysisPage.locator('.saved-workspace > summary').click();
     await analysisPage.getByLabel('Saved positions', { exact: true }).selectOption(quotes.id);
     await analysisPage.getByRole('button', { name: 'Load', exact: true }).click();
     await analysisPage.getByText('Loaded saved position. Undo restores the previous position.').waitFor();

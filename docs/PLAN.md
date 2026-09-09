@@ -2,7 +2,7 @@
 
 ## Active web product plan — visual workbench (9 September 2026)
 
-Status: prepared for human plan approval; not an implementation or release claim.
+Status: W1 and W2 implemented; local W3 checks passed. User approved implementation on 9 September 2026 ("execute the plan"). Production release confirmation and WB-7 remain pending.
 This section supersedes the delivery priorities below for `web/` only. The legacy
 Python experiment remains separate and unchanged. Integration owner: root agent.
 Controlled lane: financial analysis, user-owned records and production release.
@@ -104,6 +104,21 @@ test/private-api.test.ts test/analysis-tracing.test.ts`; then `pnpm test` and
 only where their current assertions do not prove WB-1 through WB-5.
 
 ### Delivery, cost and recovery
+
+Local checkpoint evidence (9 September 2026): independent App review cleared;
+`pnpm test` passed 40 files / 764 tests; `pnpm build` passed. Browser checks passed
+for `scenario-browser.cjs` (default and `--stale-workspace-only`),
+`market-browser.cjs` (`--preview-only`, `--what-if-only`, `--leg-iv-only`) and
+`lots-browser.cjs --entry-only`. These cover keyboard/direct editing, captured
+overlays, tampered results, pending-review reselection, edit/Undo/refresh/load
+invalidation, loaded-record identity, partial-close and changed-expiry roll
+previews without saved writes. Desktop and narrow previews were inspected.
+The full legacy lots browser fixture has inconsistent synthetic projections and
+does not pass current reconciliation; its wider amendment/retry UI coverage is
+not claimed by this checkpoint. Root owns that separate fixture repair. Existing
+offline accounting/API tests pass. Build warnings remain for unavailable local
+provider secrets and the existing large client bundle. No live inference or
+production changes were required; WB-7 is checked only during authorized release.
 
 - First task is baseline characterization, not a rewrite. Target W1 to existing
   App.tsx/styles.css and relevant tests; expand server files only for a proven gap.
