@@ -2,6 +2,13 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added a separate, saved thesis horizon and deterministic target/date guidance,
+  with unsupported post-expiry outcomes withheld. Added selected-scenario Greeks,
+  a scenario/expiry P/L table, a flat cost allowance, and visible pricing/assignment
+  limitations. Existing local drafts remain readable. No live data or AI calls.
+  Verified 122 focused tests, TypeScript and browser checks for horizon mismatch,
+  costs, table visibility, reload persistence, independent expiry and mobile overflow.
+
 - Added an isolated `pnpm prototype` entry at `/prototype.html` for design C:
   optional thesis, full-width payoff chart, editable synthetic call spread,
   explicit base/smaller/later scenarios and browser-local thesis/draft saving.
