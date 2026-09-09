@@ -1,6 +1,14 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "argus-options-lab",
+  "account_id": "469e104b7f0ee320189a768692c57f4a",
+  "routes": [{ "pattern": "easyoptions.trading", "custom_domain": true }],
+  "vars": {
+    "APP_ORIGIN": "https://easyoptions.trading",
+    "ACCESS_TEAM_DOMAIN": "https://aistack-today-pages.cloudflareaccess.com",
+    "ACCESS_AUD": "8121e321fa854b31ea6cba7de4cc0c07308209df03e42d85adbfd823e3751b31"
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "easyoptions-production", "database_id": "6ada61e8-b47b-4957-a572-566688e10fda", "migrations_dir": "migrations" }],
   "main": "./src/worker.ts",
   "compatibility_date": "2026-09-04",
   "workers_dev": false,
@@ -10,7 +18,7 @@
   },
   "migrations": [{ "tag": "v1-feed", "new_sqlite_classes": ["QuoteFeed"] }, { "tag": "v2-theta", "new_sqlite_classes": ["ThetaHistory"] }],
   "secrets": {
-    "required": ["OPENROUTER_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "FRED_API_KEY", "EXA_AI_KEY", "TASTYTRADE_CLIENT_ID", "TASTYTRADE_CLIENT_SECRET", "TASTYTRADE_REFRESH_TOKEN", "THETADATA_TERMINAL_URL"]
+    "required": ["OPENROUTER_API_KEY", "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "FRED_API_KEY", "EXA_AI_KEY", "TASTYTRADE_CLIENT_ID", "TASTYTRADE_CLIENT_SECRET", "TASTYTRADE_REFRESH_TOKEN"]
   },
   "assets": {
     "binding": "ASSETS",

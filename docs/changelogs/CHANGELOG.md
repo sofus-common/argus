@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Deployed the initial private release to easyoptions.trading with Cloudflare
+  Access, a separate production D1 database and server-side provider secrets.
+  Worker and preview URLs are disabled; unauthenticated HTML, assets and API
+  requests redirect to login. Local development retains its local database and
+  loopback identity. Signed-in production functionality still needs verification.
+
+- Removed the local Theta terminal URL from required production secrets for the
+  initial private release. Hosted history remains unavailable without its separate
+  relay configuration; authentication and market-data validation are unchanged.
+
 - Reverified the local saved-position lifecycle under unchanged active V16:
   synthetic import, changed-strike/expiry roll, close, stale-revision rejection,
   daily reconciliation, AI explanation, export and revisit. Independent review

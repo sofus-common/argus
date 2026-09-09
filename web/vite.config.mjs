@@ -29,7 +29,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
       : [react(), cloudflare(localDev ? {
         remoteBindings: false,
         config: config => ({
-          vars: { ...config.vars, ARGUS_LOCAL_DEV: "true" },
+          vars: { ...config.vars, ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "", APP_ORIGIN: "", ARGUS_LOCAL_DEV: "true" },
           d1_databases: JSON.parse(readFileSync(resolve("wrangler.local.json"), "utf8")).d1_databases,
         }),
       } : {})],
