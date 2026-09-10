@@ -2,6 +2,15 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Consolidated the prototype Workbench around a persistent thesis, interactive
+  Curve / Heatmap / Table analysis, editable position details and contextual
+  scenario inspection. Chart inspection does not overwrite the thesis. Replaced
+  the permanent strategy list with a searchable, grouped 27-structure dialog;
+  six sample templates are interactive and require explicit Apply. Optimize
+  remains separate. Synthetic pricing and disconnected AI remain labelled.
+  Verified: 10 Scenario Lab tests, TypeScript, desktop/mobile Workbench and
+  optimizer browser regressions, and independent review. Local prototype only.
+
 - Hardened shared option quantity and aggregate monetary validation; non-finite
   calculation outputs now throw. Added independent published pricing/Greek and
   American convergence benchmarks. Candidate preview adds seven deterministic
