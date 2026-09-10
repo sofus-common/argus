@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Made optimizer expiry selection compact with month bands, day-number radio
+  controls, previous/next actions and a native draggable expiry scrubber. Only
+  loaded sample dates are selectable; thesis horizon remains independent.
+  Verified TypeScript and browser regression including date clicks, arrow keys,
+  scrubber Home/End, stale results and mobile overflow. No production deployment.
+
 - Replaced the inline optimizer table with a dedicated design-C screen: outlook
   tiles, independent horizon/expiry controls, a sample expiry rail, and family
   payoff cards. Search edits stay isolated until explicit Apply; Back preserves
