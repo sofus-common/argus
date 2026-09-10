@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Condensed optimizer result cards around return/risk, target-date P/L and expiry
+  risk, adding engine-calculated breakevens and maximum profit. Compact expiry
+  charts distinguish target and breakeven markers; longer risk notes are expandable.
+  Probability remains unavailable, not estimated. No production deployment.
+  Verified: 126 focused tests, TypeScript and desktop/mobile browser regression.
+
 - Constrained optimizer horizon entry to valuation date through selected expiry.
   Native calendar bounds prevent later selection; manual out-of-range input is
   rejected without replacing the previous horizon. Search validation remains.

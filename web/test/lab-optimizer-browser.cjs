@@ -26,6 +26,10 @@ const assert = require('node:assert/strict');
     await page.getByLabel('Optimizer collateral limit').fill('15000');
     await page.getByRole('button', { name: 'Search strategies', exact: true }).click();
     assert.equal(await page.locator('.opt-card').count(), 6);
+    for (const card of await page.locator('.opt-card').all()) {
+      assert.ok((await card.boundingBox()).height < 450, 'Desktop comparison cards stay compact');
+      assert.ok((await card.innerText()).includes('Breakeven'), 'Cards expose expiry breakevens');
+    }
     await page.getByRole('button', { name: 'Expiry Sep 11, 2026', exact: true }).click();
     assert.equal(await page.locator('.opt-card').count(), 0, 'Expiry changes invalidate results');
     assert.equal(await page.getByLabel('Optimizer thesis horizon').inputValue(), '2026-09-10');

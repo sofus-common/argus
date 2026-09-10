@@ -52,6 +52,8 @@ it('ranks return on risk and includes the allowance in each exact loss bound', (
   expect(result.candidates.length).toBeGreaterThanOrEqual(4)
   result.candidates.forEach((c, i) => {
     expect(c.maxLoss).toBeCloseTo(calculateStrategy(c.state).maxLoss!, 6)
+    expect(c.maxProfit).toBe(calculateStrategy(c.state).maxProfit)
+    expect(c.breakevens).toEqual(calculateStrategy(c.state).breakevens)
     expect(c.returnOnRisk).toBeCloseTo(c.pnl / c.maxLoss, 6)
     if (i) expect(result.candidates[i - 1].returnOnRisk!).toBeGreaterThanOrEqual(c.returnOnRisk!)
   })

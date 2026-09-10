@@ -89,7 +89,7 @@ export function optimizeLab(position: StrategyState, horizon: string, budget: nu
     const pnl = evaluateScenario(state).pnl
     const smaller = evaluateScenario({ ...state, scenarioSpot: state.spot + (state.scenarioSpot - state.spot) / 3 }).pnl
     const later = evaluateScenario({ ...state, scenarioDate: state.legs[0].expiry }).pnl
-    return { state, family, collateral, riskNote, debit, maxLoss, pnl, smaller, later, returnOnRisk: maxLoss > 0 ? pnl / maxLoss : null }
+    return { state, family, collateral, riskNote, debit, maxLoss, maxProfit: metrics.maxProfit, breakevens: metrics.breakevens, pnl, smaller, later, returnOnRisk: maxLoss > 0 ? pnl / maxLoss : null }
   }
   const current = candidate(position.legs.map(l => ({ ...l, entryPrice: prices.get(`${l.type}:${l.strike}`)! })), position.stock)
   const candidates: ReturnType<typeof candidate>[] = []
