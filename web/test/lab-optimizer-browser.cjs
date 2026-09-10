@@ -1,0 +1,44 @@
+const { chromium } = require('playwright');
+const assert = require('node:assert/strict');
+
+(async () => {
+  const browser = await chromium.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1536, height: 1024 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto('http://127.0.0.1:5174/prototype.html');
+    await page.getByLabel('Thesis horizon', { exact: true }).fill('2026-09-10');
+    const before = await page.locator('.lab-position').innerText();
+    await page.getByRole('button', { name: 'Optimize · sample', exact: true }).click();
+    assert.equal(await page.locator('.lab-position').count(), 0, 'Optimizer must replace, not expand, the workbench');
+    assert.equal(await page.locator('table').count(), 0, 'Results must use cards, not the old table');
+    await page.locator('.opt-card').first().waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Neutral', exact: true }).isDisabled(), true);
+    await page.getByLabel('Optimizer maximum loss').fill('15000');
+    await page.getByLabel('Optimizer collateral limit').fill('15000');
+    await page.getByRole('button', { name: 'Search strategies', exact: true }).click();
+    assert.equal(await page.locator('.opt-card').count(), 6);
+    await page.getByRole('button', { name: 'Previous sample expiry', exact: true }).click();
+    assert.equal(await page.getByLabel('Optimizer thesis horizon').inputValue(), '2026-09-10');
+    assert.equal(await page.locator('.opt-card').count(), 0, 'Expiry changes invalidate results');
+    await page.getByRole('button', { name: 'Next sample expiry', exact: true }).click();
+    await page.getByRole('button', { name: 'Search strategies', exact: true }).click();
+    await page.getByRole('button', { name: 'Preview candidate 1', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Review candidate before applying' }).waitFor();
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.setViewportSize({ width: 1536, height: 1024 });
+    await page.screenshot({ path: '.wrangler/lab-optimizer-screen.png', fullPage: true });
+    await page.getByRole('button', { name: 'Workbench', exact: true }).click();
+    assert.equal(await page.locator('.lab-position').innerText(), before, 'Back must preserve the draft');
+    await page.getByRole('button', { name: 'Optimize · sample', exact: true }).click();
+    await page.getByRole('button', { name: 'Preview candidate 1', exact: true }).click();
+    const family = await page.locator('.opt-confirm h2').innerText();
+    await page.getByRole('button', { name: 'Apply to draft', exact: true }).click();
+    assert.ok((await page.locator('.lab-position h1').innerText()).includes(family));
+    assert.deepEqual(errors, []);
+    console.log('PASS dedicated screen, six cards, expiry isolation, invalidation, preview/Escape, mobile, Back and Apply');
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exit(1); });

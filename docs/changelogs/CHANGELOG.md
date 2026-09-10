@@ -2,6 +2,14 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Replaced the inline optimizer table with a dedicated design-C screen: outlook
+  tiles, independent horizon/expiry controls, a sample expiry rail, and family
+  payoff cards. Search edits stay isolated until explicit Apply; Back preserves
+  the workbench. Unsupported outlooks and probability ranking are visibly disabled.
+  Verified 125 calculation tests, TypeScript, and the new lab-optimizer-browser.cjs
+  regression for screen navigation, six cards, expiry isolation, invalidation,
+  dialog/Escape, mobile overflow and Apply. No production entry or deployment changes.
+
 - Expanded the sample optimizer to long calls, bull-call and bull-put spreads,
   covered calls, cash-secured puts and target-centred call butterflies. Shows the
   best qualifying candidate per family, with independent maximum-loss and stock/cash

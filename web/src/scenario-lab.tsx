@@ -1,23 +1,13 @@
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { calculateStrategy, evaluateScenario, payoffSeries, sampleContractId, SAMPLE_EXPIRIES, type StrategyState } from './options'
-import { assertLabPosition, createLabPosition, labScenarios, labThesisFit, readLabDraft, optimizeLab, labFamily } from './scenario-lab-model'
+import { assertLabPosition, createLabPosition, labScenarios, labThesisFit, readLabDraft, labFamily } from './scenario-lab-model'
 import './scenario-lab.css'
+import { LabOptimizer } from './scenario-lab-optimizer'
 
 const dollars = (n: number | null) => n === null ? 'Unbounded' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(n)
 const shortDate = (date: string) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 const draftKey = 'argus-scenario-lab-prototype-v1'
-const holdings = (state: StrategyState) => [...state.legs.map(leg => `${leg.side === 'long' ? 'Buy' : 'Sell'} ${leg.contracts} × ${leg.strike} ${leg.type}`), ...(state.stock ? [`${state.stock.shares} shares · entry ${dollars(state.stock.entryPrice)}`] : [])].join(' · ')
-
-function OptimizerPlot({ current, candidate }: { current: StrategyState; candidate: StrategyState }) {
-  const min = Math.min(95, current.scenarioSpot - 2, ...current.legs.map(l => l.strike - 2), ...candidate.legs.map(l => l.strike - 2))
-  const max = Math.max(110, current.scenarioSpot + 2, ...current.legs.map(l => l.strike + 2), ...candidate.legs.map(l => l.strike + 2))
-  const curves = [current, candidate].map(state => payoffSeries(state, min, max, 100, Date.parse(state.scenarioDate)))
-  const low = Math.min(0, ...curves.flat().map(p => p.pnl)) - 20, high = Math.max(0, ...curves.flat().map(p => p.pnl)) + 20
-  const y = (value: number) => 160 - (value - low) / (high - low) * 130
-  return <svg viewBox="0 0 800 190" role="img" aria-label="Current and candidate payoff at the same thesis horizon"><line x1="70" x2="780" y1={y(0)} y2={y(0)} className="lab-zero"/>{[low, 0, high].map(value => <text key={value} x="5" y={y(value)}>{dollars(value)}</text>)}{curves.map((curve, i) => <path key={i} d={curve.map((p, j) => `${j ? 'L' : 'M'}${70 + (p.spot - min) / (max - min) * 710},${y(p.pnl)}`).join(' ')} className={i ? 'lab-scenario-curve' : 'lab-expiration-curve'} />)}<text x="70" y="185">${min.toFixed(0)}</text><text x="650" y="185">Underlying price · ${max.toFixed(0)}</text></svg>
-}
-
 function ScenarioLab() {
   const [position, setPosition] = useState(createLabPosition)
   const [thesis, setThesis] = useState('I expect a modest rise over the next month.')
@@ -28,15 +18,6 @@ function ScenarioLab() {
   const [horizon, setHorizon] = useState('')
   const [table, setTable] = useState(false)
   const [optimizer, setOptimizer] = useState(false)
-  const [budget, setBudget] = useState('300')
-  const [collateralBudget, setCollateralBudget] = useState('10000')
-  const [objective, setObjective] = useState<'profit' | 'return'>('profit')
-  const [search, setSearch] = useState<{ key: string; result: ReturnType<typeof optimizeLab> } | null>(null)
-  const [preview, setPreview] = useState<number | null>(null)
-  const [searchError, setSearchError] = useState('')
-  const searchKey = JSON.stringify([position, horizon, budget, objective, collateralBudget])
-  const result = search?.key === searchKey ? search.result : null
-  const candidate = result && preview !== null ? result.candidates[preview] : null
   const scenarios = labScenarios(position, position.scenarioSpot, position.scenarioDate)
   const active = scenarios[selected]
   const greeks = evaluateScenario(active.state)
@@ -78,6 +59,7 @@ function ScenarioLab() {
       setPosition(draft.state); setThesis(draft.thesis); setHorizon(restored.horizon); setQuestion(draft.composer); setSelected(0); setDiscussion(false); setNotice('Prototype draft restored.')
     } catch { setNotice('Saved prototype draft is invalid; current work is unchanged.') }
   }
+  if (optimizer) return <LabOptimizer position={position} thesis={thesis} horizon={horizon} onBack={() => setOptimizer(false)} onApply={(state, nextHorizon) => { assertLabPosition(state); update(state); setHorizon(nextHorizon); setSelected(0); setOptimizer(false); setNotice('Synthetic candidate applied to draft; not saved.'); }} />
   return <main className="lab">
     <header className="lab-header"><a className="lab-brand" href="/prototype.html">ARGUS<span> / Scenario Lab</span></a><span className="lab-badge">LOCAL PROTOTYPE</span><div className="lab-header-right">Illustrative SPY <strong>$100.00</strong><button onClick={load}>Open draft</button><button className="lab-primary" onClick={save}>Save draft</button></div></header>
     <section className="lab-thesis"><label htmlFor="thesis">MY THESIS <small>Optional · your view, not a forecast</small></label><input id="thesis" value={thesis} maxLength={12000} placeholder="What do you expect, and why?" onChange={e => { setThesis(e.target.value); setNotice('Unsaved changes') }} /><label>Target $<input aria-label="Target price" type="number" min="80" max="120" step="0.5" value={position.scenarioSpot} onChange={e => update({ ...position, scenarioSpot: e.target.valueAsNumber })} /></label></section>
@@ -87,16 +69,6 @@ function ScenarioLab() {
       <button disabled={fit.status !== 'calculated'} onClick={() => { update({ ...position, scenarioDate: `${horizon}T20:00:00.000Z` }); setSelected(0) }}>Show thesis scenario</button>
       <button aria-expanded={optimizer} onClick={() => setOptimizer(!optimizer)}>Optimize · sample</button>
     </section>
-    {optimizer && <section className="lab-optimizer" aria-label="Sample optimizer">
-      <h2>Find a better fit <small>Deterministic · synthetic prices</small></h2>
-      <p>Long calls, bull-call and bull-put spreads, covered calls, cash-secured puts and call butterflies · strikes $95–$110. Same expiry and base quantity; butterfly ratios and stock coverage retained. Target ${position.scenarioSpot.toFixed(2)} on {horizon || 'a horizon you must set'}; IV {(22 + position.ivShift * 100).toFixed(0)}%. No calendars, probability ranking or live liquidity filtering.</p>
-<div className="lab-search-controls"><label>Maximum loss $ <input aria-label="Optimizer maximum loss" type="number" min="0.01" max="100000" value={budget} onChange={e => setBudget(e.target.value)}/></label><label>Stock / cash budget $ <input aria-label="Optimizer collateral limit" type="number" min="0" value={collateralBudget} onChange={e => setCollateralBudget(e.target.value)}/></label><label>Rank by <select aria-label="Optimizer objective" value={objective} onChange={e => setObjective(e.target.value as 'profit' | 'return')}><option value="profit">Target-date profit · $</option><option value="return">Target-date return / max loss · %</option></select></label><button onClick={() => { setPreview(null); setSearch(null); setSearchError(''); try { setSearch({ key: searchKey, result: optimizeLab(position, horizon, Number(budget), objective, Number(collateralBudget)) }) } catch (error) { setSearchError((error as Error).message) } }}>Search strategies</button></div>
-      {searchError && <p role="alert">{searchError}</p>}{search && !result && <p role="status">Inputs changed. Search again before previewing or applying.</p>}
-      {result && <><p>{result.searched} combinations checked · {result.eligible} structures within limits · showing the best eligible result per family, up to 6. Your current structure can also be a family winner. Missing families are outside the search criteria or failed the loss or stock/cash limit; covered calls and cash-secured puts generally require larger budgets. Ranking is conditional, not a recommendation. Results may still lose money.</p><p>Fair comparison: current structure and candidates both use valuation-time model premiums (22% IV, rounded to cents) and illustrative stock entry at $100. Your manual entry costs remain unchanged until Apply. Flat cost allowance included in risk and P/L. Stock/cash budget covers covered-call shares and cash-secured-put strike reserves only, not other option debits or broker margin. Equal base quantity does not mean equal exposure.</p>
-      <div className="lab-table"><table><caption>Same target, horizon and IV · family ratios shown · max loss is an expiry bound</caption><thead><tr><th>Structure / holdings</th><th>Entry outlay</th><th>Stock / cash reserved</th><th>Max loss</th><th>Target P/L</th><th>Return / risk</th><th>Smaller move</th><th>At expiry</th><th>Action</th></tr></thead><tbody>{[result.current, ...result.candidates].map((c, i) => <tr key={i}><td>{i ? `#${i}` : 'Current · repriced'} · {c.family}<br/><small>{holdings(c.state)}</small><br/><small>{c.riskNote}</small></td><td>{dollars(c.debit)}<br/><small>Negative = credit; stock included</small></td><td>{dollars(c.collateral)}{!i && c.collateral > Number(collateralBudget) ? ' · over limit' : ''}</td><td>{dollars(c.maxLoss)}{!i && c.maxLoss > Number(budget) ? ' · over budget' : ''}</td><td>{dollars(c.pnl)}</td><td>{c.returnOnRisk === null ? '—' : `${(c.returnOnRisk * 100).toFixed(1)}%`}</td><td>{dollars(c.smaller)}</td><td>{dollars(c.later)}</td><td>{i > 0 && <button aria-label={`Preview candidate ${i}`} aria-pressed={preview === i - 1} onClick={() => setPreview(i - 1)}>Preview</button>}</td></tr>)}</tbody></table></div>
-      {!result.candidates.length && <p role="status">No strategy meets these loss and stock/cash limits in the searched range.</p>}
-      {candidate && <div className="lab-optimizer-preview"><h3>{result.current.family} vs {candidate.family}</h3><p>{holdings(candidate.state)}</p><p><span className="lab-solid">Current · model-priced</span> <span className="lab-dashed">Candidate · model-priced</span> · both at {shortDate(candidate.state.scenarioDate)}. Target P/L difference: {dollars(candidate.pnl - result.current.pnl)}; max-loss difference: {dollars(candidate.maxLoss - result.current.maxLoss)}.</p><p>{candidate.riskNote} Stock / cash reserved: {dollars(candidate.collateral)}.</p><OptimizerPlot current={result.current.state} candidate={candidate.state}/><p>Apply replaces the option legs, stock holding and entry costs with the shown synthetic candidate and sets the chart to the thesis horizon. It does not save, close an existing trade or place a trade.</p><button onClick={() => setPreview(null)}>Dismiss preview</button> <button className="lab-primary" onClick={() => { update(candidate.state); setSelected(0); setSearch(null); setPreview(null); setNotice('Sample candidate applied to draft. Holdings and entry costs replaced with model assumptions; not saved.') }}>Apply to draft</button></div>}</>}
-    </section>}
     <section className="lab-expiry"><span className="lab-label">EXPIRATION</span>{SAMPLE_EXPIRIES.map(date => <button key={date} aria-pressed={date === expiry} onClick={() => update({ ...position, scenarioDate: position.scenarioDate > date ? date : position.scenarioDate, legs: position.legs.map(leg => ({ ...leg, expiry: date, contractId: sampleContractId(leg.type, leg.strike, date) })) })}>{shortDate(date)}<small>2026</small></button>)}<p>Fixed sample · premiums held when editing · no live quotes</p></section>
     <section className="lab-position"><div className="lab-legs"><h1>{labFamily(position)} <span>{position.legs.length} option {position.legs.length === 1 ? 'leg' : 'legs'}{position.stock ? ' + shares' : ''}</span></h1>{position.legs.map((leg, i) => <div className="lab-leg" key={leg.id}><span className={leg.side === 'short' ? 'lab-sell' : 'lab-buy'}>{leg.side === 'short' ? 'SELL' : 'BUY'}</span><strong>{leg.type === 'call' ? 'Call' : 'Put'}</strong><label>Strike<select aria-label={`Leg ${i + 1} ${leg.side} ${leg.type} strike`} value={leg.strike} onChange={e => strike(i, Number(e.target.value))}>{Array.from({ length: 41 }, (_, j) => j + 80).map(n => <option key={n}>{n}</option>)}</select></label><label>Qty<input aria-label={`Leg ${i + 1} quantity`} type="number" min="1" step="1" value={leg.contracts} onChange={e => quantity(i, e.target.valueAsNumber)} /></label><label>Entry $<input aria-label={`Leg ${i + 1} entry premium`} type="number" min="0" step="0.05" value={leg.entryPrice} onChange={e => update({ ...position, legs: position.legs.map((l, j) => i === j ? { ...l, entryPrice: e.target.valueAsNumber } : l) })} /></label><span>{shortDate(leg.expiry)}</span></div>)}{position.stock && <div className="lab-leg"><span className="lab-buy">HOLD</span><strong>{position.stock.shares} SPY shares</strong><span>Entry {dollars(position.stock.entryPrice)} / share</span></div>}<small>Quantity edits scale every leg and any shares together, preserving family ratios.</small></div><div className="lab-metrics">{[[metrics.entryLabel, metrics.entryAmount], ['Max loss', metrics.maxLoss], ['Max profit', metrics.maxProfit]].map(([name, value]) => <div key={String(name)}><span>{name}</span><strong>{dollars(value as number | null)}</strong></div>)}<div><span>Breakeven</span><strong>{metrics.breakevens.map(dollars).join(' / ') || '—'}</strong></div></div></section>
     <div className="lab-risk-note"><span>Expiry bounds include the cost allowance; entry debit/credit excludes it; shares are included.</span><span>Exercise and early assignment cashflows are not simulated.</span></div>
