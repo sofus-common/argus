@@ -2,6 +2,13 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Replaced the vertical expiry wheel with a horizontal month/day strip. Dragging
+  and navigation arrows pan only; clicking a date selects it. Suppresses accidental
+  selection after dragging, preserves native touch scrolling and date-button
+  keyboard access. Removed the unused wheel dependency. Browser checks include a
+  separate multi-month UI fixture; the pricing catalog remains the two sample
+  expiries. Verified TypeScript, drag/click separation and optimizer regression.
+
 - Replaced the expiry rail and scrubber with a finite, single-column
   @ncdai/react-wheel-picker 1.2.3 wheel, showing date and sample-valuation DTE.
   Added spinbutton semantics and an available-date guard. Verified keyboard,
