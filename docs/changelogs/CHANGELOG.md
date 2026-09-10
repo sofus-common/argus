@@ -2,6 +2,15 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Reused the main app's actual payoff chart, heatmap and scenario table in the
+  Workbench, replacing the simplified chart. Includes draggable/grouped strikes,
+  Greek curves, frozen comparison, date slider, display modes, range controls and
+  CSV export. Price/date/IV inspection preserves thesis inputs; strike edits pass
+  existing prototype validation. Single-expiry IV details remain read-only and
+  chart questions open the explicitly disconnected context preview. Local only.
+  Verified: 17 focused tests, TypeScript, desktop/mobile Workbench and optimizer
+  browser regressions, and visual inspection of the original chart styling.
+
 - Consolidated the prototype Workbench around a persistent thesis, interactive
   Curve / Heatmap / Table analysis, editable position details and contextual
   scenario inspection. Chart inspection does not overwrite the thesis. Replaced
