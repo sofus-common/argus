@@ -1,5 +1,37 @@
 # Validation protocol
 
+## Optimize engine readiness — September 10, 2026 audit
+
+The local Scenario Lab optimizer is a synthetic conditional-scenario search,
+not an execution-ready recommendation engine. Its UI is unchanged by this audit.
+Independent six-family expiry fixtures cover 24 quantity/fee combinations and
+216 payoff samples, with explicit expected loss, profit and breakeven values.
+These supplement, rather than replace, independent pricing-model benchmarks.
+
+Confirmed outstanding defect: `validateStrategy` accepts option contracts of
+`1e307`; locally served `evaluateScenario` then returns `pnl: NaN`. Finite scalar
+inputs do not guarantee finite position totals. This is not fixed by the audit.
+
+Proposed financial-behavior plan, pending acceptance:
+
+1. Harden shared numeric validation: safe quantities and finite aggregate money
+   values; regress invalid imported drafts and sibling calculation/search paths.
+2. Independently benchmark European and American prices and Greek units across
+   moneyness, horizons and volatility; include expiry boundaries and convergence.
+3. Connect the approved Optimize UI to the existing market-data search path,
+   preserving dated quotes, contract terms and explicit pricing basis. Reject
+   unusable quotes; never substitute synthetic prices for missing market data.
+4. Make fill/cost sensitivity and adverse price/time/IV scenarios comparable.
+   Preserve target P/L ranking as conditional, not expected profit or trading edge.
+5. Verify saved snapshot replay and independent review before a separately
+   authorized production release. No claim of improved P/L without out-of-sample,
+   cost-inclusive evidence.
+
+Primary references informing the real-money acceptance boundary:
+[OIC assignment](https://www.optionseducation.org/referencelibrary/faq/options-assignment),
+[OIC bid/ask and slippage](https://www.optionseducation.org/news/understanding-the-bid-and-ask-prices-for-options),
+and [IVolatility pricing methodology](https://www.ivolatility.com/doc/OptionCalculatorsUserGuide.pdf).
+
 ## Pre-registration
 
 Before each scored experiment, record the trial ID, frozen feature/candidate

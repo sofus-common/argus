@@ -2,6 +2,11 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added independent, hand-calculated expiry fixtures for all six optimizer
+  families: 24 quantity/cost combinations and 216 payoff checks, covering
+  maximum profit/loss and breakevens. This tests conditional synthetic maths,
+  not executable prices or profitable trading recommendations. No runtime change.
+
 - Condensed optimizer result cards around return/risk, target-date P/L and expiry
   risk, adding engine-calculated breakevens and maximum profit. Compact expiry
   charts distinguish target and breakeven markers; longer risk notes are expandable.

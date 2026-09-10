@@ -2,6 +2,35 @@ import { expect, it } from 'vitest'
 import { assertLabPosition, createLabPosition, labScenarios, labThesisFit, readLabDraft, optimizeLab } from '../src/scenario-lab-model'
 import { calculateStrategy, evaluateScenario, validateStrategy, LAB_SAMPLE_EXPIRIES, SAMPLE_EXPIRIES, sampleContractId } from '../src/options'
 
+it('matches hand-calculated six-family expiry fixtures, including quantity and costs', () => {
+  const fixtures = [
+    { family: 'Long call', terms: [['call', 'long', 100, 3, 1]], loss: 300, profit: null, roots: [103], slopes: [100] },
+    { family: 'Bull call spread', terms: [['call', 'long', 100, 3, 1], ['call', 'short', 105, 1, 1]], loss: 200, profit: 300, roots: [102], slopes: [100] },
+    { family: 'Bull put spread', terms: [['put', 'short', 105, 3, 1], ['put', 'long', 100, 1, 1]], loss: 300, profit: 200, roots: [103], slopes: [100] },
+    { family: 'Covered call', terms: [['call', 'short', 105, 1, 1]], loss: 9900, profit: 600, roots: [99], slopes: [100] },
+    { family: 'Cash-secured put', terms: [['put', 'short', 100, 2, 1]], loss: 9800, profit: 200, roots: [98], slopes: [100] },
+    { family: 'Bullish call butterfly', terms: [['call', 'long', 95, 7, 1], ['call', 'short', 100, 3, 2], ['call', 'long', 105, 1, 1]], loss: 200, profit: 300, roots: [97, 103], slopes: [100, -100] },
+  ] as const
+  for (const fixture of fixtures) for (const quantity of [1, 3]) for (const fee of [0, 2]) {
+    const source = createLabPosition()
+    const state = { ...source, feeAllowance: fee, scenarioDate: source.legs[0].expiry,
+      stock: fixture.family === 'Covered call' ? { shares: 100 * quantity, entryPrice: 100 } : undefined,
+      legs: fixture.terms.map(([type, side, strike, entryPrice, ratio], index) => ({ ...source.legs[0], id: String(index), type, side, strike, entryPrice, contracts: quantity * ratio, contractId: sampleContractId(type, strike, source.legs[0].expiry) })),
+    }
+    assertLabPosition(state)
+    const metrics = calculateStrategy(state)
+    expect(metrics.maxLoss, fixture.family).toBe(fixture.loss * quantity + fee)
+    expect(metrics.maxProfit, fixture.family).toBe(fixture.profit === null ? null : fixture.profit * quantity - fee)
+    expect(metrics.breakevens).toHaveLength(fixture.roots.length)
+    fixture.roots.forEach((root, index) => expect(metrics.breakevens[index]).toBeCloseTo(root + fee / (fixture.slopes[index] * quantity), 7))
+    for (const spot of [0.01, 90, 95, 97, 100, 103, 105, 110, 1000]) {
+      const shares = fixture.family === 'Covered call' ? (spot - 100) * 100 * quantity : 0
+      const expected = fixture.terms.reduce((pnl, [type, side, strike, premium, ratio]) => pnl + (side === 'long' ? 1 : -1) * (Math.max(0, type === 'call' ? spot - strike : strike - spot) - premium) * ratio * quantity * 100, shares - fee)
+      expect(evaluateScenario({ ...state, scenarioSpot: spot }).pnl, `${fixture.family} at ${spot}`).toBeCloseTo(expected, 7)
+    }
+  }
+})
+
 it('supports seven months of synthetic prototype expiries without changing default samples', () => {
   expect(SAMPLE_EXPIRIES).toHaveLength(2)
   expect(new Set(LAB_SAMPLE_EXPIRIES.map(date => date.slice(0, 7))).size).toBe(7)
