@@ -2,6 +2,10 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Removed the expiry strip's fixed 600px width so it fills available desktop
+  space while retaining a separate full-width mobile row. Browser regression
+  verifies growth at 1920px, no page overflow, and existing drag/selection behaviour.
+
 - Added 24 synthetic prototype expiries across September 2026–March 2027 for
   month-strip testing. Normal app sample dropdown defaults remain unchanged;
   the replay-safe valuation catalog now accepts the additional explicit dates.
