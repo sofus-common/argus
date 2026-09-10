@@ -176,6 +176,13 @@ const NEAR_EXPIRY = "2026-09-11T20:00:00.000Z";
 const FAR_EXPIRY = "2026-09-18T20:00:00.000Z";
 
 export const SAMPLE_EXPIRIES = [NEAR_EXPIRY, FAR_EXPIRY] as const;
+export const LAB_SAMPLE_EXPIRIES: readonly string[] = [
+  ...SAMPLE_EXPIRIES,
+  ...['2026-09-25', '2026-10-02', '2026-10-09', '2026-10-16', '2026-10-23', '2026-10-30',
+    '2026-11-06', '2026-11-13', '2026-11-20', '2026-11-27', '2026-12-04', '2026-12-11', '2026-12-18',
+    '2027-01-08', '2027-01-15', '2027-01-22', '2027-02-05', '2027-02-12', '2027-02-19',
+    '2027-03-05', '2027-03-12', '2027-03-19'].map(date => `${date}T20:00:00.000Z`),
+];
 export const SAMPLE_STRIKES = Array.from({ length: 41 }, (_, index) => 80 + index);
 
 export function sampleContractId(type: OptionLeg["type"], strike: number, expiry: string): string {
@@ -185,7 +192,7 @@ export function sampleContractId(type: OptionLeg["type"], strike: number, expiry
 }
 
 const SAMPLE_CONTRACTS = new Set(
-  SAMPLE_EXPIRIES.flatMap((expiry) => SAMPLE_STRIKES.flatMap((strike) => [
+  LAB_SAMPLE_EXPIRIES.flatMap((expiry) => SAMPLE_STRIKES.flatMap((strike) => [
     sampleContractId("call", strike, expiry),
     sampleContractId("put", strike, expiry),
   ])),
@@ -647,7 +654,7 @@ function validatePosition(state: StrategyState, construction: boolean): string[]
     if (market) {
       const identity = typeof item.contractId === "string" && typeof state.underlying === "string" && item.contractId.slice(0, 6) === state.underlying.padEnd(6) ? /^(\d{6})([CP])(\d{8})$/.exec(item.contractId.slice(6)) : null;
       if (!identity || typeof item.expiry !== "string" || identity[1] !== item.expiry.slice(2, 10).replaceAll("-", "") || identity[2] !== (item.type === "call" ? "C" : "P") || Number(identity[3]) / 1000 !== item.strike) errors.push(`${item.id}: invalid market contract identity`);
-    } else if (!SAMPLE_STRIKES.includes(item.strike) || !SAMPLE_EXPIRIES.includes(item.expiry as typeof SAMPLE_EXPIRIES[number]) || !SAMPLE_CONTRACTS.has(item.contractId) || item.contractId !== sampleContractId(item.type, item.strike, item.expiry)) errors.push(`${item.id}: contract is not in the replay-safe sample catalog`);
+    } else if (!SAMPLE_STRIKES.includes(item.strike) || !LAB_SAMPLE_EXPIRIES.includes(item.expiry) || !SAMPLE_CONTRACTS.has(item.contractId) || item.contractId !== sampleContractId(item.type, item.strike, item.expiry)) errors.push(`${item.id}: contract is not in the replay-safe sample catalog`);
     if (item.side !== "long" && item.side !== "short") errors.push(`${item.id}: invalid side`);
     if (item.type !== "call" && item.type !== "put") errors.push(`${item.id}: invalid option type`);
     if (!Number.isInteger(item.contracts) || item.contracts < 1) errors.push(`${item.id}: contracts must be a positive integer`);

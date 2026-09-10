@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { evaluateScenario, payoffSeries, sampleContractId, SAMPLE_EXPIRIES, type StrategyState } from './options'
+import { evaluateScenario, payoffSeries, sampleContractId, LAB_SAMPLE_EXPIRIES, type StrategyState } from './options'
 import { labThesisFit, optimizeLab } from './scenario-lab-model'
 import './scenario-lab-optimizer.css'
 
@@ -10,7 +10,7 @@ const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'curren
 const dateLabel = (value: string) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 const legsLabel = (state: StrategyState) => [...state.legs.map(leg => `${leg.side === 'long' ? 'Buy' : 'Sell'} ${leg.contracts} × ${leg.strike}${leg.type === 'call' ? 'C' : 'P'}`), ...(state.stock ? [`${state.stock.shares} shares at ${money(state.stock.entryPrice)}`] : [])].join(' · ')
 
-export function ExpiryStrip({ expiry, onChange, dates = SAMPLE_EXPIRIES }: { expiry: string; onChange: (date: string) => void; dates?: readonly string[] }) {
+export function ExpiryStrip({ expiry, onChange, dates = LAB_SAMPLE_EXPIRIES }: { expiry: string; onChange: (date: string) => void; dates?: readonly string[] }) {
   const track = useRef<HTMLDivElement>(null)
   const drag = useRef<{ x: number; scroll: number; moved: boolean } | null>(null)
   const [edges, setEdges] = useState({ start: true, end: true })

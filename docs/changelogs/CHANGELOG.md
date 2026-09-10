@@ -2,6 +2,13 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added 24 synthetic prototype expiries across September 2026–March 2027 for
+  month-strip testing. Normal app sample dropdown defaults remain unchanged;
+  the replay-safe valuation catalog now accepts the additional explicit dates.
+  Prototype workbench selection shows the correct year. Verified 126 focused tests,
+  TypeScript and browser selection/search/apply/save/reload of a March 2027 expiry.
+  Synthetic dates and model prices only; no production deployment.
+
 - Replaced the vertical expiry wheel with a horizontal month/day strip. Dragging
   and navigation arrows pan only; clicking a date selects it. Suppresses accidental
   selection after dragging, preserves native touch scrolling and date-button

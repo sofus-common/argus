@@ -40,6 +40,18 @@ const assert = require('node:assert/strict');
     const family = await page.locator('.opt-confirm h2').innerText();
     await page.getByRole('button', { name: 'Apply to draft', exact: true }).click();
     assert.ok((await page.locator('.lab-position h1').innerText()).includes(family));
+    await page.getByRole('button', { name: 'Optimize · sample', exact: true }).click();
+    await page.getByRole('button', { name: 'Expiry Mar 19, 2027', exact: true }).click();
+    await page.getByLabel('Optimizer thesis horizon').fill('2027-03-12');
+    await page.getByLabel('Optimizer maximum loss').fill('15000');
+    await page.getByRole('button', { name: 'Search strategies', exact: true }).click();
+    await page.getByRole('button', { name: 'Preview candidate 1', exact: true }).click();
+    await page.getByRole('button', { name: 'Apply to draft', exact: true }).click();
+    assert.equal(await page.getByLabel('Workbench expiry').inputValue(), '2027-03-19T20:00:00.000Z');
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+    await page.reload();
+    await page.getByRole('button', { name: 'Open draft', exact: true }).click();
+    assert.equal(await page.getByLabel('Workbench expiry').inputValue(), '2027-03-19T20:00:00.000Z');
     const fixture = await browser.newPage({ viewport: { width: 900, height: 400 } });
     fixture.on('pageerror', error => errors.push(error.message));
     await fixture.route('**/expiry-strip-fixture', route => route.fulfill({ contentType: 'text/html', body: `<div id="root"></div><script type="module">

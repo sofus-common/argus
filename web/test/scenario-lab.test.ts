@@ -1,6 +1,21 @@
 import { expect, it } from 'vitest'
 import { assertLabPosition, createLabPosition, labScenarios, labThesisFit, readLabDraft, optimizeLab } from '../src/scenario-lab-model'
-import { calculateStrategy, evaluateScenario, validateStrategy } from '../src/options'
+import { calculateStrategy, evaluateScenario, validateStrategy, LAB_SAMPLE_EXPIRIES, SAMPLE_EXPIRIES, sampleContractId } from '../src/options'
+
+it('supports seven months of synthetic prototype expiries without changing default samples', () => {
+  expect(SAMPLE_EXPIRIES).toHaveLength(2)
+  expect(new Set(LAB_SAMPLE_EXPIRIES.map(date => date.slice(0, 7))).size).toBe(7)
+  for (const expiry of LAB_SAMPLE_EXPIRIES) {
+    const source = createLabPosition()
+    const state = { ...source, legs: source.legs.map(leg => ({ ...leg, expiry, contractId: sampleContractId(leg.type, leg.strike, expiry) })) }
+    expect(validateStrategy(state)).toEqual([])
+    expect(Number.isFinite(evaluateScenario(state).pnl)).toBe(true)
+  }
+  const expiry = LAB_SAMPLE_EXPIRIES.at(-1)!
+  const source = createLabPosition()
+  const state = { ...source, legs: source.legs.map(leg => ({ ...leg, expiry, contractId: sampleContractId(leg.type, leg.strike, expiry) })) }
+  expect(optimizeLab(state, '2027-03-12', 15000, 'profit', 15000).candidates.length).toBeGreaterThan(0)
+})
 
 it('uses real engine results and keeps later scenarios inside expiry', () => {
   const state = createLabPosition()
