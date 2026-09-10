@@ -1,12 +1,12 @@
-import { calculateStrategy, createStrategy, evaluateScenario, sampleContractId, validateStrategy, type StrategyState, type OptionLeg } from './options'
+import { calculateStrategy, createStrategy, evaluateScenario, sampleContractId, validateStrategy, validateMarketStrategy, type MarketSnapshot, type StrategyState, type OptionLeg } from './options'
 import { readWorkspaceDraft } from './workspace-draft'
 
 function validHorizon(value: unknown): value is string {
   return typeof value === 'string' && (value === '' || (/^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value))
 }
 
-export function labThesisFit(position: StrategyState, horizon: string): { status: 'missing' | 'invalid' | 'after-expiry' | 'calculated'; pnl: number | null } {
-  assertLabPosition(position)
+export function labThesisFit(position: StrategyState, horizon: string, snapshot?: MarketSnapshot): { status: 'missing' | 'invalid' | 'after-expiry' | 'calculated'; pnl: number | null } {
+  assertWorkbenchPosition(position, snapshot)
   if (!horizon) return { status: 'missing', pnl: null }
   const date = `${horizon}T20:00:00.000Z`
   if (!validHorizon(horizon) || date < position.valuationTimestamp) return { status: 'invalid', pnl: null }
@@ -20,7 +20,7 @@ export function readLabDraft(raw: string) {
   const envelope = value?.version === 2
   if (envelope && (Object.keys(value).sort().join() !== 'draft,horizon,version' || !validHorizon(value.horizon))) throw new Error('Invalid thesis horizon')
   const draft = readWorkspaceDraft(envelope ? JSON.stringify(value.draft) : raw)
-  assertLabPosition(draft.state)
+  assertWorkbenchPosition(draft.state, draft.snapshot ?? undefined)
   return { draft, horizon: envelope ? value.horizon as string : '' }
 }
 
@@ -29,8 +29,8 @@ export function createLabPosition(): StrategyState {
   return { ...state, scenarioSpot: 103, scenarioDate: '2026-09-10T20:00:00.000Z', legs: state.legs.map((leg, i) => ({ ...leg, strike: i ? 105 : 100, entryPrice: i ? 1 : 3, contractId: sampleContractId('call', i ? 105 : 100, leg.expiry) })) }
 }
 
-export function labScenarios(position: StrategyState, target: number, date: string) {
-  assertLabPosition(position)
+export function labScenarios(position: StrategyState, target: number, date: string, snapshot?: MarketSnapshot) {
+  assertWorkbenchPosition(position, snapshot)
   const expiry = position.legs.reduce((a, leg) => a < leg.expiry ? a : leg.expiry, position.legs[0].expiry)
   return [
     { name: 'Base case', spot: target, date },
@@ -55,6 +55,14 @@ export function labFamily(state: StrategyState): string {
   }
   if (state.legs.length === 3 && state.legs.every(l => l.type === 'call') && a.side === 'long' && b.side === 'short' && c.side === 'long' && a.strike < b.strike && b.strike < c.strike && a.strike + c.strike === 2 * b.strike && a.contracts === c.contracts && b.contracts === 2 * a.contracts) return 'Bullish call butterfly'
   return ''
+}
+
+export function assertWorkbenchPosition(state: StrategyState, snapshot?: MarketSnapshot) {
+  if (!state.pricing) { assertLabPosition(state); return }
+  if (!snapshot) throw new Error('Market quotes are required for this position.')
+  const errors = validateMarketStrategy(state, snapshot)
+  if (errors.length) throw new Error(errors[0])
+  if (state.excludedLegIds?.length || state.legs.some(leg => leg.expiry !== state.legs[0].expiry) || state.valuationModel !== 'european-bsm-v1') throw new Error('Workbench currently supports single-expiry European-model analysis only.')
 }
 
 export function assertLabPosition(state: StrategyState) {

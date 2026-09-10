@@ -61,7 +61,7 @@ function StrikeActivity({ snapshot, onDiscuss, disabled }: { snapshot: MarketSna
   </section>
 }
 
-export function OptionChainTable({ state, snapshot, onSelect, onAdd, onCompare, onDiscussActivity, comparisonPending }: { state: StrategyState; snapshot: MarketSnapshot; onSelect: (legId: string, contract: MarketContract) => void; onAdd: (contractId: string, side: 'long' | 'short') => void; onCompare: (legId: string, contract: MarketContract) => void; onDiscussActivity: (question: string) => void; comparisonPending: boolean }) {
+export function OptionChainTable({ state, snapshot, onSelect, onAdd, onCompare, onDiscussActivity, comparisonPending, recoveryHint = 'Undo restores the prior workspace.' }: { recoveryHint?: string; state: StrategyState; snapshot: MarketSnapshot; onSelect: (legId: string, contract: MarketContract) => void; onAdd: (contractId: string, side: 'long' | 'short') => void; onCompare: (legId: string, contract: MarketContract) => void; onDiscussActivity: (question: string) => void; comparisonPending: boolean }) {
   const [legId, setLegId] = useState('')
   const [expiry, setExpiry] = useState('all')
   const [type, setType] = useState('all')
@@ -105,7 +105,7 @@ export function OptionChainTable({ state, snapshot, onSelect, onAdd, onCompare, 
         </table>
         {!filtered.length && <p>No quoted contracts match these filters.</p>}
       </div>
-      <p>Scroll horizontally for more columns and contract selection. Width % = (ask − bid) ÷ midpoint × 100. Missing volume or open interest is shown as — and sorts last; neither guarantees execution. Replacing keeps side and quantity but resets entry to a quote estimate. Adding creates one long or short contract at the selected quote basis, preserving existing holdings and costs. No trade is recorded; Undo restores the prior workspace.</p>
+      <p>Scroll horizontally for more columns and contract selection. Width % = (ask − bid) ÷ midpoint × 100. Missing volume or open interest is shown as — and sorts last; neither guarantees execution. Replacing keeps side and quantity but resets entry to a quote estimate. Adding creates one long or short contract at the selected quote basis, preserving existing holdings and costs. No trade is recorded; {recoveryHint}</p>
     </div>
   </details>
 }

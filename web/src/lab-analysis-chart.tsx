@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
 import { PayoffChart, Heatmap, ScenarioTable, ScenarioInput, ChartRangeControls, chartMetrics, type ChartMetric } from './App'
-import { effectiveIv, pnlDisplayBasis, SAMPLE_STRIKES, sampleContractId, translateStrikes, type ChartRange, type PnlDisplayMode, type StrategyState } from './options'
-import { assertLabPosition } from './scenario-lab-model'
+import { effectiveIv, marketLeg, pnlDisplayBasis, SAMPLE_STRIKES, sampleContractId, translateStrikes, type MarketSnapshot, type ChartRange, type PnlDisplayMode, type StrategyState } from './options'
+import { assertWorkbenchPosition } from './scenario-lab-model'
 import { requestWorkspaceValuation } from './workspace-valuation-client'
 import './lab-analysis-chart.css'
 
-export function LabAnalysisChart({ state, onChange, onPositionChange, onAsk }: { state: StrategyState; onChange: (state: StrategyState) => void; onPositionChange?: (state: StrategyState) => void; onAsk?: () => void }) {
+export function LabAnalysisChart({ state, snapshot, onChange, onPositionChange, onAsk }: { state: StrategyState; snapshot?: MarketSnapshot; onChange: (state: StrategyState) => void; onPositionChange?: (state: StrategyState) => void; onAsk?: () => void }) {
   const [view, setView] = useState<'curve' | 'heatmap' | 'table'>('curve')
   const [metric, setMetric] = useState<ChartMetric>('pnl')
   const [display, setDisplay] = useState<PnlDisplayMode>('pnl')
-  const [range, setRange] = useState<ChartRange | undefined>({ min: 80, max: 120 })
+  const [range, setRange] = useState<ChartRange | undefined>(state.pricing ? undefined : { min: 80, max: 120 })
   const [baseline, setBaseline] = useState<StrategyState>()
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -29,19 +29,21 @@ export function LabAnalysisChart({ state, onChange, onPositionChange, onAsk }: {
   const valuation = Date.parse(state.valuationTimestamp)
   const expiry = Math.min(...state.legs.map(leg => Date.parse(leg.expiry)))
   const select = (patch: Partial<StrategyState>) => {
-    try { const next = { ...state, ...patch }; assertLabPosition(next); onChange(next); setError('') }
+    try { const next = { ...state, ...patch }; assertWorkbenchPosition(next, snapshot); onChange(next); setError('') }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Invalid inspection.') }
   }
   const strike = (source: StrategyState, id: string, requested: number, group: boolean, step?: -1 | 1) => {
     const leg = source.legs.find(item => item.id === id)!
-    const nearest = step ? SAMPLE_STRIKES[Math.max(0, Math.min(SAMPLE_STRIKES.length - 1, SAMPLE_STRIKES.indexOf(leg.strike) + step))] : SAMPLE_STRIKES.reduce((a, b) => Math.abs(b - requested) < Math.abs(a - requested) ? b : a)
-    const next = group ? translateStrikes(source, id, requested, undefined, step) : { ...source, legs: source.legs.map(item => item.id === id ? { ...item, strike: nearest, contractId: sampleContractId(item.type, nearest, item.expiry) } : item) }
-    assertLabPosition(next)
+    const strikes = snapshot ? [...new Set(snapshot.contracts.filter(c => c.type === leg.type && c.expiry === leg.expiry).map(c => c.strike))].sort((a,b) => a-b) : SAMPLE_STRIKES
+    const nearest = step ? strikes[Math.max(0, Math.min(strikes.length - 1, strikes.indexOf(leg.strike) + step))] : strikes.reduce((a, b) => Math.abs(b - requested) < Math.abs(a - requested) ? b : a)
+    const replacement = snapshot ? marketLeg(snapshot.contracts.find(c => c.type === leg.type && c.expiry === leg.expiry && c.strike === nearest)!, leg.side, leg.contracts, leg.id, source.pricing!.basis, source.pricing?.entryMode === 'fixed' ? leg : undefined) : { ...leg, strike: nearest, contractId: sampleContractId(leg.type, nearest, leg.expiry) }
+    const next = group ? translateStrikes(source, id, requested, snapshot, step) : { ...source, legs: source.legs.map(item => item.id === id ? replacement : item) }
+    assertWorkbenchPosition(next, snapshot)
     return next
   }
   return <section className="lac" aria-label="Interactive trade analysis">
     <header className="canvas-head"><h2>{view === 'curve' ? chartMetrics[metric].label : view === 'table' ? 'Scenario table' : 'Price × time'}</h2><div className="chart-controls"><select aria-label="Chart metric" value={metric} disabled={view !== 'curve'} onChange={event => setMetric(event.target.value as ChartMetric)}>{Object.entries(chartMetrics).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select><div className="segmented" aria-label="Analysis views">{(['curve', 'heatmap', 'table'] as const).map(name => <button key={name} className={view === name ? 'active' : ''} aria-pressed={view === name} onClick={() => setView(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}</div></div><div className="scenario"><label>IV shift · pts<ScenarioInput label="IV shift in percentage points" value={Number((state.ivShift * 100).toFixed(2))} onCommit={value => select({ ivShift: value / 100 })}/></label><label>At spot · $<ScenarioInput label="Scenario spot" value={state.scenarioSpot} onCommit={value => select({ scenarioSpot: value })}/></label></div></header>
-    <p className="lac-note">Display inspection does not rewrite your thesis. Dragging strikes edits the hypothetical trade. Synthetic model, not live quotes.</p>
+    <p className="lac-note">Display inspection does not rewrite your thesis. Dragging strikes edits the hypothetical trade. {snapshot ? 'Dated market quotes; modeled outcomes are not executable fills.' : 'Synthetic model, not live quotes.'}</p>
     <div className="scenario-time"><label><span className="scenario-date-heading">Scenario date · UTC<button onClick={() => select({ scenarioDate: state.valuationTimestamp })}>Now</button></span><input type="datetime-local" aria-label="Scenario date UTC" step="0.001" min={new Date(valuation).toISOString().slice(0, -1)} max={new Date(expiry).toISOString().slice(0, -1)} value={new Date(state.scenarioDate).toISOString().slice(0, -1)} onChange={event => { const at = Date.parse(`${event.target.value}Z`); if (Number.isFinite(at)) select({ scenarioDate: new Date(at).toISOString() }) }}/></label><div><input type="range" aria-label="Scenario time" min={valuation} max={expiry} step={1} value={Date.parse(state.scenarioDate)} onChange={event => select({ scenarioDate: new Date(Number(event.target.value)).toISOString() })}/><small><span>Valuation · {state.valuationTimestamp.slice(0, 10)}</span><span>First expiry · {new Date(expiry).toISOString().slice(0, 10)}</span></small></div></div>
     <div className="chart-controls comparison-controls"><button onClick={() => { setBaseline(structuredClone(state)); setView('curve') }}>{baseline ? 'Replace baseline' : 'Freeze comparison'}</button>{baseline && <button onClick={() => setBaseline(undefined)}>Clear baseline</button>}</div>
     {error && <p role="alert">{error}</p>}{current?.error && <p role="alert">{current.error} <button onClick={() => setAttempt(value => value + 1)}>Retry calculation</button></p>}

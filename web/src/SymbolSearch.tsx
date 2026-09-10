@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-export function SymbolSearch({ underlying, onSelect }: { underlying: string; onSelect: (symbol: string) => void }) {
+export function SymbolSearch({ underlying, onSelect, selectionHint = 'Use Load symbol to replace the template; Undo restores your position.' }: { underlying: string; onSelect: (symbol: string) => void; selectionHint?: string }) {
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<{ symbol: string; name: string }[]>([])
   const [status, setStatus] = useState('')
@@ -34,7 +34,7 @@ export function SymbolSearch({ underlying, onSelect }: { underlying: string; onS
       <button disabled={pending || query.trim().length < 2}>Search symbols</button>
     </form>
     <p role="status">{status}</p>
-    <ul>{items.map(item => <li key={item.symbol}><button onClick={() => { onSelect(item.symbol); setStatus(`${item.symbol} selected. Use Load symbol to replace the template; Undo restores your position.`) }}><b>{item.symbol}</b><span>{item.name}</span></button></li>)}</ul>
+    <ul>{items.map(item => <li key={item.symbol}><button onClick={() => { onSelect(item.symbol); setStatus(`${item.symbol} selected. ${selectionHint}`) }}><b>{item.symbol}</b><span>{item.name}</span></button></li>)}</ul>
     <small>Instrument discovery only. Option-chain availability is checked when you load.</small>
   </details>
 }

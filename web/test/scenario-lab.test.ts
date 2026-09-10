@@ -1,6 +1,22 @@
 import { expect, it } from 'vitest'
-import { assertLabPosition, createLabPosition, labScenarios, labThesisFit, readLabDraft, optimizeLab } from '../src/scenario-lab-model'
-import { calculateStrategy, evaluateScenario, validateStrategy, LAB_SAMPLE_EXPIRIES, SAMPLE_EXPIRIES, sampleContractId } from '../src/options'
+import { assertLabPosition, assertWorkbenchPosition, createLabPosition, labScenarios, labThesisFit, readLabDraft, optimizeLab } from '../src/scenario-lab-model'
+import { calculateStrategy, createMarketStrategy, evaluateScenario, validateStrategy, LAB_SAMPLE_EXPIRIES, SAMPLE_EXPIRIES, sampleContractId, type MarketSnapshot } from '../src/options'
+
+it('keeps market Workbench analysis and drafts separate from the synthetic optimizer', () => {
+  const at = '2026-09-10T15:00:00.000Z', expiry = '2026-09-18T20:00:00.000Z'
+  const snapshot: MarketSnapshot = { id: 'fixture-aapl', underlying: 'AAPL', source: 'Tastytrade', spot: 230, retrievedAt: at, spotAsOf: at, availableExpiries: ['2026-09-18'], contracts: [225,230,235].map(strike => ({ contractId: `AAPL  260918C${String(strike * 1000).padStart(8, '0')}`, type: 'call', strike, expiry, multiplier: 100, bid: 4, ask: 5, iv: .3, quoteAsOf: at })) }
+  const state = createMarketStrategy('bull-call', snapshot)
+  expect(() => assertWorkbenchPosition(state, snapshot)).not.toThrow()
+  expect(() => assertWorkbenchPosition(state)).toThrow('quotes are required')
+  expect(() => assertWorkbenchPosition(state, { ...snapshot, underlying: 'MSFT' })).toThrow()
+  expect(() => assertWorkbenchPosition({ ...state, legs: state.legs.map(leg => ({ ...leg, entryPrice: 99 })) }, snapshot)).toThrow()
+  expect(labThesisFit(state, '2026-09-18', snapshot).status).toBe('calculated')
+  expect(labScenarios(state, 240, state.scenarioDate, snapshot)).toHaveLength(3)
+  expect(() => optimizeLab(state, '2026-09-18', 300, 'profit')).toThrow()
+  const draft = { schemaVersion: 1, state, snapshot, title: 'AAPL', thesis: 'AAPL rises', composer: '', savedAt: at }
+  expect(readLabDraft(JSON.stringify({ version: 2, horizon: '2026-09-18', draft })).draft.state.underlying).toBe('AAPL')
+  expect(() => readLabDraft(JSON.stringify({ ...draft, snapshot: null }))).toThrow()
+})
 
 it('rejects unsafe quantities and overflowing money before pricing, search or draft import', () => {
   for (const overrides of [{ contracts: 1e307 }, { contracts: Number.MAX_SAFE_INTEGER + 1 }, { entryPrice: 1e308 }, { entryPrice: 1e306 }]) {

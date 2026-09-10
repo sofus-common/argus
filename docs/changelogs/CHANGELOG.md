@@ -2,6 +2,17 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added symbol loading and company search above the Workbench thesis, using the
+  existing validated market snapshot and option-chain components. Explicit load
+  confirmation replaces the trade and clears the thesis; failures and stale
+  responses preserve current work. Real expiries, quoted strike edits, snapshot
+  drafts and dated source metadata replace synthetic defaults in market mode.
+  The sample optimizer is disabled for market positions. Local prototype proxies
+  the existing API; corrected local D1 binding replacement to avoid duplicate
+  bindings from array merging. No production deployment or credential changes.
+  Verified: 18 focused tests, TypeScript, three desktop/mobile browser suites,
+  actual AAPL loading/chart rendering and local-only D1 binding verification.
+
 - Reused the main app's actual payoff chart, heatmap and scenario table in the
   Workbench, replacing the simplified chart. Includes draggable/grouped strikes,
   Greek curves, frozen comparison, date slider, display modes, range controls and

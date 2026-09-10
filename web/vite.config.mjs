@@ -28,10 +28,11 @@ export default defineConfig(({ mode, command, isPreview }) => {
       ? [cloudflareTest({ wrangler: { configPath: "wrangler.jsonc" }, remoteBindings: false, miniflare: { d1Databases: ["DB"], bindings: { ARGUS_PROMPT_EXPECTED_DIGEST: process.env.ARGUS_PROMPT_EXPECTED_DIGEST ?? "", ARGUS_PROMPT_CANDIDATE_JSON: process.env.ARGUS_PROMPT_CANDIDATE ? readFileSync(resolve(process.env.ARGUS_PROMPT_CANDIDATE), "utf8") : "" } } })]
       : [react(), cloudflare(localDev ? {
         remoteBindings: false,
-        config: config => ({
-          vars: { ...config.vars, ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "", APP_ORIGIN: "", ARGUS_LOCAL_DEV: "true" },
-          d1_databases: JSON.parse(readFileSync(resolve("wrangler.local.json"), "utf8")).d1_databases,
-        }),
+        config: config => {
+          // The plugin concatenates returned arrays; replace bindings before merging.
+          config.d1_databases = JSON.parse(readFileSync(resolve("wrangler.local.json"), "utf8")).d1_databases;
+          return { vars: { ...config.vars, ACCESS_TEAM_DOMAIN: "", ACCESS_AUD: "", APP_ORIGIN: "", ARGUS_LOCAL_DEV: "true" } };
+        },
       } : {})],
   };
 });
