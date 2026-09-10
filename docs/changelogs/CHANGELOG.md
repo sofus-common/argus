@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Replaced the expiry rail and scrubber with a finite, single-column
+  @ncdai/react-wheel-picker 1.2.3 wheel, showing date and sample-valuation DTE.
+  Added spinbutton semantics and an available-date guard. Verified keyboard,
+  mouse wheel, mouse drag, emulated touch swipe, horizon isolation, stale-result
+  handling, Back/Apply, mobile overflow and TypeScript. Prototype only.
+
 - Made optimizer expiry selection compact with month bands, day-number radio
   controls, previous/next actions and a native draggable expiry scrubber. Only
   loaded sample dates are selectable; thesis horizon remains independent.

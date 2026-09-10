@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { evaluateScenario, payoffSeries, sampleContractId, SAMPLE_EXPIRIES, type StrategyState } from './options'
 import { labThesisFit, optimizeLab } from './scenario-lab-model'
+import { WheelPicker, WheelPickerWrapper } from '@ncdai/react-wheel-picker'
+import '@ncdai/react-wheel-picker/style.css'
 import './scenario-lab-optimizer.css'
 
 type Search = ReturnType<typeof optimizeLab>
@@ -10,22 +12,21 @@ const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'curren
 const dateLabel = (value: string) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 const legsLabel = (state: StrategyState) => [...state.legs.map(leg => `${leg.side === 'long' ? 'Buy' : 'Sell'} ${leg.contracts} × ${leg.strike}${leg.type === 'call' ? 'C' : 'P'}`), ...(state.stock ? [`${state.stock.shares} shares at ${money(state.stock.entryPrice)}`] : [])].join(' · ')
 
-function ExpiryRail({ expiry, onChange }: { expiry: string; onChange: (date: string) => void }) {
-  const name = useId()
-  const index = SAMPLE_EXPIRIES.findIndex(date => date === expiry)
-  return <section className="opt-expiry-rail" aria-label="Trade expiry">
-    <div className="opt-expiry-caption"><h2>Trade expiry</h2><strong aria-live="polite">{dateLabel(expiry)}</strong><small>Separate from your thesis horizon</small></div>
-    <div className="opt-date-picker">
-      <button aria-label="Previous sample expiry" disabled={index <= 0} onClick={() => onChange(SAMPLE_EXPIRIES[index - 1])}>‹</button>
-      <div className="opt-date-track"><div className="opt-date-months" role="radiogroup" aria-label="Available trade expirations">
-        {[...new Set(SAMPLE_EXPIRIES.map(date => date.slice(0, 7)))].map(month => <div className="opt-month" key={month}>
-          <span>{new Date(`${month}-01T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })}</span>
-          <div>{SAMPLE_EXPIRIES.filter(date => date.startsWith(month)).map(date => <label key={date} className="opt-expiry-day"><input type="radio" name={name} value={date} checked={date === expiry} onChange={() => onChange(date)} aria-label={`Expiry ${dateLabel(date)}`}/><span>{new Date(date).getUTCDate()}</span></label>)}</div>
-        </div>)}
-      </div><input className="opt-expiry-scrubber" type="range" min="0" max={SAMPLE_EXPIRIES.length - 1} step="1" value={index} aria-label="Scrub trade expiry" aria-valuetext={dateLabel(expiry)} onChange={event => onChange(SAMPLE_EXPIRIES[Number(event.target.value)])}/></div>
-      <button aria-label="Next sample expiry" disabled={index >= SAMPLE_EXPIRIES.length - 1} onClick={() => onChange(SAMPLE_EXPIRIES[index + 1])}>›</button>
-    </div>
-    <small className="opt-expiry-help">Click a date or drag the handle<br/>2 sample expiries loaded</small>
+function ExpiryWheel({ expiry, valuation, onChange }: { expiry: string; valuation: string; onChange: (date: string) => void }) {
+  const container = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const wheel = container.current?.querySelector('[data-rwp]')
+    if (!wheel) return
+    for (const [key, value] of Object.entries({ role: 'spinbutton', 'aria-label': 'Trade expiry wheel', 'aria-valuemin': '1', 'aria-valuemax': String(SAMPLE_EXPIRIES.length), 'aria-valuenow': String(SAMPLE_EXPIRIES.findIndex(date => date === expiry) + 1), 'aria-valuetext': dateLabel(expiry) })) wheel.setAttribute(key, value)
+  }, [expiry])
+  return <section ref={container} className="opt-expiry-wheel" aria-label="Trade expiry">
+    <div className="opt-expiry-caption"><h2>Trade expiry</h2><strong>{dateLabel(expiry)}</strong><small>Separate from your thesis horizon</small></div>
+    <WheelPickerWrapper className="opt-wheel">
+      <WheelPicker value={expiry} onValueChange={date => { if (SAMPLE_EXPIRIES.some(available => available === date)) onChange(date) }} infinite={false} visibleCount={12} optionItemHeight={40}
+        options={SAMPLE_EXPIRIES.map(date => ({ value: date, textValue: dateLabel(date), label: <span className="opt-wheel-date"><span>{dateLabel(date)}</span><small>{(Date.parse(date) - Date.parse(valuation)) / 86400000} DTE</small></span> }))}
+        classNames={{ optionItem: 'opt-wheel-option', highlightWrapper: 'opt-wheel-highlight', highlightItem: 'opt-wheel-selected' }}/>
+    </WheelPickerWrapper>
+    <small className="opt-expiry-help">Scroll or drag to choose<br/>Arrow keys supported · 2 sample dates<br/>DTE from sample valuation</small>
   </section>
 }
 
@@ -106,7 +107,7 @@ export function LabOptimizer({ position, thesis, horizon: originalHorizon, onBac
       <div className="opt-assumptions"><h2>Assumptions</h2><div><label>Target price $<input aria-label="Optimizer target price" type="number" min="80" max="120" step="0.25" value={target} onChange={event => setTarget(event.target.value)}/></label><label>Thesis horizon<input aria-label="Optimizer thesis horizon" type="date" min="2026-09-01" value={horizon} onChange={event => setHorizon(event.target.value)}/></label><label>Max loss $<input aria-label="Optimizer maximum loss" type="number" min="0.01" max="100000" value={budget} onChange={event => setBudget(event.target.value)}/></label><label>Stock / cash budget $<input aria-label="Optimizer collateral limit" type="number" min="0" max="1000000" value={cash} onChange={event => setCash(event.target.value)}/></label></div></div>
       <div className="opt-expiry-summary"><h2>Trade expiry</h2><strong>{dateLabel(expiry)}</strong><span>{dte} days from sample valuation</span><small>{!horizon ? 'Set an independent thesis horizon.' : `${horizon}T20:00:00.000Z` > expiry ? 'Expires before thesis horizon.' : horizon === expiry.slice(0, 10) ? 'Matches thesis horizon.' : 'Thesis horizon and expiry are separate.'}</small></div>
     </section>
-    <ExpiryRail expiry={expiry} onChange={setExpiry}/>
+    <ExpiryWheel expiry={expiry} valuation={source.valuationTimestamp} onChange={setExpiry}/>
     <section className="opt-ranking"><label>Rank by<select aria-label="Optimizer objective" value={objective} onChange={event => setObjective(event.target.value as 'profit' | 'return')}><option value="profit">Target-date profit · $</option><option value="return">Target-date return / max loss · %</option></select></label><div className="opt-chance"><div><span>Higher return</span><span>Higher chance</span></div><input type="range" min="0" max="100" value="0" disabled aria-label="Return versus chance unavailable"/><small>Probability and balanced scoring are not implemented.</small></div><button className="opt-primary" onClick={runSearch}>Search strategies</button><span className="opt-risk-filter">Limited expiry loss only<small>Not a guarantee against assignment or funding risk</small></span></section>
     <section className="opt-results" aria-label="Optimizer results"><div className="opt-results-heading"><div><h1 ref={heading} tabIndex={-1}>Compare ways to express your view</h1><p>Same target, horizon and pricing assumptions. Preview before applying.</p></div><span>{result ? `${result.searched} checked · ${result.eligible} eligible` : 'Synthetic model search · not trading advice'}</span></div>
       {error && <p className="opt-status" role="alert">{error}</p>}
