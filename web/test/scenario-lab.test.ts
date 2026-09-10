@@ -15,8 +15,9 @@ it('uses real engine results and keeps later scenarios inside expiry', () => {
 it('ranks a bounded synthetic search reproducibly without changing the draft', () => {
   const state = createLabPosition(), before = JSON.stringify(state)
   const result = optimizeLab(state, '2026-09-10', 300, 'profit')
-  expect(result.searched).toBe(120)
-  expect(result.candidates).toHaveLength(3)
+  expect(result.searched).toBeGreaterThan(240)
+  expect(result.candidates.map(c => c.family)).toEqual(expect.arrayContaining(['Long call', 'Bull call spread', 'Bull put spread', 'Bullish call butterfly']))
+  expect(new Set(result.candidates.map(c => c.family)).size).toBe(result.candidates.length)
   expect(result).toEqual(optimizeLab(state, '2026-09-10', 300, 'profit'))
   expect(JSON.stringify(state)).toBe(before)
   result.candidates.forEach((c, i) => {
@@ -33,13 +34,30 @@ it('ranks a bounded synthetic search reproducibly without changing the draft', (
 
 it('ranks return on risk and includes the allowance in each exact loss bound', () => {
   const result = optimizeLab({ ...createLabPosition(), feeAllowance: 12 }, '2026-09-10', 300, 'return')
-  expect(result.candidates).toHaveLength(3)
+  expect(result.candidates.length).toBeGreaterThanOrEqual(4)
   result.candidates.forEach((c, i) => {
     expect(c.maxLoss).toBeCloseTo(calculateStrategy(c.state).maxLoss!, 6)
-    expect(c.maxLoss).toBeCloseTo(c.debit + 12, 6)
     expect(c.returnOnRisk).toBeCloseTo(c.pnl / c.maxLoss, 6)
     if (i) expect(result.candidates[i - 1].returnOnRisk!).toBeGreaterThanOrEqual(c.returnOnRisk!)
   })
+})
+
+it('searches six families with separate risk and collateral gates and supports applying/restoring each', () => {
+  const result = optimizeLab(createLabPosition(), '2026-09-10', 15000, 'profit', 15000)
+  expect(result.candidates).toHaveLength(6)
+  for (const c of result.candidates) {
+    expect(() => assertLabPosition(c.state)).not.toThrow()
+    expect(c.maxLoss).toBeCloseTo(calculateStrategy(c.state).maxLoss!, 6)
+    const draft = { schemaVersion: 1, state: c.state, snapshot: null, title: 'Lab', thesis: '', composer: '', savedAt: '2026-09-09T20:00:00.000Z' }
+    expect(readLabDraft(JSON.stringify(draft)).draft.state).toEqual(c.state)
+    expect(optimizeLab(c.state, '2026-09-10', 15000, 'profit', 15000).current.family).toBe(c.family)
+  }
+  expect(result.candidates.find(c => c.family === 'Covered call')!.state.stock!.shares).toBe(100)
+  const put = result.candidates.find(c => c.family === 'Cash-secured put')!
+  expect(put.collateral).toBe(put.state.legs[0].strike * 100)
+  expect(put.debit).toBeLessThan(0)
+  expect(optimizeLab(createLabPosition(), '2026-09-10', 15000, 'profit', 0).candidates.some(c => c.collateral > 0)).toBe(false)
+  expect(() => optimizeLab(createLabPosition(), '2026-09-10', 15000, 'profit', NaN)).toThrow()
 })
 
 it('keeps the thesis horizon independent and refuses post-expiry evaluation', () => {

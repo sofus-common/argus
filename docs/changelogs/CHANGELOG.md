@@ -2,6 +2,15 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Expanded the sample optimizer to long calls, bull-call and bull-put spreads,
+  covered calls, cash-secured puts and target-centred call butterflies. Shows the
+  best qualifying candidate per family, with independent maximum-loss and stock/cash
+  budget gates, signed entry outlay and assignment/coverage disclosures. Generic
+  preview, apply and local drafts preserve butterfly ratios and stock coverage.
+  Calendars/diagonals, live pricing and probability ranking remain outside this
+  prototype. Verified 125 focused tests and browser checks for family application,
+  ratio/stock scaling, stale previews and mobile overflow. No production deployment.
+
 - Added a deterministic sample optimizer: 120 bull-call strike pairs in the
   $95–$110 range, fixed expiry/quantity, maximum-loss budget, profit or return-on-risk
   ranking, and up to three alternatives. Current structure and candidates use the
