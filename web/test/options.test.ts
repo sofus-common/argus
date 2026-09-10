@@ -497,7 +497,7 @@ describe('construction analysis selection', () => {
     }
     state.excludedLegIds = [state.legs[1].id];
     state.legs[1].contracts = 0;
-    expect(validateConstruction(state)).toContain(`${state.legs[1].id}: contracts must be a positive integer`);
+    expect(validateConstruction(state)).toContain(`${state.legs[1].id}: contracts must be a positive safe integer`);
   });
   it('uses included expiry for the scenario limit and prunes only projected IV shifts', () => {
     const state = createStrategy('call-calendar');

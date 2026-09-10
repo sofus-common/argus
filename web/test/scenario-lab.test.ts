@@ -2,6 +2,22 @@ import { expect, it } from 'vitest'
 import { assertLabPosition, createLabPosition, labScenarios, labThesisFit, readLabDraft, optimizeLab } from '../src/scenario-lab-model'
 import { calculateStrategy, evaluateScenario, validateStrategy, LAB_SAMPLE_EXPIRIES, SAMPLE_EXPIRIES, sampleContractId } from '../src/options'
 
+it('rejects unsafe quantities and overflowing money before pricing, search or draft import', () => {
+  for (const overrides of [{ contracts: 1e307 }, { contracts: Number.MAX_SAFE_INTEGER + 1 }, { entryPrice: 1e308 }, { entryPrice: 1e306 }]) {
+    const source = createLabPosition()
+    const state = { ...source, legs: source.legs.map(leg => ({ ...leg, ...overrides })) }
+    expect(validateStrategy(state).length).toBeGreaterThan(0)
+    expect(() => calculateStrategy(state)).toThrow()
+    expect(() => evaluateScenario(state)).toThrow()
+    expect(() => optimizeLab(state, '2026-09-10', 300, 'profit')).toThrow()
+    const draft = { schemaVersion: 1, state, snapshot: null, title: 'Lab', thesis: '', composer: '', savedAt: source.valuationTimestamp }
+    expect(() => readLabDraft(JSON.stringify(draft))).toThrow()
+  }
+  const extremeCarry = { ...createLabPosition(), rate: -1e308 }
+  expect(() => evaluateScenario(extremeCarry)).toThrow('numerical range')
+  expect(() => calculateStrategy(extremeCarry)).toThrow('numerical range')
+})
+
 it('matches hand-calculated six-family expiry fixtures, including quantity and costs', () => {
   const fixtures = [
     { family: 'Long call', terms: [['call', 'long', 100, 3, 1]], loss: 300, profit: null, roots: [103], slopes: [100] },

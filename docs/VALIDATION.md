@@ -8,11 +8,14 @@ Independent six-family expiry fixtures cover 24 quantity/fee combinations and
 216 payoff samples, with explicit expected loss, profit and breakeven values.
 These supplement, rather than replace, independent pricing-model benchmarks.
 
-Confirmed outstanding defect: `validateStrategy` accepts option contracts of
-`1e307`; locally served `evaluateScenario` then returns `pnl: NaN`. Finite scalar
-inputs do not guarantee finite position totals. This is not fixed by the audit.
+The audit reproduced `contracts: 1e307` passing validation and producing NaN.
+The approved hardening checkpoint now rejects unsafe contract quantities and
+overflowing gross amounts at shared validation; non-finite calculated outputs
+throw instead of propagating. Independent pricing references and seven explicit
+candidate stress scenarios supplement the expiry fixtures. Finite arithmetic
+does not guarantee cent precision at enormous notionals.
 
-Proposed financial-behavior plan, pending acceptance:
+Financial-behavior plan accepted by the user on September 10, 2026:
 
 1. Harden shared numeric validation: safe quantities and finite aggregate money
    values; regress invalid imported drafts and sibling calculation/search paths.
@@ -26,6 +29,14 @@ Proposed financial-behavior plan, pending acceptance:
 5. Verify saved snapshot replay and independent review before a separately
    authorized production release. No claim of improved P/L without out-of-sample,
    cost-inclusive evidence.
+
+Checkpoint status: steps 1-2 implemented; step 4 has a tested same-structure
+sensitivity helper and synthetic preview integration. Step 3 remains open:
+the market search's top-five overall ranking, one-lot sizing and entry-outlay
+budget must be reconciled with this UI's best-per-family results and separate
+stock/cash collateral budget. Do not silently substitute one contract for the
+other. Existing market APIs, owner-bound snapshots and freshness gates must be
+reused. End-to-end market replay and production readiness are not yet verified.
 
 Primary references informing the real-money acceptance boundary:
 [OIC assignment](https://www.optionseducation.org/referencelibrary/faq/options-assignment),

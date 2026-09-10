@@ -2,6 +2,16 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Hardened shared option quantity and aggregate monetary validation; non-finite
+  calculation outputs now throw. Added independent published pricing/Greek and
+  American convergence benchmarks. Candidate preview adds seven deterministic
+  stress scenarios; a tested dated-quote helper compares identical structures at
+  midpoint and natural entries, without treating either as a fill. Optimize
+  cards and ranking are unchanged. Live-quote UI integration remains outstanding;
+  this checkpoint is not a trading-readiness claim or production deployment.
+  Verified: 151 focused tests, TypeScript, desktop/mobile browser regression and
+  independent numerical/sensitivity review with no blocking findings.
+
 - Added independent, hand-calculated expiry fixtures for all six optimizer
   families: 24 quantity/cost combinations and 216 payoff checks, covering
   maximum profit/loss and breakevens. This tests conditional synthetic maths,

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { evaluateScenario, payoffSeries, sampleContractId, LAB_SAMPLE_EXPIRIES, type StrategyState } from './options'
 import { labThesisFit, optimizeLab } from './scenario-lab-model'
+import { optimizerSensitivity } from './optimizer-sensitivity'
 import './scenario-lab-optimizer.css'
 
 type Search = ReturnType<typeof optimizeLab>
@@ -83,6 +84,7 @@ function ExpiryPlot({ state, breakevens = [] }: { state: StrategyState; breakeve
 
 function Confirmation({ candidate, current, horizon, onClose, onApply }: { candidate: Candidate; current: Candidate; horizon: string; onClose: () => void; onApply: Props['onApply'] }) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const sensitivity = optimizerSensitivity(candidate.state)
   useEffect(() => { dialog.current?.showModal() }, [])
   return <dialog className="opt-confirm" ref={dialog} aria-label="Review candidate before applying" onClose={onClose}>
     <header><div><small>PREVIEW · NO CHANGES APPLIED</small><h2>{candidate.family}</h2></div><button onClick={onClose} aria-label="Close candidate preview">×</button></header>
@@ -94,6 +96,7 @@ function Confirmation({ candidate, current, horizon, onClose, onApply }: { candi
       <tr><th>Smaller-move P/L</th><td>{money(current.smaller)}</td><td>{money(candidate.smaller)}</td></tr>
       <tr><th>Target at expiry P/L</th><td>{money(current.later)}</td><td>{money(candidate.later)}</td></tr>
     </tbody></table></div><ExpiryPlot state={candidate.state}/>
+    <details><summary>Stress-test candidate</summary><p>{sensitivity.assumptions}</p><div className="opt-confirm-table"><table><caption>Candidate only · entry costs held fixed · no scenario probabilities assigned</caption><thead><tr><th>Scenario</th><th>Spot</th><th>Date</th><th>IV</th><th>P/L</th></tr></thead><tbody>{sensitivity.scenarios.map(row => <tr key={row.name}><th>{row.name}</th><td>{money(row.state.scenarioSpot)}</td><td>{dateLabel(row.state.scenarioDate)}</td><td>{((row.state.legs[0].iv + row.state.ivShift) * 100).toFixed(1)}%</td><td title={row.unavailable ?? undefined}>{row.pnl === null ? 'Unavailable' : money(row.pnl)}</td></tr>)}</tbody></table></div></details>
     <p>Apply replaces the draft's option legs, shares and entry costs with this synthetic structure, and sets its target, expiry and chart date to these search inputs. Your thesis horizon becomes {dateLabel(`${horizon}T20:00:00.000Z`)}. Nothing is saved or traded; existing closing cashflows are not modeled.</p>
     <footer><button onClick={onClose}>Keep workbench unchanged</button><button className="opt-primary" onClick={() => onApply(structuredClone(candidate.state), horizon)}>Apply to draft</button></footer>
   </dialog>

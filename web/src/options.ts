@@ -657,7 +657,7 @@ function validatePosition(state: StrategyState, construction: boolean): string[]
     } else if (!SAMPLE_STRIKES.includes(item.strike) || !LAB_SAMPLE_EXPIRIES.includes(item.expiry) || !SAMPLE_CONTRACTS.has(item.contractId) || item.contractId !== sampleContractId(item.type, item.strike, item.expiry)) errors.push(`${item.id}: contract is not in the replay-safe sample catalog`);
     if (item.side !== "long" && item.side !== "short") errors.push(`${item.id}: invalid side`);
     if (item.type !== "call" && item.type !== "put") errors.push(`${item.id}: invalid option type`);
-    if (!Number.isInteger(item.contracts) || item.contracts < 1) errors.push(`${item.id}: contracts must be a positive integer`);
+    if (!Number.isSafeInteger(item.contracts) || item.contracts < 1) errors.push(`${item.id}: contracts must be a positive safe integer`);
     if (!finite(item.strike) || item.strike <= 0) errors.push(`${item.id}: strike must be positive and finite`);
     if (!finite(item.entryPrice) || item.entryPrice < 0) errors.push(`${item.id}: entry price must be non-negative and finite`);
     if (!finite(item.iv) || item.iv <= 0 || !finite(effectiveIv(state, item)) || effectiveIv(state, item) <= 0) errors.push(`${item.id}: shifted IV must be positive and finite`);
@@ -669,6 +669,11 @@ function validatePosition(state: StrategyState, construction: boolean): string[]
   }
   if (expiries.size > MAX_OPTION_EXPIRIES) errors.push("at most four expiries are supported");
   if (Number.isFinite(scenario) && scenario > earliest) errors.push("scenario date cannot follow the earliest expiry");
+  if (!errors.length) {
+    const gross = state.legs.reduce((total, item) => total + item.contracts * item.multiplier * (item.entryPrice + item.strike + state.spot + state.scenarioSpot),
+      (state.feeAllowance ?? 0) + Math.abs(state.stock?.shares ?? 0) * ((state.stock?.entryPrice ?? 0) + state.spot + state.scenarioSpot));
+    if (!finite(gross)) errors.push("aggregate position amounts exceed numerical range");
+  }
   return errors;
 }
 
@@ -790,6 +795,7 @@ function firstExpiry(state: StrategyState): number {
 }
 
 function rounded(value: number): number {
+  if (!Number.isFinite(value)) throw new Error("calculation exceeds numerical range");
   return Math.abs(value) < 1e-9 ? 0 : Number(value.toFixed(8));
 }
 
