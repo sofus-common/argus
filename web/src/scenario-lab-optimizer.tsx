@@ -110,6 +110,13 @@ export function LabOptimizer({ position, thesis, horizon: originalHorizon, onBac
     try { return labThesisFit(position, originalHorizon).status === 'calculated' ? { key, result: optimizeLab(position, originalHorizon, 300, 'profit', 10000) } : null } catch { return null }
   })
   const [error, setError] = useState('')
+  function changeHorizon(value: string) {
+    if (value && (value < source.valuationTimestamp.slice(0, 10) || value > expiry.slice(0, 10))) {
+      setError(`Choose a thesis horizon from ${dateLabel(source.valuationTimestamp)} through ${dateLabel(expiry)}. Select a later expiry first for a later horizon.`)
+      return
+    }
+    setHorizon(value); setError('')
+  }
   useEffect(() => { heading.current?.focus() }, [])
   const result = search?.key === key ? search.result : null
   const candidate = result && preview !== null ? result.candidates[preview] : undefined
@@ -128,7 +135,7 @@ export function LabOptimizer({ position, thesis, horizon: originalHorizon, onBac
     <section className="opt-thesis"><span>MY THESIS</span><p>{thesis || 'No written thesis. Search uses only the explicit price and date below.'}</p><button onClick={onBack}>Edit in workbench</button></section>
     <section className="opt-assumption-panel" aria-label="Optimizer assumptions">
       <div className="opt-outlooks"><h2>Market outlook</h2><div>{[['Very bearish', '↓↓'], ['Bearish', '↓'], ['Neutral', '→'], ['Either direction', '↔'], ['Bullish', '↑'], ['Very bullish', '↑↑']].map(([label, arrow], i) => <button key={label} disabled={i < 4} aria-pressed={outlook === label} title={i < 4 ? 'Not supported by this bullish prototype' : 'Fixed synthetic target preset, not a forecast'} onClick={() => setTarget(i === 4 ? '103' : '106')}><b aria-hidden="true">{arrow}</b><span>{label}</span></button>)}</div><small>Bullish families only. Presets: $103 / $106; not implied-move forecasts.</small></div>
-      <div className="opt-assumptions"><h2>Assumptions</h2><div><label>Target price $<input aria-label="Optimizer target price" type="number" min="80" max="120" step="0.25" value={target} onChange={event => setTarget(event.target.value)}/></label><label>Thesis horizon<input aria-label="Optimizer thesis horizon" type="date" min="2026-09-01" value={horizon} onChange={event => setHorizon(event.target.value)}/></label><label>Max loss $<input aria-label="Optimizer maximum loss" type="number" min="0.01" max="100000" value={budget} onChange={event => setBudget(event.target.value)}/></label><label>Stock / cash budget $<input aria-label="Optimizer collateral limit" type="number" min="0" max="1000000" value={cash} onChange={event => setCash(event.target.value)}/></label></div></div>
+      <div className="opt-assumptions"><h2>Assumptions</h2><div><label>Target price $<input aria-label="Optimizer target price" type="number" min="80" max="120" step="0.25" value={target} onChange={event => setTarget(event.target.value)}/></label><label>Thesis horizon<input aria-label="Optimizer thesis horizon" type="date" min={source.valuationTimestamp.slice(0, 10)} max={expiry.slice(0, 10)} value={horizon} onChange={event => changeHorizon(event.target.value)}/></label><label>Max loss $<input aria-label="Optimizer maximum loss" type="number" min="0.01" max="100000" value={budget} onChange={event => setBudget(event.target.value)}/></label><label>Stock / cash budget $<input aria-label="Optimizer collateral limit" type="number" min="0" max="1000000" value={cash} onChange={event => setCash(event.target.value)}/></label></div></div>
       <div className="opt-expiry-summary"><h2>Trade expiry</h2><strong>{dateLabel(expiry)}</strong><span>{dte} days from sample valuation</span><small>{!horizon ? 'Set an independent thesis horizon.' : `${horizon}T20:00:00.000Z` > expiry ? 'Expires before thesis horizon.' : horizon === expiry.slice(0, 10) ? 'Matches thesis horizon.' : 'Thesis horizon and expiry are separate.'}</small></div>
     </section>
     <ExpiryStrip expiry={expiry} onChange={setExpiry}/>

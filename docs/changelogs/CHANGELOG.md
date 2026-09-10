@@ -2,6 +2,11 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Constrained optimizer horizon entry to valuation date through selected expiry.
+  Native calendar bounds prevent later selection; manual out-of-range input is
+  rejected without replacing the previous horizon. Search validation remains.
+  Verified TypeScript and browser regression for Sep 23 input against Sep 11 expiry.
+
 - Removed the expiry strip's fixed 600px width so it fills available desktop
   space while retaining a separate full-width mobile row. Browser regression
   verifies growth at 1920px, no page overflow, and existing drag/selection behaviour.
