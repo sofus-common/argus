@@ -8,6 +8,19 @@ import * as valuationClient from '../src/workspace-valuation-client'
 import { calculateWorkspaceValuation } from '../src/workspace-valuation'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+it('opens optimizer navigation and renders controls without allowing unquoted search', () => {
+  vi.stubGlobal('window', { location: { search: '' } })
+  const app = renderToStaticMarkup(<App presentation="workbench" />)
+  expect(app).toMatch(/<button[^>]*>Optimize<\/button>/)
+  expect(app).not.toMatch(/<button[^>]*disabled[^>]*>Optimize<\/button>/)
+  const html = renderToStaticMarkup(<CandidateSearch state={createStrategy('bull-call')} disabled={false} expanded onSearch={() => { throw new Error('Unexpected search') }} onInspect={() => { throw new Error('Unexpected inspect') }} renderComparison={() => null} />)
+  expect(html).toContain('Quotes unavailable')
+  expect(html).toContain('Market outlook')
+  expect(html).toContain('Return / chance blend')
+  expect(html).toContain('0 loaded quoted expiries')
+  expect(html).toContain('<button type="submit" disabled="">Find strategies</button>')
+  expect(html).not.toContain('DATED QUOTES')
+})
 it('uses explicit outlook presets without inferring forecasts or allowing two-sided scoring', () => {
   expect(outlookPreset('Bullish', 200)).toEqual({ target: 206, families: ['long-call', 'bull-call', 'bull-put'] })
   expect(outlookPreset('Very bullish', 200)?.target).toBe(212)

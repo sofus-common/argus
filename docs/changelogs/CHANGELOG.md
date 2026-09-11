@@ -2,6 +2,14 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Fixed Optimize being inaccessible without quotes. Integrated navigation and
+  controls now render independently of data availability; absent, empty or
+  historical quotes cannot start a search or render candidate results. Workspace
+  values are explicitly labeled, with no fabricated snapshot or sample results.
+  TypeScript and seven presentation regressions pass; independent review found
+  no blockers. Opened the actual integrated Optimize tab with unavailable-quotes
+  notice and disabled search. Quoted end-to-end verification remains pending.
+
 - Added explicit return/chance blend ranking and a native preference slider.
   Intermediate weights combine fixed normalized target return-on-risk with model
   expiry probability; endpoints reproduce the existing rankings exactly. This
