@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: integrate structured thesis and optimizer with root-owned compact presentation
+next_action: verify native thesis input and quoted optimizer handoff end to end before prototype replacement
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -41,3 +41,13 @@ TypeScript and presentation regression passed. Desktop browser: leg quantity
 no state/financial blocker; corrected quote retrieval wording as requested.
 Mobile viewport override did not take effect, so mobile verification is pending.
 No fresh end-to-end AI, quote-refresh or durable-save proof in this checkpoint.
+
+Third checkpoint: WorkbenchThesis adds temporary target/UTC horizon with strict
+valuation-to-first-included-expiry bounds, cloned read-only preview, and explicit
+optimizer prefill. CandidateSearch retains held state and guarded explicit search;
+seed is gated by underlying/version and preserves milliseconds. No new AI call,
+prompt, order capability, or persistence schema. Focused tests and TypeScript pass;
+independent static review found no blockers. Browser rendered fields/disabled
+guards, but native datetime automation could not establish successful entry.
+Successful preview and quoted prefill interaction remain unverified, as do mobile,
+AI and durable-save flows. Overall migration is still building, not released.

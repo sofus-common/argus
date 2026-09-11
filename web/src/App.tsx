@@ -6,6 +6,7 @@ import { parseDiscoveryIntent, renderDiscovery } from './discovery'
 import { PriceHistory } from './PriceHistory'
 import { streamFreshness } from './stream-freshness'
 import { DraftRecovery } from './DraftRecovery'
+import { WorkbenchThesis } from './WorkbenchThesis'
 import { SavedImport } from './SavedImport'
 import type { SavedTracking } from './saved-strategies'
 import { canMoveStrikeDrag, strikeDrag, type StrikeDrag } from './strike-drag'
@@ -962,6 +963,9 @@ function ChartRangeControls({ spot, range, onChange }: { spot: number; range?: C
 
 export function App({ presentation = 'default' }: { presentation?: 'default' | 'workbench' } = {}) {
   const compact = presentation === 'workbench'
+  const [optimizerTarget, setOptimizerTarget] = useState<{ targetSpot: number; targetDate: string; version: number; underlying: string; launch: number }>()
+  const optimizerPanel = useRef<HTMLDivElement>(null)
+  useEffect(() => { if (optimizerTarget) optimizerPanel.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }) }, [optimizerTarget])
   const Library = compact ? 'details' : 'aside'
   const WorkspaceTools = compact ? 'details' : 'div'
   const PricingPanel = compact ? 'details' : 'div'
@@ -1611,6 +1615,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
         {symbolControl}
         <label htmlFor="trade-thesis">Your thesis<textarea id="trade-thesis" value={thesis} maxLength={1000} onChange={event => setThesis(event.target.value)} placeholder="What do you expect to happen, and by when?" /></label>
         <small>Thesis stays separate from chart inspection. Included in position discussion; not an instruction to execute.</small>
+        <WorkbenchThesis key={strategy.underlying} state={analysisState} optimizeEnabled={!!marketSnapshot && !marketSnapshot.historical && !pending && !chainPending && !workspaceBusy && !proposal} onOptimize={target => setOptimizerTarget(previous => ({ ...target, version: strategy.version, underlying: strategy.underlying, launch: (previous?.launch ?? 0) + 1 }))} />
       </section>}
 
       <nav className="workspace-nav" aria-label="Workspace sections"><a href="#workspace-chart">Chart</a><a href="#workspace-legs">Legs</a><a href="#workspace-question">Ask ARGUS</a></nav>
@@ -1697,7 +1702,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
 
 
           {analysisState && (cashIndex ? <p className="history-basis">Cash-index options settle in cash; there is no share delivery or early exercise. Settlement amounts and resulting cashflows are not recorded automatically.</p> : <AssignmentOutcomes state={analysisState} snapshot={marketSnapshot ?? undefined} />)}
-          {analysisState && marketSnapshot && !marketSnapshot.historical && <CandidateSearch key={`${strategy.version}:${marketSnapshot.id}`} state={analysisState} snapshot={marketSnapshot} disabled={pending || chainPending || workspaceBusy || !!proposal} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} renderComparison={renderCandidateComparisonCharts} />}
+          {analysisState && marketSnapshot && !marketSnapshot.historical && <div ref={optimizerPanel} className={compact ? 'workbench-optimizer' : undefined}><CandidateSearch key={`${strategy.version}:${marketSnapshot.id}:${compact ? optimizerTarget?.launch ?? 0 : 0}`} initialTarget={compact && optimizerTarget?.underlying === strategy.underlying && optimizerTarget.version === strategy.version ? optimizerTarget : undefined} expanded={compact && !!optimizerTarget && optimizerTarget.version === strategy.version && optimizerTarget.underlying === strategy.underlying} state={analysisState} snapshot={marketSnapshot} disabled={pending || chainPending || workspaceBusy || !!proposal} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} renderComparison={renderCandidateComparisonCharts} /></div>}
           {hasExclusions && <p className="workspace-notice" role="note">Analysis includes {analysisState?.legs.length ?? 0} of {strategy.legs.length} option legs{strategy.stock ? " plus shares" : ""}. Exclusion is hypothetical: saved holdings, entry costs and full-inventory ledger totals are unchanged.{analysisState && <button onClick={() => commit({ ...strategyRef.current, excludedLegIds: undefined })}>Include all legs</button>}</p>}
           <div className="metric-ribbon">
             {metrics ? <>

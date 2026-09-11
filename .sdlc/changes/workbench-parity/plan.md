@@ -11,6 +11,9 @@
 4. Preserve thesis/inspection separation while retaining root worker valuation,
    conversation and persistence. Test failed responses, explicit Apply, save/load,
    held-cost refresh, stale-response rejection and recovery isolation.
+   Structured target/time initially remain explicitly temporary UI inputs. Test
+   them through a cloned read-only chart; prefill existing CandidateSearch only
+   on explicit Optimize. No persistence schema or AI prompt change in this slice.
 5. Broader construction/market search: reuse root workflows; do not simply remove
    prototype mixed-expiry/model guards without updating every dependent display.
 6. Verify tsc, relevant Vitest suites and in-app desktop/mobile interactions;

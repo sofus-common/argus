@@ -2,6 +2,14 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added temporary structured thesis target/UTC horizon to integrated Workbench,
+  with bounded read-only preview and explicit prefill of the existing quoted
+  optimizer. Preserves held entries, position version and millisecond timestamps;
+  search/apply stay separate. Fields are explicitly not saved or sent to AI.
+  TypeScript and focused tests passed; independent review found no blockers.
+  Browser verified rendered controls/disabled guards, not successful native date
+  entry or quoted prefill. Full integration verification remains pending.
+
 - Added an opt-in integrated Workbench at `/?workbench=integrated`: same root
   financial state, validation, Undo, saves and conversation, with top thesis and
   symbol controls, collapsed strategy library/tools, and chart-first layout.
