@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Enabled Either direction in quoted Optimize with editable down/up targets and
+  move-strategy families. Ranks the weaker of two modeled P/Ls, displays both,
+  preserves existing risk/outlay gates and independently verifies returned values.
+  Inspect uses the disclosed upper target. Live quote/search/Apply/Undo/save/reload
+  workflow and desktop/mobile overflow checks pass; no AI call or order added.
+
 - Added an opt-in operational-answer path: the model selects validated topics and
   included leg IDs; code renders assignment/exercise, absent broker policy and
   timestamped closing estimates. Model prose is discarded, holdings unchanged,

@@ -296,6 +296,51 @@ describe('mixed-expiry candidate bounds', () => {
 describe('explicit same-expiry candidate families', () => {
   const snapshot: MarketSnapshot = { id: 'family-search', underlying: 'SPY', source: 'Tastytrade', spot: 100, retrievedAt: '2026-09-01T12:00:00.000Z', spotAsOf: '2026-09-01T12:00:00.000Z', availableExpiries: ['2026-10-09'], contracts: [90, 95, 100, 105, 110].flatMap(strike => (['call', 'put'] as const).map(type => ({ contractId: `SPY   261009${type === 'call' ? 'C' : 'P'}${String(strike * 1000).padStart(8, '0')}`, type, strike, expiry: '2026-10-09T20:00:00.000Z', multiplier: 100 as const, bid: 1, ask: 3, iv: .2, quoteAsOf: '2026-09-01T12:00:00.000Z' }))) };
   const input = { targetSpot: 103, targetDate: '2026-10-09T20:00:00.000Z', maxLoss: 100000, feeAllowance: 5, basis: 'mid' as const, objective: 'target-pnl' as const };
+  it('ranks two-sided targets by the weaker independent payoff without changing legacy searches', () => {
+    const held = createMarketStrategy('long-call', snapshot), before = structuredClone({ held, snapshot });
+    const legacy = searchCandidates(held, snapshot, input);
+    const request = { ...input, objective: 'two-sided-pnl' as const, lowerTargetSpot: 87, targetSpot: 112 };
+    const families = ['long-straddle', 'long-strangle', 'inverse-iron-butterfly', 'inverse-iron-condor', 'short-call-butterfly', 'short-put-butterfly'] as const;
+    for (const basis of ['mid', 'natural'] as const) {
+      const domain = { families: [...families], maxEntryOutlay: 100000, resultMode: 'best-per-family' as const };
+      const result = searchCandidates(held, snapshot, { ...request, basis }, domain);
+      expect(result.candidates).toHaveLength(families.length);
+      expect(result.assumptions).toContain('not expected P/L or a global worst-case loss');
+      const payoff = (legs: OptionLeg[], spot: number) => Math.round((legs.reduce((sum, leg) => {
+        const quote = snapshot.contracts.find(quote => quote.contractId === leg.contractId)!;
+        const entry = basis === 'mid' ? (quote.bid + quote.ask) / 2 : leg.side === 'long' ? quote.ask : quote.bid;
+        return sum + (Math.max(0, leg.type === 'call' ? spot - leg.strike : leg.strike - spot) - entry) * (leg.side === 'long' ? 1 : -1) * leg.contracts * 100;
+      }, -request.feeAllowance)) * 100) / 100;
+      for (const candidate of result.candidates) {
+        expect(candidate.metrics.scenarioPnl).toBe(payoff(candidate.state.legs, request.targetSpot));
+        expect(candidate.downsidePnl).toBe(payoff(candidate.state.legs, request.lowerTargetSpot));
+        expect(candidate.score).toBe(Math.min(candidate.metrics.scenarioPnl, candidate.downsidePnl!));
+        const comparison = compareSearchCandidate(held, snapshot, { id: candidate.id, request: { ...request, basis }, domain }, Date.parse(snapshot.retrievedAt));
+        expect(comparison.state.scenarioSpot).toBe(request.targetSpot);
+        expect(comparison.metrics).toEqual(candidate.metrics);
+        const family = candidateOptionFamily(candidate.state.legs)!;
+        expect(searchCandidates(held, snapshot, { ...request, basis }, { families: [family], maxEntryOutlay: 100000 }).candidates[0]).toEqual(candidate);
+      }
+      const combinations = snapshot.contracts.filter(c => c.type === 'put').flatMap(put => snapshot.contracts.filter(c => c.type === 'call' && c.strike >= put.strike).map(call => {
+        const entry = basis === 'mid' ? 400 : 600;
+        const pnl = (spot: number) => (Math.max(0, put.strike - spot) + Math.max(0, spot - call.strike)) * 100 - entry - 5;
+        return { id: `long:${put.contractId}|long:${call.contractId}`, score: Math.min(pnl(87), pnl(112)) };
+      })).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 5);
+      expect(searchCandidates(held, snapshot, { ...request, basis }, { families: ['long-straddle', 'long-strangle'], maxEntryOutlay: 100000 }).candidates.map(({ id, score }) => ({ id, score }))).toEqual(combinations);
+      const earlier = searchCandidates({ ...held, ivShift: .05 }, snapshot, { ...request, basis, targetDate: '2026-09-15T20:00:00.000Z' }, domain);
+      for (const candidate of earlier.candidates) expect(candidate.downsidePnl).toBe(calculateStrategy({ ...candidate.state, scenarioSpot: 87 }).scenarioPnl);
+      expect(result.candidates.map(c => c.score)).toEqual(result.candidates.map(c => c.score).sort((a, b) => b - a));
+      expect(searchCandidates(held, { ...snapshot, contracts: [...snapshot.contracts].reverse() }, { ...request, basis }, domain)).toEqual(result);
+      expect(searchCandidates(held, snapshot, { ...request, basis }, { ...domain, maxEntryOutlay: 0 }).excludedCost).toBeGreaterThan(0);
+      expect(searchCandidates(held, snapshot, { ...request, basis, maxLoss: 1 }, domain).eligible).toBe(0);
+    }
+    for (const lowerTargetSpot of [undefined, null, 0, -1, 100, 101, NaN, Infinity]) expect(() => searchCandidates(held, snapshot, { ...request, lowerTargetSpot } as never)).toThrow('Invalid candidate search request');
+    for (const targetSpot of [99, 100, 1_000_001]) expect(() => searchCandidates(held, snapshot, { ...request, targetSpot })).toThrow('Invalid candidate search request');
+    for (const objective of ['target-pnl', 'return-on-risk', 'expiry-probability', 'balanced']) expect(() => searchCandidates(held, snapshot, { ...request, objective, ...(objective === 'balanced' ? { chanceWeight: 50 } : {}) } as never)).toThrow('Invalid candidate search request');
+    expect(searchCandidates(held, snapshot, input)).toEqual(legacy);
+    expect(legacy.candidates.every(candidate => !('downsidePnl' in candidate))).toBe(true);
+    expect({ held, snapshot }).toEqual(before);
+  });
   it('ranks only requested directional verticals against an independent payoff oracle', () => {
     const held = createMarketStrategy('long-call', snapshot), before = structuredClone({ held, snapshot });
     for (const basis of ['mid', 'natural'] as const) for (const objective of ['target-pnl', 'return-on-risk'] as const) {

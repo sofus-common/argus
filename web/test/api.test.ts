@@ -171,6 +171,13 @@ it("searches quoted candidates directly without inference and rejects stale or f
   const blendedResponse = await request({ state, search: blendedSearch });
   expect(blendedResponse.status).toBe(200);
   expect(await blendedResponse.json()).toEqual({ search: searchCandidates(state, snapshot, blendedSearch) });
+  const twoSidedSearch = { ...search, objective: 'two-sided-pnl' as const, lowerTargetSpot: 95 };
+  const twoSidedResponse = await request({ state, search: twoSidedSearch });
+  expect(twoSidedResponse.status).toBe(200);
+  expect(await twoSidedResponse.json()).toEqual({ search: searchCandidates(state, snapshot, twoSidedSearch) });
+  for (const lowerTargetSpot of [null, 0, 100, 101, undefined]) expect((await request({ state, search: { ...twoSidedSearch, lowerTargetSpot } })).status).toBe(400);
+  expect((await request({ state, search: { ...search, lowerTargetSpot: 95 } })).status).toBe(400);
+  expect((await request({ state, search: { ...twoSidedSearch, targetSpot: 100 } })).status).toBe(400);
   for (const chanceWeight of [null, -1, 101, .5, undefined]) expect((await request({ state, search: { ...blendedSearch, chanceWeight } })).status).toBe(400);
   expect((await request({ state, search: { ...search, chanceWeight: 50 } })).status).toBe(400);
   expect((await request({ state, search, domain: { ...datedDomain, expiry: at } })).status).toBe(400);

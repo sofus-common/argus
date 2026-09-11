@@ -30,13 +30,16 @@ Financial-behavior plan accepted by the user on September 10, 2026:
    authorized production release. No claim of improved P/L without out-of-sample,
    cost-inclusive evidence.
 
-Checkpoint status: steps 1-2 implemented; step 4 has a tested same-structure
-sensitivity helper and synthetic preview integration. Step 3 remains open:
-the market search's top-five overall ranking, one-lot sizing and entry-outlay
-budget must be reconciled with this UI's best-per-family results and separate
-stock/cash collateral budget. Do not silently substitute one contract for the
-other. Existing market APIs, owner-bound snapshots and freshness gates must be
-reused. End-to-end market replay and production readiness are not yet verified.
+September 11 checkpoint: steps1-2 implemented; quoted Optimize now supports
+best-per-family or global ranking, blend and weaker-of-two-target P/L scoring,
+with explicit cost/price/time/IV stress. Native live replay covers retained quote
+windows, Inspect/Apply/Undo, thesis/fixed costs and save/reload. Search uses fixed
+strategy ratios, not account sizing. Its budget is explicitly net entry outlay,
+not margin, buying power or cash-secured collateral; collateral sizing is not
+implemented and is not silently substituted. Owner-bound snapshot/freshness
+gates remain. Production readiness and broad AI qualification remain unproved;
+see the current workbench-parity and optimizer-engine state records for evidence
+and limitations rather than treating older checkpoint text as current status.
 
 Primary references informing the real-money acceptance boundary:
 [OIC assignment](https://www.optionseducation.org/referencelibrary/faq/options-assignment),

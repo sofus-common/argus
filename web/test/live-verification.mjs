@@ -27,8 +27,8 @@ import { resolve, dirname } from 'node:path';
 
 // Operational routing: five synthetic questions, at most one paid call each.
 if (process.argv.includes('--operational-answer')) {
-  const live = process.argv.includes('--run');
-  assert.ok(process.argv.slice(2).every(flag => ['--operational-answer', '--run', '--self-check'].includes(flag)) && live !== process.argv.includes('--self-check'));
+  const live = process.argv.includes('--run'), mixed = process.argv.includes('--mixed');
+  assert.ok(process.argv.slice(2).every(flag => ['--operational-answer', '--mixed', '--run', '--self-check'].includes(flag)) && live !== process.argv.includes('--self-check'));
   registerHooks({ resolve(specifier, context, next) { return next(specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier) ? new URL(`${specifier}.ts`, context.parentURL).href : specifier, context); } });
   const { spar } = await import('../src/sparring.ts');
   const { createStrategy, createMarketStrategy } = await import('../src/options.ts');
@@ -37,7 +37,13 @@ if (process.argv.includes('--operational-answer')) {
   const seed = createStrategy('bull-call'), now = new Date().toISOString(), expiry = new Date(Date.now() + 14 * 86400000).toISOString();
   const snapshot = { id: 'synthetic-operational', underlying: 'SPY', source: 'Synthetic evaluation', retrievedAt: now, spotAsOf: now, spot: seed.spot, availableExpiries: [expiry.slice(0, 10)], contractTerms: { exerciseStyle: 'American', settlement: 'physical-shares', sharesPerContract: 100, settlementSession: 'PM' }, contracts: seed.legs.map(leg => ({ ...leg, expiry, contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}C${String(leg.strike * 1000).padStart(8, '0')}`, bid: leg.entryPrice, ask: leg.entryPrice + .2, quoteAsOf: now })) };
   const state = createMarketStrategy('bull-call', snapshot), before = structuredClone(state);
-  const cases = [
+  const cases = mixed ? [
+    ['paraphrase', 'If the sold call alone gets taken away from me, what stock would I be left with? The bought call stays open.', 'current-position', ['assignment']],
+    ['partial', 'Only half of my short call quantity is assigned. What shares result?', 'combined-events', ['assignment']],
+    ['ambiguous', 'What happens if it goes through?', 'unclear', ['assignment']],
+    ['thesis', 'Challenge my bullish thesis and explain what could make this spread lose money. Discuss only.', null, []],
+    ['mixed-thesis-policy', 'Challenge my bullish thesis and also tell me my broker exercise cutoff. Do not omit either part. Discuss only.', null, []],
+  ] : [
     ['opposite-events', 'Compare the two independent cases: my short call is assigned but the long is not exercised; or my long call is exercised but the short is not assigned. What shares and strike cashflows result?', 'current-position', ['assignment', 'exercise']],
     ['broker-deadline', 'What is my actual broker exercise cutoff today? Is 5:30 PM definitely my deadline?', 'current-position', ['broker-policy']],
     ['closing-estimate', 'What is the current quoted closing value of the whole position? Can I treat that midpoint as guaranteed proceeds?', 'current-position', ['closing-value']],
@@ -56,17 +62,30 @@ if (process.argv.includes('--operational-answer')) {
     try {
       const result = await spar({ request_id: id, base_state_version: state.version, state, conversation: [{ role: 'user', content: question }] }, key, async (url, init) => {
         assert.ok(++calls <= 1, 'Operational answer failed to terminate after one call');
-        return live ? fetch(url, init) : Response.json({ choices: [{ message: { content: 'Invented deadline 5:30 guaranteed fill', tool_calls: [{ id: 'op', type: 'function', function: { name: 'explain_operational_facts', arguments: JSON.stringify({ scope, topics, legIds: [] }) } }] } }] });
+        const response = live ? await fetch(url, init) : Response.json({ choices: [{ message: scope === null ? { content: 'Routing-only negative control' } : { content: 'Invented deadline 5:30 guaranteed fill', tool_calls: [{ id: 'op', type: 'function', function: { name: 'explain_operational_facts', arguments: JSON.stringify({ scope, topics: scope === 'unclear' ? ['assignment', 'exercise'] : topics, legIds: [] }) } }] } }] });
+        if (scope === null) {
+          assert.equal(response.status, 200);
+          const raw = await response.json();
+          assert.ok(raw.choices?.[0]?.message, 'Missing first-call message');
+          assert.ok(!raw.choices[0].message.tool_calls?.some(call => call.function?.name === 'explain_operational_facts'), 'Operational route swallowed a broader question');
+          throw new Error('negative-route-confirmed');
+        }
+        return response;
       }, { retrievedAt: now, sources: [] }, snapshot, bundle, event => events.push(event));
       const selected = events.find(event => event.reason === 'validated-operational-selection')?.input;
-      assert.equal(selected?.scope, scope); assert.deepEqual([...selected.topics].sort(), [...topics].sort());
+      assert.equal(selected?.scope, scope);
+      if (scope === 'unclear') { assert.match(result.reply.text, /Please clarify/); assert.ok(!result.reply.text.includes('Gross strike')); }
+      else assert.deepEqual([...selected.topics].sort(), [...topics].sort());
       assert.equal(calls, 1); assert.deepEqual(result.reply.operations, []); assert.deepEqual(state, before);
       assert.deepEqual(result.next_state, { ...before, version: before.version + 1 });
       assert.ok(!result.reply.text.includes('5:30'));
       if (id === 'opposite-events') { assert.match(result.reply.text, /resulting shares -100/); assert.match(result.reply.text, /resulting shares 100/); }
       if (id === 'closing-estimate') assert.match(result.reply.text, /not a fill/);
       console.log(JSON.stringify({ id, passed: true, calls, selected, text: result.reply.text }));
-    } catch (error) { failed++; console.log(JSON.stringify({ id, passed: false, calls, error: error.message })); }
+    } catch (error) {
+      if (scope === null && error.message === 'negative-route-confirmed') console.log(JSON.stringify({ id, passed: true, calls, limitation: 'First-call routing only; freeform answer not qualified.' }));
+      else { failed++; console.log(JSON.stringify({ id, passed: false, calls, error: error.message })); }
+    }
   }
   console.log(JSON.stringify({ passed: cases.length - failed, failed, limitation: 'Five routing cases only; not whole-AI qualification or activation.' }));
   process.exit(failed ? 1 : 0);

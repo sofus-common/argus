@@ -1,9 +1,20 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: evaluate operational routing bypasses and mixed questions before promoting the opt-in candidate; retain broad AI qualification gate
+next_action: consolidate launch acceptance and local AI candidate activation evidence, then prepare hosted release approval
 blocker: null
 updated: 2026-09-11
+
+Launch feature checkpoint: two-sided Optimize is implemented and live verified;
+see optimizer-engine/state.md. Integrated browser now covers explicit Apply/Undo
+as well as save/reload and quote search. Workbench/Optimize remain separate.
+Operational mixed live run:4/5 strict assertions passed; ambiguous question chose
+correct unclear scope and two possible topics, but oracle wrongly required only
+assignment. Corrected oracle checks clarification and absence of numeric event
+output; offline5/5 passes with the observed two-topic variant. No prompt/runtime
+change, no repeated paid run. Pure thesis and mixed thesis/policy bypassed the
+narrow tool as intended; their freeform content is not qualified. Candidate still
+not activated. Next priority is consolidated acceptance, not more visual changes.
 
 Operational answer candidate: analysis-operational-v1, digest
 b8233d873f9c6dea5bbf6cd3ce5209ab575f54561c2fc5a858a18968addc51e9.

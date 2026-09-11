@@ -1,5 +1,16 @@
 # Accepted implementation plan
 
+Two-sided launch increment (continued goal): explicit `two-sided-pnl` objective
+requires lowerTargetSpot below the quoted spot and targetSpot above it. Use the
+weaker of the two modeled net P/L outcomes at the same date, IV and costs; no
+probability blend or expected-return claim. Reuse enumeration and risk/outlay
+gates, caching per-contract values at both targets. Preserve upper-target metrics
+and Inspect; expose separate downsidePnl and reconcile it in the client worker.
+Either-direction preset uses disclosed +/-6% starter targets and move families;
+users can edit both prices and families. No automatic search, Apply or order.
+Prove independent payoff replay, quote order, family winners, malformed input,
+API/client tampering, and live Inspect/Apply/Undo. Current checkout is approved.
+
 1. options.ts shared numeric validation and existing regression tests: AC1.
 2. Independent pricing-benchmarks.test.ts with sourced references: AC2.
 3. Inspect and reuse existing market snapshot/search seams for the local Optimize

@@ -50,6 +50,32 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('#trade-thesis').inputValue(), 'Verification: modest rise; reject if downside exceeds budget.');
     assert.deepEqual(await page.locator('.leg-row').evaluateAll(rows => rows.map(row => ({ quantity: row.querySelector('[aria-label="Contracts"]').value, premium: row.querySelector('[aria-label="Entry premium"]').value }))), held);
     await page.getByRole('button', { name: 'Keep current', exact: true }).click();
+    await page.getByRole('button', { name: 'Optimize', exact: true }).click();
+    await page.getByRole('button', { name: 'Either direction', exact: true }).click();
+    assert.equal(await page.getByLabel('Optimizer objective').inputValue(), 'two-sided-pnl');
+    await page.getByLabel('Optimizer target date UTC').fill(`${later}T16:00`);
+    await page.getByLabel('Optimizer maximum loss').fill('5000');
+    const lower = await page.getByLabel('Optimizer down-move target price').inputValue();
+    await page.getByLabel('Optimizer down-move target price').fill(await page.getByLabel('Optimizer target price').inputValue());
+    assert.equal(await page.getByRole('button', { name: 'Find strategies', exact: true }).isDisabled(), true);
+    await page.getByLabel('Optimizer down-move target price').fill(lower);
+    assert.equal(await page.getByRole('button', { name: 'Find strategies', exact: true }).isDisabled(), false, await page.locator('.compact-optimizer').textContent());
+    assert.deepEqual(await page.locator('.compact-optimizer input:invalid').evaluateAll(inputs => inputs.map(input => ({ label: input.getAttribute('aria-label'), value: input.value, reason: input.validationMessage }))), [], 'Valid native optimizer inputs');
+    const searching = page.waitForResponse(response => response.url().endsWith('/api/candidates')).catch(error => ({ error }));
+    await page.getByRole('button', { name: 'Find strategies', exact: true }).click();
+    const searched = await searching;
+    if ('error' in searched) throw searched.error;
+    assert.equal(searched.status(), 200, await searched.text());
+    const dual = (await searched.json()).search;
+    assert.equal(dual.request.objective, 'two-sided-pnl');
+    assert.ok(dual.candidates.length > 0);
+    dual.candidates.forEach(candidate => assert.equal(candidate.score, Math.min(candidate.metrics.scenarioPnl, candidate.downsidePnl)));
+    await page.locator('.quoted-candidate-card').first().waitFor();
+    assert.ok((await page.locator('.quoted-candidate-card').first().textContent()).includes('Down-move P/L'));
+    await page.getByRole('button', { name: 'Inspect strategy', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Apply proposal', exact: true }).click();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    assert.deepEqual(await page.locator('.leg-row').evaluateAll(rows => rows.map(row => ({ quantity: row.querySelector('[aria-label="Contracts"]').value, premium: row.querySelector('[aria-label="Entry premium"]').value }))), held);
     await page.locator('.workspace-tools>summary').click();
     await page.locator('.saved-workspace>summary').click();
     await page.getByLabel('Saved strategy title').fill(`Launch verification ${Date.now()}`);
@@ -82,7 +108,7 @@ const assert = require('node:assert/strict');
       await page.getByRole('button', { name: 'Optimize', exact: true }).click();
     }
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ passed: true, laterExpiry: later, retainedLegs: held.length, checks: ['quoted-window', 'preferences', 'fixed-costs', 'thesis', 'inspect-cancel', 'save-reload', 'new-thesis-reset', 'desktop-mobile-overflow'] }));
+    console.log(JSON.stringify({ passed: true, laterExpiry: later, retainedLegs: held.length, checks: ['quoted-window', 'preferences', 'fixed-costs', 'thesis', 'inspect-cancel', 'save-reload', 'new-thesis-reset', 'two-sided-search', 'apply-undo', 'desktop-mobile-overflow'] }));
   } catch (error) { console.error({ url: page.url(), errors, thesisFields: await page.locator('textarea').evaluateAll(nodes => nodes.map(node => ({ id: node.id, label: node.getAttribute('aria-label'), value: node.value }))) }); throw error; }
   finally {
     if (savedId) {

@@ -1,9 +1,24 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: implement and verify two-sided move scoring
+next_action: reconcile final engine acceptance and hosted release evidence; two-sided scoring implemented locally
 blocker: null
 updated: 2026-09-11
+
+Two-sided checkpoint: Either direction now selects editable down/up targets and
+move families. Engine ranks weaker conditional net P/L at the two prices, not
+expected P/L/global worst case; same date, IV, costs and existing budgets.
+Strict lower<quoted spot<upper validation; client revalues both outcomes and
+rejects altered downside/score/request. Inspect remains explicitly upper-target.
+Independent review found no blockers. Eight presentation/client tests, focused
+engine/API acceptance (--testTimeout20000), TypeScript/build and live integrated journey pass: Oct9
+quoted window, preferences, fixed costs/thesis, two-sided cards, Inspect/Apply/Undo,
+save/reload, invalid target prevention and1440/390px overflow. Broad engine/API
+run165passed with two separate lot-discussion timeout failures; no full API pass
+claimed. One fresh candidate API run exceeded the default5s test ceiling; the
+bounded20s rerun passed both acceptance checks in1.60s total test execution.
+Saved reload requires fresh quotes; browser search moved before reload.
+No production deployment. Older checkpoint text below is historical.
 approvals:
   - gate: plan
     decision: accepted

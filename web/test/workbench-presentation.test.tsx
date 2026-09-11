@@ -24,13 +24,14 @@ it('opens optimizer navigation and renders controls without allowing unquoted se
   expect(html).toContain('<button type="submit" disabled="">Find strategies</button>')
   expect(html).not.toContain('DATED QUOTES')
 })
-it('uses explicit outlook presets without inferring forecasts or allowing two-sided scoring', () => {
+it('uses explicit outlook presets including two-sided move targets without inferring forecasts', () => {
   expect(outlookPreset('Bullish', 200)).toEqual({ target: 206, families: ['long-call', 'bull-call', 'bull-put'] })
   expect(outlookPreset('Very bullish', 200)?.target).toBe(212)
   expect(outlookPreset('Bearish', 200)).toEqual({ target: 194, families: ['long-put', 'bear-call', 'bear-put'] })
   expect(outlookPreset('Very bearish', 200)?.target).toBe(188)
   expect(outlookPreset('Neutral', 200)?.target).toBe(200)
-  for (const [label, spot] of [['Either direction', 200], ['unknown', 200], ['Bullish', 1000000], ['Bullish', NaN], ['Bearish', 0]] as const) expect(outlookPreset(label, spot)).toBeNull()
+  expect(outlookPreset('Either direction', 200)).toEqual({ target: 212, lowerTarget: 188, families: ['long-straddle', 'long-strangle', 'inverse-iron-butterfly', 'inverse-iron-condor'] })
+  for (const [label, spot] of [['unknown', 200], ['Bullish', 1000000], ['Bullish', NaN], ['Bearish', 0]] as const) expect(outlookPreset(label, spot)).toBeNull()
 })
 it('keeps the compact view on the root state owner without replacing the original layout', () => {
   vi.stubGlobal('window', { location: { search: '' } })
@@ -120,6 +121,15 @@ it('validates grouped search counts and distinct families without weakening lega
   const datedDomain = { ...domain, expiry }
   const dated = searchCandidates(state, snapshot, input, datedDomain)
   await expect(checkSearch(dated, state, snapshot, input, datedDomain, signal)).resolves.toEqual(dated)
+  const twoSidedInput = { ...input, targetSpot: 110, lowerTargetSpot: 90, objective: 'two-sided-pnl' as const }
+  const twoSided = searchCandidates(state, snapshot, twoSidedInput, datedDomain)
+  await expect(checkSearch(twoSided, state, snapshot, twoSidedInput, datedDomain, signal)).resolves.toEqual(twoSided)
+  for (const field of ['downsidePnl', 'score'] as const) {
+    const changed = structuredClone(twoSided); changed.candidates[0][field]! += .01
+    await expect(checkSearch(changed, state, snapshot, twoSidedInput, datedDomain, signal)).rejects.toThrow(/reconciled/)
+  }
+  for (const lowerTargetSpot of [0, 100, 101, NaN, undefined]) await expect(checkSearch(twoSided, state, snapshot, { ...twoSidedInput, lowerTargetSpot }, datedDomain, signal)).rejects.toThrow(/constraints/)
+  await expect(checkSearch({ ...twoSided, request: { ...twoSidedInput, lowerTargetSpot: 89 } }, state, snapshot, twoSidedInput, datedDomain, signal)).rejects.toThrow(/request/)
   const blendedInput = { ...input, objective: 'balanced' as const, chanceWeight: 50 }
   const blended = searchCandidates(state, snapshot, blendedInput, datedDomain)
   await expect(checkSearch(blended, state, snapshot, blendedInput, datedDomain, signal)).resolves.toEqual(blended)
