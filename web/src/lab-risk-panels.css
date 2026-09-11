@@ -1,0 +1,11 @@
+.lab-risk{border-top:1px solid #294657;margin-top:12px;font-size:12px;line-height:1.5}
+.lab-risk details{padding:10px 0;border-bottom:1px solid #294657}
+.lab-risk summary{cursor:pointer;min-height:24px;font-weight:600;color:#e5f4ff}
+.lab-risk summary span{margin-left:12px;font-weight:400;color:#a8c5d8}
+.lab-risk p{margin:8px 0;color:#a8c5d8;overflow-wrap:anywhere}
+.lab-risk dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0}
+.lab-risk dt{color:#a8c5d8}.lab-risk dd{margin:4px 0;font-size:16px;font-variant-numeric:tabular-nums;color:#e5f4ff}
+.lab-risk ul{padding-left:18px;overflow-wrap:anywhere}.lab-risk li{margin:6px 0}
+.lab-risk .snapshot-age{display:grid;gap:4px;margin:10px 0;color:#a8c5d8}.lab-risk .snapshot-age small{font-size:12px}
+.lab-risk .assignment-panel{border-bottom:0}.lab-risk .assignment-outcomes article{padding:8px;border:1px solid #294657;border-radius:4px;margin:8px 0}.lab-risk h4{margin:0;font-size:13px}
+@media(max-width:780px){.lab-risk summary{min-height:44px;align-content:center}.lab-risk summary span{display:block;margin-left:0}.lab-risk dl{grid-template-columns:1fr}.lab-risk dd{margin-top:0}}

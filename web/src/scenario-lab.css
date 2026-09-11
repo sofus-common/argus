@@ -76,6 +76,12 @@
 .lab-sparring{padding:16px;background:#0b1c28}
 .lab-sparring h2{font-size:20px;margin:12px 0 6px}
 .lab-sparring header{gap:4px}
+.lab-side .workspace-context{padding:12px;border:1px solid #315365;border-radius:7px;font-size:12px;line-height:1.6;overflow-wrap:anywhere;background:#0b1c28}
+.lab-side .workspace-context summary{cursor:pointer}
+.lab-side .workspace-context p,.lab-side .workspace-context button{margin:10px 0}
+.lab-side .workspace-context-sources>details{padding:10px 0;border-top:1px solid #315365}
+.lab-side .workspace-context small{display:block}
+.lab-side .workspace-context a{color:#74cdea}
 .lab-prompts{margin:12px 0}
 .lab-caption,.lab-evidence p{font-size:12px}
 .lab-greeks{grid-template-columns:repeat(5,minmax(0,1fr))}

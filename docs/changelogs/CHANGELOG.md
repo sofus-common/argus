@@ -2,6 +2,14 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added compact read-only execution, assignment/contract-term and conditional
+  probability disclosures using existing financial calculations. Reused the
+  explicit-load market context panel without changing position or AI state.
+  Verified TypeScript, 13 focused tests, desktop disclosure interactions and
+  context retrieval (12 available items, 3 explicit gaps), plus independent review.
+  Quote cases use fixtures; full market/AI/state migration and mobile verification
+  remain pending. No production deployment.
+
 - Compressed the Workbench top section: shorter navigation and instrument bars,
   one-row desktop thesis inputs, inline fit guidance and leg count, and removal
   of redundant eyebrow headings. Preserved field labels, warnings and mobile
