@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: merge dated optimizer presentation and stress comparison before promoting integrated Workbench
+next_action: migrate prototype direction icons, expiry strip and ranking controls before promoting integrated Workbench
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -105,3 +105,12 @@ duplicate-family responses fail closed. Live bullish search produced three disti
 families. Engine replay and client tampering regressions pass. Remaining work is
 the visual optimizer/dated quote presentation and market stress comparison merge;
 do not equate this search checkpoint with full prototype replacement.
+
+Eighth checkpoint: separate integrated Workbench/Optimize screens share state;
+quoted result cards reuse prototype expiry plots. On-demand stress uses the
+existing valuation worker with bounded reply validation and cancellation.
+TypeScript and 33 focused tests passed. Browser quoted search, seven stress rows,
+mid/natural estimates and Inspect return passed; held Iron Condor stayed unchanged
+and Apply remained explicit. Review found and fixed hidden inspection errors.
+Mobile verification of this checkpoint remains pending. Direction icons, expiry
+strip and ranking blend are not yet migrated. No deployment or default promotion.

@@ -2,8 +2,43 @@ import { isChartRange, scenarioSpots, type ChartRange, type StrategyState, type 
 import { prepareLotScenarioComparison, type LotScenarioInput, type LotScenario } from "./lot-scenarios";
 export type { LotScenarioSide, LotScenarioInput, LotScenario } from "./lot-scenarios";
 import type { calculateWorkspaceValuation, WorkspaceView } from "./workspace-valuation";
+import type { MarketSnapshot } from "./options";
+import type { optimizerSensitivity } from "./optimizer-sensitivity";
 
 let nextRequestId = 0;
+
+export function requestOptimizerSensitivity(state: StrategyState, snapshot: MarketSnapshot, signal: AbortSignal): Promise<ReturnType<typeof optimizerSensitivity>> {
+  if (signal.aborted) return Promise.reject(new DOMException("Calculation cancelled", "AbortError"));
+  const id = ++nextRequestId, baseVersion = state.version, model = state.valuationModel ?? "european-bsm-v1", snapshotId = snapshot.id, baseline = JSON.stringify(state);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./workspace-valuation.worker.ts", import.meta.url), { type: "module" });
+    let settled = false;
+    const cleanup = () => { settled = true; worker.terminate(); worker.onmessage = null; worker.onerror = null; worker.onmessageerror = null; signal.removeEventListener("abort", abort); };
+    const abort = () => { if (settled) return; cleanup(); reject(new DOMException("Calculation cancelled", "AbortError")); };
+    signal.addEventListener("abort", abort, { once: true });
+    worker.onmessage = event => {
+      if (settled) return;
+      if (signal.aborted) { abort(); return; }
+      cleanup();
+      const result = event.data?.result, value = result?.sensitivity;
+      const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value);
+      const names = ['Unchanged price', 'Smaller move', 'Adverse move', 'At first expiry', 'IV +5 points', 'IV -5 points', 'Adverse move and IV -5 points'];
+      const valid = event.data?.id === id && !event.data?.error && result?.baseVersion === baseVersion && result?.model === model && result?.snapshotId === snapshotId
+        && JSON.stringify(value?.baseline?.state) === baseline && finite(value?.baseline?.pnl)
+        && typeof value?.assumptions === 'string' && value.assumptions.length > 0 && value.assumptions.length <= 4096
+        && Array.isArray(value?.scenarios) && value.scenarios.length === names.length
+        && value.scenarios.every((row: ReturnType<typeof optimizerSensitivity>['scenarios'][number], index: number) => row?.name === names[index] && row.state?.version === baseVersion
+          && (row.pnl === null ? typeof row.unavailable === 'string' && row.unavailable.length > 0 : finite(row.pnl) && row.unavailable === null))
+        && Array.isArray(value?.entries) && value.entries.length === 2
+        && value.entries.every((row: NonNullable<ReturnType<typeof optimizerSensitivity>['entries']>[number], index: number) => row?.basis === ['mid', 'natural'][index] && row.state?.version === baseVersion && finite(row.pnl));
+      if (!valid) reject(new Error("Invalid optimizer sensitivity result"));
+      else resolve(value);
+    };
+    worker.onerror = worker.onmessageerror = () => { if (settled) return; cleanup(); reject(new Error("Optimizer sensitivity worker failed.")); };
+    try { worker.postMessage({ action: "optimizer-sensitivity", id, state, snapshot }); }
+    catch (error) { if (!settled) { cleanup(); reject(error); } }
+  });
+}
 
 export function requestFirstExpiryBreakevens(state: StrategyState, min: number, max: number, signal: AbortSignal): Promise<ReturnType<typeof firstExpiryBreakevens>> {
   if (signal.aborted) return Promise.reject(new DOMException("Calculation cancelled", "AbortError"));

@@ -2,6 +2,14 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Integrated Workbench and Optimize now use separate screens with shared state.
+  Quoted candidates reuse compact prototype expiry plots and offer on-demand
+  worker-backed price/time/IV and midpoint/natural stress comparisons. Inspect
+  returns to Workbench without applying. Inspection errors remain visible.
+  TypeScript and 33 focused tests pass; browser quoted search, seven stress rows,
+  entry comparisons and Inspect handoff passed. Direction icons, expiry strip
+  and ranking blend migration remain pending. No deployment.
+
 - Added quoted optimizer result grouping: best eligible structure per strategy
   family, with the previous global top-five mode still selectable. Uses unchanged
   pricing, fee, risk/outlay filters and deterministic score/ID ordering. Client

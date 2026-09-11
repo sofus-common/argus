@@ -55,10 +55,10 @@ export function ExpiryStrip({ expiry, onChange, dates = LAB_SAMPLE_EXPIRIES }: {
   </section>
 }
 
-function ExpiryPlot({ state, breakevens = [] }: { state: StrategyState; breakevens?: number[] }) {
+export function ExpiryPlot({ state, breakevens = [], referenceSpot = 100 }: { state: StrategyState; breakevens?: number[]; referenceSpot?: number }) {
   const id = useId()
-  const min = Math.min(95, state.scenarioSpot - 1, ...state.legs.map(leg => leg.strike - 1))
-  const max = Math.max(110, state.scenarioSpot + 1, ...state.legs.map(leg => leg.strike + 1))
+  const min = Math.max(0, Math.min(referenceSpot * .95, state.scenarioSpot - 1, ...state.legs.map(leg => leg.strike - 1)))
+  const max = Math.max(referenceSpot * 1.1, state.scenarioSpot + 1, ...state.legs.map(leg => leg.strike + 1))
   const expiry = state.legs[0].expiry
   const points = new Map(payoffSeries(state, min, max, 80).map(point => [point.spot, point.pnl]))
   for (const leg of state.legs) points.set(leg.strike, evaluateScenario({ ...state, scenarioSpot: leg.strike, scenarioDate: expiry }).pnl)
@@ -75,10 +75,10 @@ function ExpiryPlot({ state, breakevens = [] }: { state: StrategyState; breakeve
     {[0, 1, 2, 3, 4].map(i => { const spot = min + (max - min) * i / 4; return <g key={i}><line x1={x(spot)} x2={x(spot)} y1="30" y2="204" className="opt-gridline"/><text x={x(spot)} y="221" textAnchor="middle">{spot.toFixed(1)}</text></g> })}
     <line x1="54" x2="396" y1={y(0)} y2={y(0)} className="opt-zero"/>
     <path d={area} fill={`url(#${id}-green)`} clipPath={`url(#${id}-gain)`}/><path d={area} fill={`url(#${id}-red)`} clipPath={`url(#${id}-loss)`}/>
-    <line x1={x(state.scenarioSpot)} x2={x(state.scenarioSpot)} y1="30" y2="204" className="opt-target-line"/><text x={x(state.scenarioSpot)} y="19" textAnchor="middle">Target ${state.scenarioSpot}</text>
+    <line x1={x(state.scenarioSpot)} x2={x(state.scenarioSpot)} y1="30" y2="204" className="opt-target-line"/><text x={x(state.scenarioSpot)} y="19" textAnchor="middle">Target {state.underlyingKind === 'cash-index' ? '' : '$'}{state.scenarioSpot}</text>
     {breakevens.filter(value => value >= min && value <= max).map(value => <g key={value}><circle cx={x(value)} cy={y(0)} r="3" className="opt-breakeven-dot"/><text x={x(value)} y={Math.max(43, y(0) - 8)} textAnchor="middle">BE {value.toFixed(2)}</text></g>)}
     <path d={path} className="opt-gain-line" clipPath={`url(#${id}-gain)`}/><path d={path} className="opt-loss-line" clipPath={`url(#${id}-loss)`}/>
-    <text x="225" y="242" textAnchor="middle">Underlying price at expiry ($)</text><text transform="translate(12 117) rotate(-90)" textAnchor="middle">P/L (USD)</text>
+    <text x="225" y="242" textAnchor="middle">{state.underlyingKind === 'cash-index' ? 'Index level at expiry (points)' : 'Underlying price at expiry ($)'}</text><text transform="translate(12 117) rotate(-90)" textAnchor="middle">P/L (USD)</text>
   </svg>
 }
 

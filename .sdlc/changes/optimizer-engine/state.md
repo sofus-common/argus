@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: integrate dated quote optimizer presentation and market stress comparisons without synthetic fallback
+next_action: finish prototype direction, expiry and ranking control migration without synthetic fallback
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -36,3 +36,10 @@ Live three-family bullish search returned bull put, bull call and long call resu
 Inspect/Apply/Undo passed. No synthetic fallback, order or AI call was added.
 The old prototype visual optimizer is not yet the market-quote presentation;
 AC3/AC4 remain incomplete. No deployment or default-page promotion.
+
+Presentation/stress checkpoint: separate integrated Optimize screen, compact
+quoted expiry plots and explicit worker-backed sensitivity using the existing
+deterministic helper. Browser returned seven scenario and two entry-basis rows;
+Inspect returned to Workbench without applying. TypeScript and 33 focused tests
+passed. Direction icons, expiry strip and ranking blend remain pending; overall
+AC3 is not complete. No production deployment or default-page promotion.

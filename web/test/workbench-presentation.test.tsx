@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { App } from '../src/App'
 import { CandidateSearch, checkSearch } from '../src/CandidateSearch'
+import { ExpiryPlot } from '../src/scenario-lab-optimizer'
 import { candidateStrategyFamily, createMarketStrategy, createStrategy, searchCandidates, type MarketSnapshot } from '../src/options'
 import * as valuationClient from '../src/workspace-valuation-client'
 import { calculateWorkspaceValuation } from '../src/workspace-valuation'
@@ -23,6 +24,22 @@ it('keeps the compact view on the root state owner without replacing the origina
   expect(compact).toContain('Thesis target price')
   expect(compact).toContain('Thesis horizon UTC')
   expect(compact).toContain('Optimize trade')
+  expect(compact).toContain('Workbench and optimizer')
+  expect(original).not.toContain('Workbench and optimizer')
+})
+
+it('scales the shared expiry plot to market levels and labels cash-index units', () => {
+  const state = createStrategy('long-call')
+  state.spot = 760; state.scenarioSpot = 770
+  state.legs[0].strike = 765
+  state.legs[0].contractId = 'SPY   260918C00765000'
+  state.pricing = { mode: 'market', snapshotId: 'plot', basis: 'mid' }
+  const html = renderToStaticMarkup(<ExpiryPlot state={state} referenceSpot={760} />)
+  expect(html).toContain('prices 722 to 836')
+  expect(html).not.toContain('prices 95')
+  const index = renderToStaticMarkup(<ExpiryPlot state={{ ...state, underlying: 'XSP', underlyingKind: 'cash-index', legs: state.legs.map(leg => ({ ...leg, contractId: leg.contractId.replace('SPY', 'XSP') })) }} referenceSpot={760} />)
+  expect(index).toContain('Index level at expiry (points)')
+  expect(index).not.toContain('Underlying price at expiry ($)')
 })
 
 it('prefills an explicit optimizer target without changing the held scenario', () => {

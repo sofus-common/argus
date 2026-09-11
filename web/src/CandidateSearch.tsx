@@ -1,8 +1,35 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CANDIDATE_OPTION_FAMILIES, candidateOptionFamily, candidateStrategyFamily, expirationProbability, firstExpirySpreadLossBound, validateMarketStrategy, type MarketSnapshot, type StrategyState, type searchCandidates } from './options'
-import { requestWorkspaceValuation } from './workspace-valuation-client'
+import { requestWorkspaceValuation, requestOptimizerSensitivity } from './workspace-valuation-client'
+import { ExpiryPlot } from './scenario-lab-optimizer'
+import type { optimizerSensitivity } from './optimizer-sensitivity'
 
 export type CandidateSearchResult = ReturnType<typeof searchCandidates>
+
+export function CandidateStress({ state, snapshot }: { state: StrategyState; snapshot: MarketSnapshot }) {
+  const [result, setResult] = useState<ReturnType<typeof optimizerSensitivity> | null>(null)
+  const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
+  const request = useRef<AbortController | null>(null)
+  useEffect(() => () => request.current?.abort(), [state, snapshot])
+  const calculate = async () => {
+    request.current?.abort()
+    const controller = new AbortController(); request.current = controller
+    setPending(true); setError(''); setResult(null)
+    try { const value = await requestOptimizerSensitivity(state, snapshot, controller.signal); if (!controller.signal.aborted) setResult(value) }
+    catch { if (!controller.signal.aborted) setError('Stress comparison unavailable for this quoted position. No synthetic fallback was used.') }
+    finally { if (!controller.signal.aborted) setPending(false) }
+  }
+  return <details className="candidate-stress"><summary>Stress price, time, IV & entry costs</summary>
+    <button type="button" disabled={pending} onClick={() => void calculate()}>{pending ? 'Calculating stress…' : 'Calculate stress comparison'}</button>
+    {error && <p role="alert">{error}</p>}
+    {result && <><p>{result.assumptions}</p><div className="candidate-stress-table"><table><caption>Same position · dated quotes · modeled P/L in USD</caption><thead><tr><th>Scenario</th><th>P/L</th><th>Change vs target</th></tr></thead><tbody>
+      <tr><th>Target baseline</th><td>{money(result.baseline.pnl)}</td><td>—</td></tr>
+      {result.scenarios.map(row => <tr key={row.name}><th>{row.name}</th><td title={row.unavailable ?? undefined}>{row.pnl === null ? 'Unavailable' : money(row.pnl)}</td><td>{row.pnl === null ? '—' : money(row.pnl - result.baseline.pnl)}</td></tr>)}
+      {result.entries?.map(row => <tr key={row.basis}><th>{row.basis === 'mid' ? 'Midpoint' : 'Natural'} entry estimate</th><td>{money(row.pnl)}</td><td>{money(row.pnl - result.baseline.pnl)}</td></tr>)}
+    </tbody></table></div></>}
+  </details>
+}
 type Search = CandidateSearchResult['request']
 type Domain = NonNullable<Parameters<typeof searchCandidates>[3]>
 const familyLabels = { options: 'Options only', 'long-call': 'Long call', 'long-put': 'Long put', 'bull-call': 'Bull call spread', 'bear-call': 'Bear call spread', 'bull-put': 'Bull put spread', 'bear-put': 'Bear put spread', 'long-straddle': 'Long straddle', 'long-strangle': 'Long strangle', 'call-butterfly': 'Call butterfly', 'put-butterfly': 'Put butterfly', 'short-call-butterfly': 'Short call butterfly', 'short-put-butterfly': 'Short put butterfly', 'iron-butterfly': 'Iron butterfly', 'inverse-iron-butterfly': 'Inverse iron butterfly', 'iron-condor': 'Iron condor', 'inverse-iron-condor': 'Inverse iron condor', 'covered-call': 'Covered call', 'protective-put': 'Protective put', collar: 'Collar', 'call-calendar': 'Call calendar', 'put-calendar': 'Put calendar', 'call-diagonal': 'Call diagonal', 'put-diagonal': 'Put diagonal' } as const
@@ -147,7 +174,14 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
       <details><summary>Probability assumptions</summary><p>{result.probabilityBasis}</p></details>
       {!result.candidates.length && <p>No quoted strategies satisfy these constraints.</p>}
       <CandidateComparison result={result} snapshot={snapshot} disabled={disabled || pending} onInspect={onInspect} renderComparison={renderComparison} />
-      {result.candidates.map((candidate, index) => <article key={candidate.id}><h4>{index + 1}. {candidate.state.stock && `100 shares @ ${money(candidate.state.stock.entryPrice)} dated mark / `}{candidate.state.legs.map(leg => `${leg.side} ${leg.contracts} × ${leg.strike} ${leg.type} · ${leg.expiry.slice(0, 10)}`).join(' / ')}</h4><p>Net entry outlay {money(entryOutlay(candidate.state))} · Target P/L {money(candidate.metrics.scenarioPnl)} · {candidate.lossBound ? `conservative first-expiry loss bound ${money(candidate.lossBound.amount)}` : `exact expiry max loss ${money(candidate.metrics.maxLoss)}`} · max profit {candidate.lossBound ? 'Not exact' : money(candidate.metrics.maxProfit)} · score {candidate.score.toFixed(3)}</p>{candidate.lossBound && <p>{candidate.lossBound.basis} Return-on-risk uses this conservative bound as denominator, not exact maximum loss.</p>}<p>Modeled expiry profit probability {candidate.probability.probability === null ? 'Unavailable' : `${(candidate.probability.probability * 100).toFixed(1)}%`} · not a forecast.</p><button disabled={disabled || pending} onClick={() => onInspect(result, snapshot, candidate.id)}>Inspect strategy</button></article>)}
+      <div className="quoted-candidate-grid">{result.candidates.map((candidate, index) => <article className="quoted-candidate-card" key={candidate.id}>
+        <header><small>#{index + 1} · DATED QUOTES</small><h3>{familyLabels[candidateStrategyFamily(candidate.state) ?? 'options']}</h3><p>{candidate.state.stock && `100 shares @ ${money(candidate.state.stock.entryPrice)} / `}{candidate.state.legs.map(leg => `${leg.side === 'long' ? 'Buy' : 'Sell'} ${leg.contracts} × ${leg.strike}${leg.type === 'call' ? 'C' : 'P'} · ${leg.expiry.slice(0, 10)}`).join(' / ')}</p></header>
+        <dl className="quoted-candidate-metrics"><div><dt>Target P/L</dt><dd>{money(candidate.metrics.scenarioPnl)}</dd></div><div><dt>{candidate.lossBound ? 'First-expiry loss bound' : 'Expiry max loss'}</dt><dd>{money(candidate.lossBound?.amount ?? candidate.metrics.maxLoss)}</dd></div><div><dt>Net entry outlay</dt><dd>{money(entryOutlay(candidate.state))}</dd></div><div><dt>Modeled expiry chance</dt><dd>{candidate.probability.probability === null ? 'Unavailable' : `${(candidate.probability.probability * 100).toFixed(1)}%`}</dd></div></dl>
+        {!candidate.lossBound ? <><ExpiryPlot state={candidate.state} referenceSpot={snapshot.spot} breakevens={candidate.metrics.breakevens} /><small>Expiration payoff · {candidate.state.legs[0].expiry.slice(0, 10)} · not target-date P/L</small></> : <p>{candidate.lossBound.basis} Mixed expiries: no single terminal payoff chart. Inspect to compare modeled curves.</p>}
+        <p>Max profit {candidate.lossBound ? 'Not exact' : money(candidate.metrics.maxProfit)} · rank score {candidate.score.toFixed(3)}. Chance is a model estimate, not a forecast. Outlay is not collateral.</p>
+        <button disabled={disabled || pending} onClick={() => onInspect(result, snapshot, candidate.id)}>Inspect strategy</button>
+        <CandidateStress key={`${snapshot.id}:${candidate.id}:${JSON.stringify(result.request)}`} state={candidate.state} snapshot={snapshot} />
+      </article>)}</div>
     </section>}
   </details></section>
 }

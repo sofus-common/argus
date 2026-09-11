@@ -3,11 +3,50 @@ import { createMarketStrategy, searchCandidates, compareSearchCandidate, type Ma
 import { calculateStrategy, createStrategy, evaluateScenario, firstExpiryRange, firstExpiryBreakevens, payoffSeries, scenarioSeries, scenarioCurve, scenarioHeatmap, scenarioFacts, scenarioTable, scenarioSpotAttribution, isChartRange, type ChartRange, TEMPLATES } from "../src/options";
 import { calculateWorkspaceValuation } from "../src/workspace-valuation";
 import { assertRemainingLotInventory, calculateLotScenarioComparison } from "../src/lot-scenarios";
-import { requestWorkspaceValuation, requestLotScenarioComparison, requestFirstExpiryRange, requestFirstExpiryBreakevens, type LotScenarioSide } from "../src/workspace-valuation-client";
+import { requestWorkspaceValuation, requestLotScenarioComparison, requestFirstExpiryRange, requestFirstExpiryBreakevens, requestOptimizerSensitivity, type LotScenarioSide } from "../src/workspace-valuation-client";
+import { optimizerSensitivity } from '../src/optimizer-sensitivity';
 import { createPosition } from "../src/position-lifecycle";
 import { projectPositionLots, upgradePositionLots, recordLotTransaction, recordLotOpeningPriceCorrection } from "../src/position-lots";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('validates and cancels off-thread optimizer sensitivity replies', async () => {
+  class FakeWorker {
+    static latest: FakeWorker;
+    onmessage: ((event: { data: unknown }) => void) | null = null;
+    onerror: (() => void) | null = null; onmessageerror = null;
+    sent!: { id: number; action: string };
+    terminate = vi.fn();
+    constructor() { FakeWorker.latest = this; }
+    postMessage(data: typeof this.sent) { this.sent = data; }
+  }
+  vi.stubGlobal('Worker', FakeWorker);
+  const at = '2026-09-01T20:00:00.000Z', expiry = '2026-09-18T20:00:00.000Z';
+  const snapshot: MarketSnapshot = { id: 'stress-worker', underlying: 'SPY', source: 'Tastytrade', retrievedAt: at, spotAsOf: at, spot: 100, availableExpiries: [expiry.slice(0, 10)], contracts: [{ contractId: 'SPY   260918C00100000', type: 'call', strike: 100, expiry, multiplier: 100, bid: 2, ask: 3, iv: .25, quoteAsOf: at }] };
+  const state = createMarketStrategy('long-call', snapshot);
+  for (const corruption of ['none', 'id', 'version', 'model', 'snapshot', 'baseline', 'pnl', 'missing', 'error', 'abort', 'worker-error']) {
+    const controller = new AbortController(), pending = requestOptimizerSensitivity(state, snapshot, controller.signal), worker = FakeWorker.latest;
+    expect(worker.sent.action).toBe('optimizer-sensitivity');
+    if (corruption === 'abort') { controller.abort(); await expect(pending).rejects.toMatchObject({ name: 'AbortError' }); }
+    else if (corruption === 'worker-error') { worker.onerror!(); await expect(pending).rejects.toThrow('worker failed'); }
+    else {
+      const result = { baseVersion: state.version, model: state.valuationModel ?? 'european-bsm-v1', snapshotId: snapshot.id, sensitivity: optimizerSensitivity(state, snapshot) };
+      if (corruption === 'version') result.baseVersion++;
+      if (corruption === 'model') result.model = 'american-crr-1024-v1';
+      if (corruption === 'snapshot') result.snapshotId = 'other';
+      if (corruption === 'baseline') result.sensitivity.baseline.state.scenarioSpot++;
+      if (corruption === 'pnl') result.sensitivity.scenarios[0].pnl = NaN;
+      if (corruption === 'missing') result.sensitivity.scenarios.pop();
+      worker.onmessage!({ data: { id: worker.sent.id + (corruption === 'id' ? 1 : 0), result, ...(corruption === 'error' ? { error: 'failed' } : {}) } });
+      if (corruption === 'none') await expect(pending).resolves.toEqual(result.sensitivity);
+      else await expect(pending).rejects.toThrow('Invalid optimizer sensitivity result');
+    }
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(worker.onmessage).toBeNull();
+  }
+  const controller = new AbortController(); controller.abort();
+  await expect(requestOptimizerSensitivity(state, snapshot, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+});
 
 it('reconstructs candidate comparisons in the cancellable worker and rejects mismatched selection replies', async () => {
   class FakeWorker {
@@ -110,6 +149,13 @@ it("routes the explicit range through the workspace worker handler", async () =>
   expect(scope.postMessage).toHaveBeenLastCalledWith({ id: 17, result: calculateWorkspaceValuation(state, "table", range) });
   scope.onmessage!({ data: { id: 18, state, view: "table", range: { min: 0, max: 100 } } });
   expect(scope.postMessage).toHaveBeenLastCalledWith({ id: 18, error: "Workspace valuation unavailable for these inputs." });
+  const at = state.valuationTimestamp, expiry = state.legs[0].expiry;
+  const snapshot: MarketSnapshot = { id: 'stress-route', underlying: 'SPY', source: 'Tastytrade', retrievedAt: at, spotAsOf: at, spot: 100, availableExpiries: [expiry.slice(0, 10)], contracts: [{ contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}C00100000`, type: 'call', strike: 100, expiry, multiplier: 100, bid: 2, ask: 3, iv: .25, quoteAsOf: at }] };
+  const quoted = createMarketStrategy('long-call', snapshot);
+  scope.onmessage!({ data: { id: 19, action: 'optimizer-sensitivity', state: quoted, snapshot } });
+  expect(scope.postMessage).toHaveBeenLastCalledWith({ id: 19, result: { baseVersion: quoted.version, model: quoted.valuationModel ?? 'european-bsm-v1', snapshotId: snapshot.id, sensitivity: optimizerSensitivity(quoted, snapshot) } });
+  scope.onmessage!({ data: { id: 20, action: 'optimizer-sensitivity', state: quoted, snapshot: { ...snapshot, id: 'wrong' } } });
+  expect(scope.postMessage).toHaveBeenLastCalledWith({ id: 20, error: 'Optimizer sensitivity unavailable for these inputs.' });
 });
 
 it("samples explicit chart ranges consistently without changing the position", () => {
