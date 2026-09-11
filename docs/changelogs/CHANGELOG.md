@@ -2,6 +2,16 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Consolidated Workbench is now the normal entry, with separate Optimize navigation;
+  the original layout remains at `?workbench=classic`. Optimize can explicitly load
+  later quote expiries and strike windows without rebuilding current holdings.
+  Retained leg expiries (including excluded legs) count toward the existing four
+  expiry limit. Quote refresh preserves search preferences; other position/thesis
+  changes reset them. Unavailable selected expiries fail closed rather than silently
+  broadening the search. Existing pricing, guards and AI prompts remain unchanged.
+  Added native-browser replay for later-expiry search, fixed costs, Inspect/Cancel,
+  durable save/reload and desktop/mobile overflow. Test-created saves are removed.
+
 - Restored integrated Optimize's compact prototype layout: outlook and assumptions
   together, expiry rail and ranking/search controls, dense three-column cards.
   Family selection, risk methodology and optional pair comparison are disclosures;

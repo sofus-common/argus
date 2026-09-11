@@ -6,6 +6,6 @@ import './workbench-presentation.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App presentation={new URLSearchParams(window.location.search).get('workbench') === 'integrated' ? 'workbench' : 'default'} />
+    <App presentation={new URLSearchParams(window.location.search).get('workbench') === 'classic' ? 'default' : 'workbench'} />
   </React.StrictMode>,
 )

@@ -93,6 +93,17 @@ it('prefills an explicit optimizer target without changing the held scenario', (
   expect(state).toEqual(before)
 })
 
+it('offers the provider expiry catalog for explicit retained-position quote loading', () => {
+  const state = createStrategy('bull-call')
+  const snapshot: MarketSnapshot = { id: 'catalog', underlying: 'SPY', source: 'Tastytrade', retrievedAt: state.valuationTimestamp, spot: 100, spotAsOf: state.valuationTimestamp, contracts: [], availableExpiries: ['2026-09-18', '2026-12-18'] }
+  const html = renderToStaticMarkup(<CandidateSearch state={state} snapshot={snapshot} disabled={false} expanded onLoadQuotes={async () => { throw new Error('Must be explicit') }} onSearch={() => {}} onInspect={() => {}} renderComparison={() => null} />)
+  expect(html).toContain('Load another quote window')
+  expect(html).toContain('2026-12-18')
+  expect(html).toContain('Optimizer quote expiry 4')
+  expect(html).toContain('Load quotes · keep position')
+  expect(html).toContain('held entry costs stay fixed')
+})
+
 it('validates grouped search counts and distinct families without weakening legacy results', async () => {
   const expiry = '2026-09-18T20:00:00.000Z'
   const snapshot: MarketSnapshot = {

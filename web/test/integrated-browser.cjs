@@ -1,0 +1,97 @@
+const { chromium } = require('playwright');
+const assert = require('node:assert/strict');
+
+(async () => {
+  const browser = await chromium.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const errors = [];
+  let savedId;
+  page.on('pageerror', error => errors.push(error.message));
+  const base = process.env.ARGUS_URL || 'http://127.0.0.1:5174/';
+  try {
+    await page.goto(base);
+    await page.getByRole('button', { name: 'Use real prices', exact: true }).click();
+    await page.getByRole('button', { name: 'Refresh prices', exact: true }).waitFor();
+    await page.locator('.market-pricing-panel>summary').click();
+    await page.getByRole('button', { name: 'Keep entry costs', exact: true }).click();
+    await page.locator('#trade-thesis').fill('Verification: modest rise; reject if downside exceeds budget.');
+    const held = await page.locator('.leg-row').evaluateAll(rows => rows.map(row => ({ quantity: row.querySelector('[aria-label="Contracts"]').value, premium: row.querySelector('[aria-label="Entry premium"]').value })));
+    await page.getByRole('button', { name: 'Optimize', exact: true }).click();
+    await page.getByRole('button', { name: 'Bullish', exact: true }).click();
+    await page.getByLabel('Optimizer maximum loss').fill('5000');
+    await page.getByLabel('Optimizer objective').selectOption('balanced');
+    await page.getByText(/Load another quote window/).click();
+    const catalog = await page.getByLabel('Optimizer quote expiry 1', { exact: true }).locator('option').evaluateAll(nodes => nodes.map(node => node.value).filter(Boolean));
+    const later = catalog.find(date => Date.parse(date) > Date.now() + 25 * 86400000);
+    assert.ok(later, 'Provider exposes a later expiry');
+    await page.getByLabel('Optimizer quote expiry 1', { exact: true }).selectOption(later);
+    await page.getByLabel('Optimizer target date UTC').fill(`${later}T16:00`);
+    const target = await page.getByLabel('Optimizer target price').inputValue();
+    const loading = page.waitForResponse(response => response.url().includes('/api/chain?'));
+    await page.getByRole('button', { name: 'Load quotes · keep position', exact: true }).click();
+    const response = await loading;
+    assert.equal(response.status(), 200, await response.text());
+    const request = new URL(response.url());
+    assert.ok(request.searchParams.get('retain').split(',').length === held.length);
+    assert.ok(request.searchParams.get('expiries').split(',').includes(later));
+    await page.getByRole('button', { name: 'Find strategies', exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('button[type="submit"]:disabled'));
+    assert.equal(await page.getByLabel('Optimizer target price').inputValue(), target);
+    assert.equal(await page.getByLabel('Optimizer target date UTC').inputValue(), `${later}T16:00`);
+    assert.equal(await page.getByLabel('Optimizer maximum loss').inputValue(), '5000');
+    assert.equal(await page.getByLabel('Optimizer objective').inputValue(), 'balanced');
+    const expiryButton = page.locator('.opt-strip-month button').filter({ hasText: String(Number(later.slice(8))) });
+    await expiryButton.last().click();
+    await page.getByRole('button', { name: 'Find strategies', exact: true }).click();
+    await page.locator('.quoted-candidate-card').first().waitFor({ timeout: 30000 });
+    assert.ok(await page.locator('.quoted-candidate-card').count() >= 1);
+    await page.getByRole('button', { name: 'Inspect strategy', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Keep current', exact: true }).waitFor();
+    assert.equal(await page.locator('#trade-thesis').inputValue(), 'Verification: modest rise; reject if downside exceeds budget.');
+    assert.deepEqual(await page.locator('.leg-row').evaluateAll(rows => rows.map(row => ({ quantity: row.querySelector('[aria-label="Contracts"]').value, premium: row.querySelector('[aria-label="Entry premium"]').value }))), held);
+    await page.getByRole('button', { name: 'Keep current', exact: true }).click();
+    await page.locator('.workspace-tools>summary').click();
+    await page.locator('.saved-workspace>summary').click();
+    await page.getByLabel('Saved strategy title').fill(`Launch verification ${Date.now()}`);
+    const saving = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/api/strategies'));
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    const saved = await saving;
+    assert.equal(saved.status(), 201);
+    savedId = (await saved.json()).record.id;
+    page.once('dialog', dialog => dialog.accept());
+    await page.reload();
+    await page.locator('.workspace-tools>summary').click();
+    await page.locator('.saved-workspace>summary').click();
+    const picker = page.getByLabel('Saved positions', { exact: true });
+    await picker.locator(`option[value="${savedId}"]`).waitFor({ state: 'attached' });
+    await picker.selectOption(savedId);
+    await page.getByRole('button', { name: 'Load', exact: true }).click();
+    await page.getByText('Loaded saved position. Undo restores the previous position.').waitFor();
+    assert.equal(await page.locator('#trade-thesis').inputValue(), 'Verification: modest rise; reject if downside exceeds budget.');
+    assert.deepEqual(await page.locator('.leg-row').evaluateAll(rows => rows.map(row => ({ quantity: row.querySelector('[aria-label="Contracts"]').value, premium: row.querySelector('[aria-label="Entry premium"]').value }))), held);
+    await page.locator('#trade-thesis').fill('Changed thesis must start a fresh search.');
+    await page.getByRole('button', { name: 'Optimize', exact: true }).click();
+    assert.notEqual(await page.getByLabel('Optimizer target price').inputValue(), target);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `Optimizer overflow at ${width}`);
+      await page.screenshot({ path: `../docs/screenshots/launch-optimizer-${width}.png`, fullPage: true });
+      await page.getByRole('button', { name: 'Back to Workbench', exact: true }).click();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `Workbench overflow at ${width}`);
+      await page.screenshot({ path: `../docs/screenshots/launch-workbench-${width}.png`, fullPage: true });
+      await page.getByRole('button', { name: 'Optimize', exact: true }).click();
+    }
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ passed: true, laterExpiry: later, retainedLegs: held.length, checks: ['quoted-window', 'preferences', 'fixed-costs', 'thesis', 'inspect-cancel', 'save-reload', 'new-thesis-reset', 'desktop-mobile-overflow'] }));
+  } catch (error) { console.error({ url: page.url(), errors, thesisFields: await page.locator('textarea').evaluateAll(nodes => nodes.map(node => ({ id: node.id, label: node.getAttribute('aria-label'), value: node.value }))) }); throw error; }
+  finally {
+    if (savedId) {
+      const origin = new URL(base).origin;
+      const removed = await page.request.delete(`${origin}/api/strategies/${savedId}`, { headers: { Origin: origin, 'X-ARGUS-Request': '1' }, data: { revision: 1 } });
+      if (!removed.ok()) console.error(`Test position cleanup failed: ${savedId}, status ${removed.status()}`);
+      await browser.close();
+      assert.ok(removed.ok(), 'Remove only the saved test position');
+    }
+    await browser.close();
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

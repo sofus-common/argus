@@ -1,9 +1,24 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: obtain user feedback on restored compact Optimize layout before further feature work
+next_action: verify live AI discussion and launch configuration against the qualified release bundle
 blocker: null
 updated: 2026-09-11
+
+Launch checkpoint: normal / now opens consolidated Workbench; classic layout stays
+at ?workbench=classic. Explicit Optimize quote-window loading reuses preserved
+market refresh, retains all held expiries including excluded legs, and keeps search
+preferences only for that refresh. Other successful commits reset search inputs.
+Missing selected expiries disable Search with a visible message, not a broader
+implicit search. No pricing model, auth, provider or AI prompt was changed.
+Fresh proof: TypeScript and production build pass; 54 focused quote/thesis/UI
+tests pass; independent release wave reports 177 auth/save/prompt/market tests pass.
+Native integrated-browser.cjs passes at normal /: real October 9 quotes, four
+retained legs and fixed costs, search preference/thesis preservation, Inspect/Cancel,
+save/reload, new-thesis reset, and 1440/390px no overflow. Test saves were deleted.
+Screenshots inspected locally under docs/screenshots/launch-*.png (not committed).
+Overall goal remains active: live AI qualification, useful two-sided/candidate
+tradeoffs and hosted auth/storage/config release proof are not yet completed.
 approvals:
   - gate: plan
     decision: accepted

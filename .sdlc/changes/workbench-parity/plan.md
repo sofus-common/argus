@@ -1,5 +1,22 @@
 # Migration plan
 
+## Launch-readiness priority (user goal, September 11)
+
+Finish the defined thesis-to-decision workflow; avoid adjacent cosmetic work.
+1. Expose quoted expiry/strike-window loading in Optimize through existing
+   loadMarket(preserve=true), retaining holdings and search preferences. Prove
+   later-expiry search, invalidation, fixed costs and thesis preservation.
+2. Verify integrated symbol/thesis/search/Inspect/Apply/Undo/save/reload and mobile
+   layout. Reuse existing API, financial and prompt regression suites.
+3. Promote the consolidated Workbench to the normal local entry after that proof;
+   keep Workbench and Optimize separate. Prepare build and release checks.
+4. Hosted Access, saved-data and qualified AI configuration verification remain
+   release gates. No production deployment without separate authorization.
+
+All new behavior is deterministic UI/state handling. Existing probabilistic
+conversation is unchanged. No dependency, pricing formula or agent loop changes.
+The current-checkout approval remains; scoped commits provide recovery.
+
 1. Trace existing App.tsx flows and shared helpers; confirm backend/session routing.
 2. First tracer: existing assignment/probability/evidence and quote-risk displays
    under compact Workbench disclosures. Export/reuse components rather than clone.

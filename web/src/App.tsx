@@ -965,6 +965,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
   const compact = presentation === 'workbench'
   const [optimizerTarget, setOptimizerTarget] = useState<{ targetSpot: number; targetDate: string; version: number; underlying: string; launch: number }>()
   const [optimizerScreen, setOptimizerScreen] = useState(false)
+  const [optimizerRevision, setOptimizerRevision] = useState(0)
   const optimizerPanel = useRef<HTMLDivElement>(null)
   useEffect(() => { if (optimizerTarget) optimizerPanel.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }) }, [optimizerTarget])
   const Library = compact ? 'details' : 'aside'
@@ -1141,7 +1142,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
   const legRisk = currentValuation?.legs
   const activeId = TEMPLATES.find((template) => template.name === strategy.name)?.id
 
-  const commit = (next: StrategyState, remember = true, automaticUpdate = false) => {
+  const commit = (next: StrategyState, remember = true, automaticUpdate = false, keepOptimizer = false) => {
     const current = strategyRef.current
     const candidate = { ...next, version: current.version + 1 }
     const errors = validateConstruction(candidate)
@@ -1154,6 +1155,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
     if (candidate.underlying !== current.underlying) { setDiscoveryMode(false); discoveryStart.current = messages.length }
     strategyRef.current = candidate
     setStrategy(candidate)
+    if (!keepOptimizer) setOptimizerRevision(candidate.version)
     setScenarioSelection(null)
     if (candidate.underlyingKind === 'cash-index') setAmericanPreview(false)
     if (!projectAnalysisPosition(candidate)?.legs.length) { setView('curve'); setAmericanPreview(false) }
@@ -1275,7 +1277,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
       const errors = validateMarketConstruction(next, snapshot)
       if (errors.length) throw new Error(errors.join('; '))
       setSnapshots(items => ({ ...items, [snapshot.id]: snapshot }))
-      if (commit(next, !automaticUpdate || automaticCheckpoint.current, automaticUpdate)) {
+      if (commit(next, !automaticUpdate || automaticCheckpoint.current, automaticUpdate, preserve && !!before.pricing)) {
         if (automaticUpdate) automaticCheckpoint.current = false
         setWindowDates([...new Set(snapshot.contracts.map(c => c.expiry.slice(0,10)))].sort())
         return { position: structuredClone(strategyRef.current), snapshot }
@@ -1710,7 +1712,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
 
 
           {analysisState && (cashIndex ? <p className="history-basis">Cash-index options settle in cash; there is no share delivery or early exercise. Settlement amounts and resulting cashflows are not recorded automatically.</p> : <AssignmentOutcomes state={analysisState} snapshot={marketSnapshot ?? undefined} />)}
-          {(compact || analysisState && marketSnapshot && !marketSnapshot.historical) && <div ref={optimizerPanel} className={compact ? 'workbench-optimizer' : undefined}><CandidateSearch key={`${strategy.version}:${marketSnapshot?.id ?? 'unquoted'}:${compact ? optimizerTarget?.launch ?? 0 : 0}`} initialTarget={compact && optimizerTarget?.underlying === strategy.underlying && optimizerTarget.version === strategy.version ? optimizerTarget : compact && strategy.thesis?.targetSpot && strategy.thesis.targetDate ? { targetSpot: strategy.thesis.targetSpot, targetDate: strategy.thesis.targetDate } : undefined} expanded={compact && optimizerScreen} state={analysisState ?? strategy} snapshot={analysisState && marketSnapshot && !marketSnapshot.historical ? marketSnapshot : undefined} disabled={pending || chainPending || workspaceBusy || !!proposal} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} renderComparison={renderCandidateComparisonCharts} /></div>}
+          {(compact || analysisState && marketSnapshot && !marketSnapshot.historical) && <div ref={optimizerPanel} className={compact ? 'workbench-optimizer' : undefined}><CandidateSearch key={compact ? `${optimizerRevision}:${optimizerTarget?.launch ?? 0}` : `${strategy.version}:${marketSnapshot?.id ?? 'unquoted'}`} initialTarget={compact && optimizerTarget?.underlying === strategy.underlying && optimizerTarget.version === strategy.version ? optimizerTarget : compact && strategy.thesis?.targetSpot && strategy.thesis.targetDate ? { targetSpot: strategy.thesis.targetSpot, targetDate: strategy.thesis.targetDate } : undefined} expanded={compact && optimizerScreen} state={analysisState ?? strategy} snapshot={analysisState && marketSnapshot && !marketSnapshot.historical ? marketSnapshot : undefined} disabled={pending || chainPending || workspaceBusy || !!proposal} retainedExpiries={strategy.pricing ? [...new Set(strategy.legs.map(leg => leg.expiry.slice(0, 10)))] : []} onLoadQuotes={compact && strategy.pricing ? (dates, center) => loadMarket(true, dates, strategy.underlying, center) : undefined} onSearch={stopAutomatic} onInspect={(search, snapshot, id) => void inspectCandidate(search, snapshot, id)} renderComparison={renderCandidateComparisonCharts} /></div>}
           {hasExclusions && <p className="workspace-notice" role="note">Analysis includes {analysisState?.legs.length ?? 0} of {strategy.legs.length} option legs{strategy.stock ? " plus shares" : ""}. Exclusion is hypothetical: saved holdings, entry costs and full-inventory ledger totals are unchanged.{analysisState && <button onClick={() => commit({ ...strategyRef.current, excludedLegIds: undefined })}>Include all legs</button>}</p>}
           <div className="metric-ribbon">
             {metrics ? <>
