@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Restored integrated Optimize's compact prototype layout: outlook and assumptions
+  together, expiry rail and ranking/search controls, dense three-column cards.
+  Family selection, risk methodology and optional pair comparison are disclosures;
+  quote availability and incompatible-search alerts remain visible. Pricing and
+  search logic unchanged. TypeScript and seven presentation regressions pass.
+
 - Verified Find strategies with recovered real Tastytrade quotes. Browser blended
   search evaluated 1,250 structures, returned three bullish families, and passed
   Inspect/Keep current without applying. Live API replay passed standard, blended,

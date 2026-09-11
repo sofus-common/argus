@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: implement and verify two-sided scoring without weakening current quoted search guards
+next_action: obtain user feedback on restored compact Optimize layout before further feature work
 blocker: null
 updated: 2026-09-11
 approvals:
