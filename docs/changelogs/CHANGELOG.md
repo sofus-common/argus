@@ -2,6 +2,11 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Compressed the Workbench top section: shorter navigation and instrument bars,
+  one-row desktop thesis inputs, inline fit guidance and leg count, and removal
+  of redundant eyebrow headings. Preserved field labels, warnings and mobile
+  touch targets. Verified TypeScript and desktop/mobile browser layout. Local only.
+
 - Applied Workbench design review: compact instrument bar, scenario tests beside
   the chart, smaller conversation preview, readable supporting labels, nearby
   action feedback and available-first strategy selection. Chart inspection now
