@@ -406,14 +406,37 @@ it("calculates independent conditional assignment inventories without changing p
   expect(() => strategyFacts({ ...state, legs: state.legs.map((leg, index) => index ? leg : { ...leg, strike: leg.strike + 1 }) }, supplied)).toThrow();
   expect(() => strategyFacts({ ...state, stock: { shares: Number.MAX_SAFE_INTEGER, entryPrice: 1 } }, supplied)).toThrow("Conditional assignment arithmetic unavailable");
 });
-it("passes identical conditional assignment inventories to generation and verification", async () => {
+it("separates long exercise from short assignment using original inventory", () => {
   const supplied = { ...snapshot, contractTerms: { exerciseStyle: "American", settlement: "physical-shares", sharesPerContract: 100, settlementSession: "PM" } as const };
-  const input = { ...request(), state: createMarketStrategy("short-call", supplied) };
-  const fetcher = provider({ ...reply(), risk_classification: "unbounded" });
+  for (const type of ["call", "put"] as const) for (const shares of [-50, 0, 250]) {
+    const contract = supplied.contracts.find(item => item.type === type)!;
+    const state = createMarketStrategy("long-call", supplied);
+    const shortContract = supplied.contracts.find(item => item.type === type && item.contractId !== contract.contractId)!;
+    state.legs = [marketLeg(contract, "long", 2, "exercise"), marketLeg(shortContract, "short", 2, "assignment")];
+    state.stock = shares ? { shares, entryPrice: 640 } : undefined;
+    const before = structuredClone(state);
+    const facts = strategyFacts(state, supplied).conditionalAssignment;
+    const change = type === "call" ? 200 : -200;
+    expect(facts.exerciseScenarios).toEqual([{ exercisedLegId: "exercise", exercisedContracts: 2, shareChange: change, resultingShares: shares + change, grossStrikeCashflow: -change * contract.strike, remainingOptionLegIds: ["assignment"] }]);
+    expect(facts.scenarios![0].shareChange).toBe(-change);
+    expect(facts.scenarios![0].resultingShares).toBe(shares - change);
+    expect(facts.scenarios![0].remainingOptionLegIds).toEqual(["exercise"]);
+    expect(state).toEqual(before);
+    for (const unavailable of [undefined, snapshot, { ...supplied, imported: true }, { ...supplied, historical: true }]) {
+      const inputState = unavailable?.historical ? { ...state, pricing: { ...state.pricing!, historical: true as const } } : state;
+      expect(strategyFacts(inputState, unavailable as MarketSnapshot | undefined).conditionalAssignment.exerciseScenarios).toBeNull();
+    }
+  }
+});
+it.each(["short-call", "long-call"] as const)("passes identical conditional event inventories for %s to generation and verification", async template => {
+  const supplied = { ...snapshot, contractTerms: { exerciseStyle: "American", settlement: "physical-shares", sharesPerContract: 100, settlementSession: "PM" } as const };
+  const input = { ...request(), state: createMarketStrategy(template, supplied) };
+  const fetcher = provider({ ...reply(), risk_classification: template === "short-call" ? "unbounded" : "bounded" });
   await spar(input, "key", fetcher, context, supplied);
   expect(fetcher).toHaveBeenCalledTimes(2);
   const expected = strategyFacts(input.state, supplied).conditionalAssignment;
-  expect(expected.scenarios).toHaveLength(1);
+  expect(expected.scenarios).toHaveLength(template === "short-call" ? 1 : 0);
+  expect(expected.exerciseScenarios).toHaveLength(template === "long-call" ? 1 : 0);
   for (const [, init] of fetcher.mock.calls) {
     const data = JSON.parse(JSON.parse(String(init?.body)).messages[1].content);
     expect(data.calculated.conditionalAssignment).toEqual(expected);

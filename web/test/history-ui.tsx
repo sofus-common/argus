@@ -100,6 +100,8 @@ async function run() {
     if (request?.url === '/api/price-history') await request.finish()
   }
   async function test(name: string, check: () => Promise<void>, initialDaily = false) {
+    const filter = new URLSearchParams(location.search).get('test');
+    if (filter && !name.includes(filter)) return;
     try { request = null; requests = 0; await mount(initialDaily); await check(); passed++; output.textContent += `PASS ${name}\n` }
     catch (error) { failed++; output.textContent += `FAIL ${name}: ${error instanceof Error ? error.message : String(error)}\n` }
     finally { await unmount() }
@@ -718,7 +720,10 @@ async function run() {
         assert(!fixture.querySelector('article') && fixture.textContent?.includes('unavailable'), 'Unavailable terms showed numeric outcomes');
       }
       await act(async () => root!.render(<AssignmentOutcomes state={{ ...position, legs: position.legs.map(leg => ({ ...leg, side: 'long' })) }} snapshot={snapshot} />));
-      assert(fixture.textContent?.includes('No short options'), 'Long-only position implied assignment');
+      const exercises = [...fixture.querySelectorAll('article')];
+      assert(exercises.length === 2 && exercises.every(row => row.getAttribute('aria-label')?.startsWith('Exercise of long')), 'Long-only position did not show independent exercise');
+      assert(exercises.find(row => row.getAttribute('aria-label')?.includes('call'))?.textContent?.includes('+250 SPY'), 'Long call exercise inventory incorrect');
+      assert(exercises.find(row => row.getAttribute('aria-label')?.includes('put'))?.textContent?.includes('+50 SPY'), 'Long put exercise inventory incorrect');
       assert(JSON.stringify(position) === unchanged && requests === requestsBefore, 'Panel mutated holdings or requested inference');
     });
     await test('Snapshot age advances independently of retrieval and ignores unselected contracts', async () => {

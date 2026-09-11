@@ -24,6 +24,14 @@ verification failure and unchanged call/operation counts before retesting live.
 Content quality is a separate gate; observed verifier false accepts must not be
 papered over by successful transport checks or a prompt switch without evals.
 
+Operational-fact completion: extend the shared conditional assignment calculator
+with independent long-exercise outcomes, preserving its short-assignment contract.
+Expose both in the existing Workbench disclosure and generation/verification facts.
+Prove call/put signs, original inventory, remaining legs, unavailable terms and no
+mutation. This supplies missing facts; it does not qualify unrestricted AI prose.
+Next, validate typed operational topic selection and render from these facts rather
+than accepting model-authored cashflows, broker deadlines or execution guarantees.
+
 1. Trace existing App.tsx flows and shared helpers; confirm backend/session routing.
 2. First tracer: existing assignment/probability/evidence and quote-risk displays
    under compact Workbench disclosures. Export/reuse components rather than clone.

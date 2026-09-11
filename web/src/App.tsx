@@ -98,18 +98,21 @@ const holdingDescription = (stock: StrategyState['stock'], underlying: string) =
 
 export function AssignmentOutcomes({ state, snapshot }: { state: StrategyState; snapshot?: MarketSnapshot }) {
   const result = useMemo(() => { try { return calculateConditionalAssignment(state, snapshot) } catch { return null } }, [state, snapshot])
-  const shorts = state.legs.filter(leg => leg.side === 'short')
+  const outcomes = result?.scenarios && result.exerciseScenarios ? [
+    ...result.scenarios.map(({ assignedLegId, ...outcome }) => ({ ...outcome, legId: assignedLegId, event: 'Assignment' })),
+    ...result.exerciseScenarios.map(({ exercisedLegId, ...outcome }) => ({ ...outcome, legId: exercisedLegId, event: 'Exercise' })),
+  ] : null
   const describe = (id: string) => { const leg = state.legs.find(item => item.id === id)!; return `${leg.side} ${leg.contracts} × $${leg.strike} ${leg.type} · ${shortDate(leg.expiry)}` }
   return <details className="assignment-panel" aria-label="Conditional assignment outcomes">
-    <summary><strong>Assignment outcomes</strong><span>{shorts.length ? `${shorts.length} short ${shorts.length === 1 ? 'leg' : 'legs'} · ${result?.scenarios ? 'calculated' : 'terms unavailable'}` : 'No short options'}</span></summary>
-    {!shorts.length ? <p>No short options to assign. Long options may still require exercise decisions.</p> : !result?.scenarios ? <p>Share-delivery scenarios are unavailable. They require a matching, nonhistorical snapshot with recorded standard American, physically settled 100-share terms. No settlement terms are inferred from the ticker.</p> : <>
-      <p>Starting inventory: <b>{signed(result.beforeShares)} {state.underlying} shares</b>. Each row independently assumes full assignment of one short leg; the other options remain unchanged.</p>
-      <div className="assignment-outcomes">{result.scenarios.map(scenario => <article key={scenario.assignedLegId} aria-label={`Assignment of ${describe(scenario.assignedLegId)}`}>
-        <h4>{describe(scenario.assignedLegId)}</h4>
+    <summary><strong>Assignment & exercise outcomes</strong><span>{state.legs.length ? `${state.legs.length} option ${state.legs.length === 1 ? 'leg' : 'legs'} · ${outcomes ? 'calculated' : 'terms unavailable'}` : 'No options'}</span></summary>
+    {!state.legs.length ? <p>No options to assign or exercise.</p> : !outcomes || !result ? <p>Share-delivery scenarios are unavailable. They require a matching, nonhistorical snapshot with recorded standard American, physically settled 100-share terms. No settlement terms are inferred from the ticker.</p> : <>
+      <p>Starting inventory: <b>{signed(result.beforeShares)} {state.underlying} shares</b>. Each row independently assumes full assignment of one short leg or exercise of one long leg; the other options remain unchanged. Do not add rows together.</p>
+      <div className="assignment-outcomes">{outcomes.map(scenario => <article key={scenario.legId} aria-label={`${scenario.event} of ${describe(scenario.legId)}`}>
+        <h4>{scenario.event} · {describe(scenario.legId)}</h4>
         <dl><div><dt>Share change</dt><dd>{signed(scenario.shareChange)}</dd></div><div><dt>Resulting shares</dt><dd>{signed(scenario.resultingShares)} {state.underlying}</dd></div><div><dt>Gross strike cashflow</dt><dd>{scenario.grossStrikeCashflow >= 0 ? '+' : '−'}{money(Math.abs(scenario.grossStrikeCashflow), '—', 2)}</dd></div></dl>
-        <p><b>Options remaining</b> {scenario.remainingOptionLegIds.length ? scenario.remainingOptionLegIds.map(describe).join('; ') : 'None'}. The assigned leg is no longer open.</p>
+        <p><b>Options remaining</b> {scenario.remainingOptionLegIds.length ? scenario.remainingOptionLegIds.map(describe).join('; ') : 'None'}. The {scenario.event === 'Assignment' ? 'assigned' : 'exercised'} leg is no longer open.</p>
       </article>)}</div>
-      <p>Not profit, buying power or an assignment forecast. No automatic long exercise, partial or combined assignments. Cashflow excludes premiums, fees, dividends and financing. Recorded terms are not a current corporate-action check.</p>
+      <p>Not profit, buying power or an event forecast. No automatic long exercise, partial or combined events. Cashflow excludes premiums, fees, dividends and financing. Recorded terms are not a current corporate-action check.</p>
     </>}
     <p className="assignment-policy"><b>Broker policy not supplied</b> Exercise cutoff, margin requirements and liquidation timing are unknown. No orders or position changes are made.</p>
   </details>

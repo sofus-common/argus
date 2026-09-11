@@ -496,17 +496,20 @@ export function contractTermsFacts(snapshot?: MarketSnapshot) {
 
 export function calculateConditionalAssignment(state: StrategyState, snapshot?: MarketSnapshot) {
   const assignmentTerms = contractTermsFacts(snapshot);
-  const scenarios = snapshot && !snapshot.historical && assignmentTerms.status === "provider-verified-standard-window" && assignmentTerms.settlement === "physical-shares" && validateMarketStrategy(state, snapshot).length === 0
-    ? state.legs.filter(leg => leg.side === "short").map(leg => {
-      const shareChange = (leg.type === "call" ? -1 : 1) * leg.contracts * leg.multiplier;
+  const events = snapshot && !snapshot.historical && assignmentTerms.status === "provider-verified-standard-window" && assignmentTerms.settlement === "physical-shares" && validateMarketStrategy(state, snapshot).length === 0
+    ? state.legs.map(leg => {
+      const shareChange = (leg.type === "call" ? 1 : -1) * (leg.side === "long" ? 1 : -1) * leg.contracts * leg.multiplier;
       const resultingShares = (state.stock?.shares ?? 0) + shareChange, grossStrikeCashflow = -shareChange * leg.strike;
       if (!Number.isSafeInteger(shareChange) || !Number.isSafeInteger(resultingShares) || !Number.isFinite(grossStrikeCashflow)) throw new Error("Conditional assignment arithmetic unavailable");
-      return { assignedLegId: leg.id, assignedContracts: leg.contracts, shareChange, resultingShares, grossStrikeCashflow, remainingOptionLegIds: state.legs.filter(other => other.id !== leg.id).map(other => other.id) };
+      return { leg, shareChange, resultingShares, grossStrikeCashflow, remainingOptionLegIds: state.legs.filter(other => other.id !== leg.id).map(other => other.id) };
     }) : null;
+  const scenarios = events?.filter(event => event.leg.side === "short").map(({ leg, ...outcome }) => ({ assignedLegId: leg.id, assignedContracts: leg.contracts, ...outcome })) ?? null;
+  const exerciseScenarios = events?.filter(event => event.leg.side === "long").map(({ leg, ...outcome }) => ({ exercisedLegId: leg.id, exercisedContracts: leg.contracts, ...outcome })) ?? null;
   return {
     status: scenarios === null ? "unavailable" : "conditional",
     basis: "Separate hypothetical full assignment of each short leg from the ORIGINAL inventory under recorded verified American physical-share snapshot terms, not current corporate-action verification. Before assignment the original options remain; afterward the assigned leg no longer exists, resulting shares and listed options remain. No automatic long exercise or cumulative assignment. Gross strike cashflow is not P/L, buying power, total account cash or cost basis; excludes option premiums, fees, dividend and financing cashflows. No assignment probability, timing or broker action is implied. Partial assignments are not represented. Unavailable for unknown or historical terms. No position is changed.",
-    beforeShares: state.stock?.shares ?? 0, beforeOptionLegIds: state.legs.map(leg => leg.id), scenarios,
+    exerciseBasis: "Separate hypothetical full exercise of each long leg from the ORIGINAL inventory, not an exercise recommendation or prediction. The exercised option is removed; all other options remain. Independent of short assignment: do not combine rows or assume matched events. Same verified-term restrictions and gross cashflow exclusions as assignment. No automatic exercise, broker action, partial exercise or position change is modeled.",
+    beforeShares: state.stock?.shares ?? 0, beforeOptionLegIds: state.legs.map(leg => leg.id), scenarios, exerciseScenarios,
   };
 }
 

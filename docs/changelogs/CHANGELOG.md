@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added independent long-call/put exercise outcomes to the existing assignment
+  calculator and Workbench disclosure. Both event types start from original share
+  inventory, remove only the affected option and show gross strike cashflow, not
+  profit. Shared AI facts include the same exercise results. Existing term guards
+  and short-assignment result shape remain intact. No orders or automatic exercise.
+
 - Fixed verified-analysis timeout starvation in both sparring and read-only
   discussions: generation retains its 20s bound (30s for one tool continuation),
   then verification receives up to 10s. No extra inference calls, retries or

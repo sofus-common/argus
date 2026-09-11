@@ -5,6 +5,19 @@ next_action: repair AI content qualification failures without weakening verifica
 blocker: null
 updated: 2026-09-11
 
+Operational fact checkpoint: existing shared conditional-assignment calculation
+now also returns independent long-exercise scenarios. Classic and integrated
+Workbench show both in their shared disclosure; strategyFacts carries both to
+generation and verification. Short-result compatibility and term restrictions
+are preserved. Red-green exercise regression, 222 options/market tests plus two
+updated generation/verification equality cases, TypeScript and build pass.
+Targeted native browser assignment/exercise check passes (1/1, no provider calls).
+Full history UI harness timed out twice without a final result; no full-UI pass
+claimed. Added optional test-name filter to run the affected check independently.
+Independent review found no blockers. This adds missing facts, not a restriction
+on model-authored prose. Typed operational response boundary and broad live AI
+qualification remain next; no production deployment or prompt/model change.
+
 AI/release audit checkpoint: local frozen bundle analysis-v16 digest
 89531521ca027b5cfa34d05f501fd2fec704b6f82f78811776ea2e4e7acad356,
 engine analysis-contract-v7. Quoted judgment run had two verification timeouts:
