@@ -8,6 +8,16 @@ import { createPosition, projectPosition, type PositionRecord } from "../src/pos
 import { projectPositionLots, projectPositionLotsAt, valuePositionLots, type LotTransaction, type PositionLots } from "../src/position-lots";
 
 const db = (env as { DB: D1Database }).DB;
+it('persists all thesis fields through save/update and preserves legacy absence', async () => {
+  const store = createSavedStore(db), owner = crypto.randomUUID(), state = createStrategy('long-call');
+  const legacy = await store.create(owner, 'Legacy', state);
+  expect((await store.get(owner, legacy.id)).state.thesis).toBeUndefined();
+  state.thesis = { text: 'Modest rise', targetSpot: 105, targetDate: '2026-09-10T18:30:00.123Z' };
+  const saved = await store.update(owner, legacy.id, 1, 'With thesis', state);
+  expect((await store.get(owner, saved.id)).state.thesis).toEqual(state.thesis);
+  const imported = await store.importRecord(owner, { format: 'argus-saved-position', formatVersion: 1, exportedAt: new Date().toISOString(), record: saved });
+  expect(imported.state.thesis).toEqual(state.thesis);
+});
 beforeAll(async () => {
   await db.batch((migration + lifecycleMigration).split(";").filter(sql => sql.trim()).map(sql => db.prepare(sql)));
 });

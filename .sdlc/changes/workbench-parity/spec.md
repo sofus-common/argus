@@ -9,6 +9,10 @@ AC3: Reuse sourced context and existing validated conversation/proposal workflow
 Never execute model output directly. No prompt/tool changes in this migration.
 AC4: Preserve existing root Undo, durable save and strategy/market search workflow
 without breaking thesis isolation or widening prototype pricing assumptions.
+AC4a: Thesis text, target and UTC horizon belong to each saved position and Undo
+entry. Legacy saves clear unrelated fields; legacy tab drafts retain their text.
+Metadata survives same-symbol template/quote changes and cannot be overwritten by
+AI proposals. Outdated horizons remain stored but cannot bypass preview bounds.
 AC5: Compact desktop/mobile layout, focused regression checks and independent
 review. Commit checked pieces to the existing product branch; no deployment.
 

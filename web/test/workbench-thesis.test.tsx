@@ -1,7 +1,16 @@
 import { expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { WorkbenchThesis, buildThesisScenario, thesisDateUtc } from '../src/WorkbenchThesis'
-import { createStrategy, projectAnalysisPosition } from '../src/options'
+import { createStrategy, projectAnalysisPosition, mergeAnalysisProposal, validateConstruction } from '../src/options'
+
+it('preserves user thesis across proposals and permits a stored horizon that is no longer testable', () => {
+  const state = createStrategy('long-call')
+  state.thesis = { text: 'My view', targetSpot: 105, targetDate: '2026-08-01T20:00:00.000Z' }
+  expect(validateConstruction(state)).toEqual([])
+  expect(buildThesisScenario(state, 105, state.thesis.targetDate!).scenario).toBeNull()
+  const proposal = { ...state, version: state.version + 1, thesis: { ...state.thesis, text: 'Model replacement' } }
+  expect(mergeAnalysisProposal(state, proposal).thesis).toEqual(state.thesis)
+})
 
 it('normalizes native datetime input as UTC and rejects rolled-over or noncanonical dates', () => {
   expect(thesisDateUtc('2026-09-10T12:30')).toBe('2026-09-10T12:30:00.000Z')
@@ -44,12 +53,12 @@ it('revalues a compatible changed source at the same thesis and fails closed aft
 
 it('starts blank with both actions disabled, UTC bounds and no preview chart', () => {
   const state = createStrategy('long-call')
-  const html = renderToStaticMarkup(<WorkbenchThesis state={state} optimizeEnabled onOptimize={() => { throw new Error('Unexpected action') }} />)
+  const html = renderToStaticMarkup(<WorkbenchThesis state={state} onChange={() => { throw new Error('Unexpected edit') }} optimizeEnabled onOptimize={() => { throw new Error('Unexpected action') }} />)
   expect(html.match(/disabled=""/g)).toHaveLength(2)
   expect(html).toContain('type="datetime-local"')
   expect(html).toContain(`min="${state.valuationTimestamp.slice(0, -1)}"`)
   expect(html).toContain(`max="${state.legs[0].expiry.slice(0, -1)}"`)
-  expect(html).toContain('not saved in the position or sent to AI automatically')
+  expect(html).toContain('saved with the position')
   expect(html).not.toContain('Thesis preview')
   expect(html).not.toContain('<svg')
 })

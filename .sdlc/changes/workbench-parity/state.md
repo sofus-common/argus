@@ -1,10 +1,14 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: resolve durable thesis ownership before promoting integrated Workbench
+next_action: complete remaining optimizer integration acceptance before promoting integrated Workbench
 blocker: null
 updated: 2026-09-11
 approvals:
+  - gate: plan
+    decision: accepted
+    by: human-confirmed-in-session
+    evidence: user replied "continue" after recommendation to save thesis target and horizon with each position
   - gate: plan
     decision: accepted
     by: human-confirmed-in-session
@@ -79,3 +83,16 @@ Important unresolved limitation: written thesis is tab-local, not stored with
 saved positions; Load retains the current thesis. Structured target/time remain
 explicitly temporary too. The accepted slice excluded persistence schema changes;
 resolve that next rather than claiming the thesis-led workflow is complete.
+
+Sixth checkpoint resolves durable ownership: optional typed thesis metadata in
+existing position JSON, copied through save and draft boundaries. Existing Undo,
+load and dirty detection now cover all fields. Legacy saves clear fields; legacy
+draft text is preserved without truncation. Same-symbol template/quote changes
+preserve metadata and proposal merge retains user ownership. Old horizons remain
+storable but preview bounds still apply. Target uses a decimal edit buffer and
+reverts invalid blur to the stored value. Browser saved/loaded text,103.5 and UTC
+milliseconds together; Undo restored previous text,104.5 and different milliseconds;
+legacy load cleared all fields. Only the new verification record was deleted.
+TypeScript and 31 focused tests passed; independent AI regression 103/103 passed.
+Independent review findings on decimal input and legacy truncation were resolved.
+No SQL migration, prompt change, production deployment or default-page promotion.

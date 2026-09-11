@@ -407,6 +407,7 @@ export function createApp(providerFetch: ProviderFetch = fetch) {
     const { version, name, underlying, spot, valuationTimestamp, rate, dividendYield, scenarioDate, scenarioSpot, ivShift } = input;
     const state: StrategyState = {
       id: input.id, version, name, underlying, spot, valuationTimestamp, rate, dividendYield, scenarioDate, scenarioSpot, ivShift,
+      ...(input.thesis !== undefined ? { thesis: { ...input.thesis } } : {}),
       ...(input.underlyingKind !== undefined ? { underlyingKind: input.underlyingKind } : {}),
       legs: input.legs.map(({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier }) => ({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier })),
       ...(input.excludedLegIds !== undefined ? { excludedLegIds: [...input.excludedLegIds] } : {}),

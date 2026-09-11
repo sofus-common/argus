@@ -16,6 +16,7 @@ export function readWorkspaceDraft(raw: string): WorkspaceDraft {
   input.legs.forEach(leg => { canonical(leg.expiry); if (!Number.isSafeInteger(leg.contracts)) throw new Error('Invalid draft quantity'); });
   const { id, version, name, underlying, spot, valuationTimestamp, rate, dividendYield, scenarioDate, scenarioSpot, ivShift, valuationModel, stock, feeAllowance, expiryIvShifts } = input;
   const state: StrategyState = { id, version, name, underlying, spot, valuationTimestamp, rate, dividendYield, scenarioDate, scenarioSpot, ivShift,
+    ...(input.thesis !== undefined ? { thesis: { ...input.thesis } } : {}),
     legs: input.legs.map(({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier }) => ({ id, contractId, side, type, contracts, strike, expiry, entryPrice, iv, multiplier })),
     ...(input.excludedLegIds !== undefined ? { excludedLegIds: [...input.excludedLegIds] } : {}),
     ...(input.underlyingKind !== undefined ? { underlyingKind: input.underlyingKind } : {}),

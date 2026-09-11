@@ -20,9 +20,10 @@ export function buildThesisScenario(state: StrategyState | null, targetSpot: num
   return errors.length ? { scenario: null, error: errors.join('; ') } : { scenario, error: '' }
 }
 
-export function WorkbenchThesis({ state, onOptimize, optimizeEnabled }: { state: StrategyState | null; onOptimize: (target: { targetSpot: number; targetDate: string }) => void; optimizeEnabled: boolean }) {
-  const [spot, setSpot] = useState('')
-  const [date, setDate] = useState('')
+export function WorkbenchThesis({ state, thesis, onChange, onOptimize, optimizeEnabled }: { state: StrategyState | null; thesis?: StrategyState['thesis']; onChange: (patch: Partial<NonNullable<StrategyState['thesis']>>) => void; onOptimize: (target: { targetSpot: number; targetDate: string }) => void; optimizeEnabled: boolean }) {
+  const [spot, setSpot] = useState(thesis?.targetSpot?.toString() ?? '')
+  useEffect(() => { setSpot(thesis?.targetSpot?.toString() ?? '') }, [thesis])
+  const date = thesis?.targetDate?.replace(/Z$/, '') ?? ''
   const [tested, setTested] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const { scenario, error } = useMemo(() => buildThesisScenario(state, spot.trim() ? Number(spot) : NaN, thesisDateUtc(date)), [state, spot, date])
@@ -31,12 +32,12 @@ export function WorkbenchThesis({ state, onOptimize, optimizeEnabled }: { state:
   const firstExpiry = state?.legs.length ? state.legs.reduce((first, leg) => leg.expiry < first ? leg.expiry : first, state.legs[0].expiry) : undefined
   return <section className="workbench-thesis" aria-label="Test a thesis">
     <div className="workbench-thesis-fields">
-      <label>Target price<input aria-label="Thesis target price" type="number" min="0.001" max="1000000" step="any" value={spot} onChange={event => { setSpot(event.target.value); invalidate() }} /></label>
-      <label>Target date and time (UTC)<input aria-label="Thesis horizon UTC" type="datetime-local" step="0.001" min={state?.valuationTimestamp.replace(/Z$/, '')} max={firstExpiry?.replace(/Z$/, '')} value={date} onChange={event => { setDate(event.target.value); invalidate() }} /></label>
+      <label>Target price<input aria-label="Thesis target price" type="number" min="0.001" max="1000000" step="any" value={spot} onChange={event => { setSpot(event.target.value); invalidate() }} onBlur={event => { if (!event.target.validity.valid) setSpot(thesis?.targetSpot?.toString() ?? ''); else if ((spot ? Number(spot) : null) !== (thesis?.targetSpot ?? null)) onChange({ targetSpot: spot ? Number(spot) : null }) }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} /></label>
+      <label>Target date and time (UTC)<input aria-label="Thesis horizon UTC" type="datetime-local" step="0.001" min={state?.valuationTimestamp.replace(/Z$/, '')} max={firstExpiry?.replace(/Z$/, '')} value={date} onChange={event => { onChange({ targetDate: thesisDateUtc(event.target.value) || null }); invalidate() }} /></label>
       <button disabled={!scenario} onClick={() => { setTested(true); setExpanded(false) }}>Test thesis</button>
       <button disabled={!scenario || !optimizeEnabled} onClick={() => { if (scenario) onOptimize({ targetSpot: scenario.scenarioSpot, targetDate: scenario.scenarioDate }) }}>Optimize trade</button>
     </div>
-    <p>Structured fields are temporary: not saved in the position or sent to AI automatically. Chart inspection does not change them.</p>
+    <p>Thesis, target and horizon are saved with the position and included in position review. Chart inspection does not change them.</p>
     {!optimizeEnabled && <p>Optimization needs a current quoted position, with no quote load, save or proposal review in progress.</p>}
     {error && <p role="status">{error}</p>}
     {tested && scenario && <details className="workbench-thesis-preview" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}>

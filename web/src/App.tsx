@@ -1035,7 +1035,9 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
   }
   const closeScenario = () => { setScenarioSelection(null); scenarioTrigger.current?.focus() }
   const conversationPane = useRef<HTMLDivElement>(null)
-  const [thesis, setThesis] = useState('')
+  const thesis = strategy.thesis?.text ?? ''
+  const setThesis = (text: string) => updateThesis({ text })
+  const updateThesis = (patch: Partial<NonNullable<StrategyState['thesis']>>) => commit({ ...strategyRef.current, thesis: { text: '', targetSpot: null, targetDate: null, ...strategyRef.current.thesis, ...patch } })
   const [editError, setEditError] = useState('')
   const [proposal, setProposal] = useState<PendingProposal | null>(null)
   const [manualBaseline, setManualBaseline] = useState<StrategyState>()
@@ -1165,7 +1167,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
 
   const restoreDraft = (draft: WorkspaceDraft) => {
     if (workspaceBusy) throw new Error('A saved workspace request is still pending. The draft was kept.')
-    if (!commit(draft.state)) throw new Error('Recovered position failed validation. The draft was kept.')
+    if (!commit({ ...draft.state, ...(!draft.state.thesis && draft.thesis ? { thesis: { text: draft.thesis, targetSpot: null, targetDate: null } } : {}) })) throw new Error('Recovered position failed validation. The draft was kept.')
     if (draft.snapshot) setSnapshots(items => ({ ...items, [draft.snapshot!.id]: draft.snapshot! }))
     chainRequest.current++; setChainPending(false)
     workspaceRequest.current++
@@ -1174,7 +1176,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
     setHistoryOpen(false); setLifecycleSaved(''); setLotSaved('')
     setSavedIdentity(null); setSavedContent(null); setSelectedSaved('')
     setSavedTitle(draft.title); titleRef.current = draft.title
-    setThesis(draft.thesis); setComposer(draft.composer)
+    setComposer(draft.composer)
     setWorkspaceError('')
     setWorkspaceNotice(`Recovered a separate unsaved tab draft. Undo restores the previous position.${draft.snapshot ? ' Recovered quotes are historical; refresh before server analysis or saving. Keep entry costs before refreshing estimated entries. Expired contracts may no longer be refreshable.' : ' This is sample data, not market quotes.'}`)
   }
@@ -1225,6 +1227,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
   const pickTemplate = (id: TemplateId) => {
     try {
       const next = marketSnapshot ? createMarketStrategy(id, marketSnapshot, strategy.pricing!.basis) : createStrategy(id)
+      if (next.underlying === strategyRef.current.underlying) next.thesis = strategyRef.current.thesis
       commit(next.underlyingKind === 'cash-index' ? next : { ...next, valuationModel: strategyRef.current.valuationModel })
     }
     catch (error) { setEditError(error instanceof Error ? error.message : 'Template unavailable in this chain window.') }
@@ -1264,6 +1267,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
       } else {
         if (snapshot.underlyingKind === 'cash-index' && templates.some(item => item.id === activeId && item.family === 'Stock + options')) throw new Error('Cash-index options cannot hold shares. Select an option-only template before loading XSP. Your current position is unchanged.')
         next = createMarketStrategy((activeId ?? 'iron-condor') as TemplateId, snapshot, basis)
+        if (next.underlying === before.underlying) next.thesis = before.thesis
         if (next.underlyingKind !== 'cash-index') next.valuationModel = before.valuationModel
       }
       if (automaticUpdate && before.scenarioSpot === before.spot) next.scenarioSpot = snapshot.spot
@@ -1615,7 +1619,7 @@ export function App({ presentation = 'default' }: { presentation?: 'default' | '
         {symbolControl}
         <label htmlFor="trade-thesis">Your thesis<textarea id="trade-thesis" value={thesis} maxLength={1000} onChange={event => setThesis(event.target.value)} placeholder="What do you expect to happen, and by when?" /></label>
         <small>Thesis stays separate from chart inspection. Included in position discussion; not an instruction to execute.</small>
-        <WorkbenchThesis key={strategy.underlying} state={analysisState} optimizeEnabled={!!marketSnapshot && !marketSnapshot.historical && !pending && !chainPending && !workspaceBusy && !proposal} onOptimize={target => setOptimizerTarget(previous => ({ ...target, version: strategy.version, underlying: strategy.underlying, launch: (previous?.launch ?? 0) + 1 }))} />
+        <WorkbenchThesis key={strategy.underlying} state={analysisState} thesis={strategy.thesis} onChange={updateThesis} optimizeEnabled={!!marketSnapshot && !marketSnapshot.historical && !pending && !chainPending && !workspaceBusy && !proposal} onOptimize={target => setOptimizerTarget(previous => ({ ...target, version: strategy.version, underlying: strategy.underlying, launch: (previous?.launch ?? 0) + 1 }))} />
       </section>}
 
       <nav className="workspace-nav" aria-label="Workspace sections"><a href="#workspace-chart">Chart</a><a href="#workspace-legs">Legs</a><a href="#workspace-question">Ask ARGUS</a></nav>

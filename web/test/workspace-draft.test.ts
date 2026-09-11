@@ -4,6 +4,17 @@ import { readWorkspaceDraft, recoverWorkspaceDraft, type WorkspaceDraft } from '
 
 afterEach(() => vi.useRealTimers());
 
+it('round trips position-owned thesis fields and rejects invalid metadata', () => {
+  const value = draft(false);
+  const thesis = { text: 'Neutral through expiry', targetSpot: 103, targetDate: '2026-09-10T18:30:00.123Z' };
+  Object.assign(value.state, { thesis });
+  expect(recoverWorkspaceDraft(value).state).toMatchObject({ thesis });
+  for (const invalid of [{ ...thesis, targetSpot: -1 }, { ...thesis, text: 'x'.repeat(12001) }, { ...thesis, targetDate: '2026-02-30T00:00:00.000Z' }, { ...thesis, extra: true }]) {
+    Object.assign(value.state, { thesis: invalid });
+    expect(() => readWorkspaceDraft(JSON.stringify(value))).toThrow();
+  }
+});
+
 it('preserves cash-index identity and Trade event provenance through draft recovery', () => {
   const value = draft(true);
   Object.assign(value.state, { underlying: 'XSP', underlyingKind: 'cash-index', valuationModel: 'european-bsm-v1' });

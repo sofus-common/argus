@@ -88,6 +88,7 @@ export interface MarketSnapshot {
 }
 
 export interface StrategyState {
+  thesis?: { text: string; targetSpot: number | null; targetDate: string | null };
   underlyingKind?: "cash-index";
   valuationModel?: "european-bsm-v1" | "american-crr-1024-v1";
   id: string;
@@ -576,6 +577,7 @@ export function projectAnalysisPosition(state: StrategyState): StrategyState | n
 }
 
 export function mergeAnalysisProposal(state: StrategyState, proposal: StrategyState): StrategyState {
+  proposal = { ...proposal, thesis: state.thesis ? { ...state.thesis } : undefined };
   const included = projectAnalysisPosition(state);
   if (!included) throw new Error("Include holdings before proposing changes");
   assertValid(proposal);
@@ -602,6 +604,10 @@ export function mergeAnalysisProposal(state: StrategyState, proposal: StrategySt
 function validatePosition(state: StrategyState, construction: boolean): string[] {
   const errors: string[] = [];
   if (!state || typeof state !== "object") return ["strategy must be an object"];
+  if (state.thesis !== undefined) {
+    const thesis = state.thesis;
+    if (!thesis || typeof thesis !== 'object' || Array.isArray(thesis) || Object.keys(thesis).sort().join() !== 'targetDate,targetSpot,text' || typeof thesis.text !== 'string' || thesis.text.length > 12000 || (thesis.targetSpot !== null && (!finite(thesis.targetSpot) || thesis.targetSpot < .001 || thesis.targetSpot > 1_000_000)) || (thesis.targetDate !== null && (typeof thesis.targetDate !== 'string' || !Number.isFinite(Date.parse(thesis.targetDate)) || new Date(thesis.targetDate).toISOString() !== thesis.targetDate))) errors.push('Invalid position thesis');
+  }
   if (state.underlyingKind !== undefined && state.underlyingKind !== "cash-index") errors.push("unsupported underlying kind");
   if (state.underlyingKind === "cash-index" && (state.valuationModel !== "european-bsm-v1" || state.stock !== undefined)) errors.push("cash-index positions require European valuation and cannot hold shares");
   if (state.valuationModel !== undefined && state.valuationModel !== "european-bsm-v1" && state.valuationModel !== "american-crr-1024-v1") errors.push("unsupported valuation model");

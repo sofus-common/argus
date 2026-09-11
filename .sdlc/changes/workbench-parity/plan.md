@@ -14,6 +14,12 @@
    Structured target/time initially remain explicitly temporary UI inputs. Test
    them through a cloned read-only chart; prefill existing CandidateSearch only
    on explicit Optimize. No persistence schema or AI prompt change in this slice.
+   Follow-up approved by user "continue" after durable-thesis recommendation:
+   store optional typed thesis metadata in existing StrategyState/state_json;
+   reuse commit/Undo and save revisions. Copy through worker/draft sanitizers,
+   preserve legacy draft text, and control Workbench fields from the same owner.
+   No SQL migration, prompt change or new dependency. Test round trips, invalid
+   metadata, proposal ownership and native load/Undo including legacy saves.
 5. Broader construction/market search: reuse root workflows; do not simply remove
    prototype mixed-expiry/model guards without updating every dependent display.
 6. Verify tsc, relevant Vitest suites and in-app desktop/mobile interactions;

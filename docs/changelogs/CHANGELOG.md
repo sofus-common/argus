@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Thesis text, target and UTC horizon now save/load with the position and follow
+  Undo. Legacy saves clear unrelated thesis fields; legacy draft text is retained.
+  Same-symbol template/quote changes and proposals preserve the user's thesis.
+  Uses existing position JSON and revision guards, without a database migration.
+  Verified native save/load/Undo and legacy load; focused regression tests pass.
+
 - Fixed integrated Workbench thesis textarea overflow on mobile. Verified at
   390x844 with chart navigation and Heatmap/Table switching. Browser save/load,
   Undo and a live read-only AI response passed using a synthetic test position;
