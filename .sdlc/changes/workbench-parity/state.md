@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: verify native thesis input and quoted optimizer handoff end to end before prototype replacement
+next_action: verify mobile and AI/save interactions before prototype replacement
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -51,3 +51,15 @@ independent static review found no blockers. Browser rendered fields/disabled
 guards, but native datetime automation could not establish successful entry.
 Successful preview and quoted prefill interaction remain unverified, as do mobile,
 AI and durable-save flows. Overall migration is still building, not released.
+
+Fourth checkpoint supersedes the native-input limitation above: browser-native
+date entry, bounded read-only preview and exact millisecond optimizer prefill
+passed without changing the held scenario or Undo. Actual search exposed a local
+5174-to-5173 origin mismatch. Fixed only the prototype proxy with exact-origin
+translation for HTTP and the existing feed socket; production auth unchanged.
+Regression, TypeScript and 11 auth tests passed. Live invalid-body probe reaches
+validation (400); hostile, null, missing and cross-site origins remain 403.
+After restarting the stalled prototype server, browser quote refresh and explicit
+search returned five quoted candidates while retaining the held position.
+Socket translation is regression-tested, not live-feed verified. Mobile, AI and
+durable-save browser verification remain pending. No production deployment.

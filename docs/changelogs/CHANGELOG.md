@@ -2,6 +2,13 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Fixed the local prototype API proxy rejecting valid browser POSTs: translate
+  only the exact loopback prototype origin, including the existing feed socket.
+  Production auth is unchanged. Regression and 11 auth tests passed; live checks
+  preserve hostile/missing/cross-site rejection. Browser verified native thesis
+  entry, read-only preview, millisecond optimizer handoff, quote refresh and five
+  quoted search results without replacing the held position. Not deployed.
+
 - Added temporary structured thesis target/UTC horizon to integrated Workbench,
   with bounded read-only preview and explicit prefill of the existing quoted
   optimizer. Preserves held entries, position version and millisecond timestamps;
