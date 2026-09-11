@@ -17,6 +17,13 @@ All new behavior is deterministic UI/state handling. Existing probabilistic
 conversation is unchanged. No dependency, pricing formula or agent loop changes.
 The current-checkout approval remains; scoped commits provide recovery.
 
+Live qualification exposed deterministic timeout starvation. Reserve10s for
+verification after the existing20s generation/30s tool-generation limit in both
+sparring and read-only discussion. Prove late-generation success, stalled
+verification failure and unchanged call/operation counts before retesting live.
+Content quality is a separate gate; observed verifier false accepts must not be
+papered over by successful transport checks or a prompt switch without evals.
+
 1. Trace existing App.tsx flows and shared helpers; confirm backend/session routing.
 2. First tracer: existing assignment/probability/evidence and quote-risk displays
    under compact Workbench disclosures. Export/reuse components rather than clone.

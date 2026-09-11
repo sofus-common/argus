@@ -2,6 +2,14 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Fixed verified-analysis timeout starvation in both sparring and read-only
+  discussions: generation retains its 20s bound (30s for one tool continuation),
+  then verification receives up to 10s. No extra inference calls, retries or
+  weakened verdict gates. Reproduced with live generation ending at 18.47/19.88s;
+  136 regression tests, TypeScript and production build pass. Four synthetic live cases complete,
+  but content qualification still fails on unsupported broker timing/inventory
+  wording. This is a reliability checkpoint, not AI launch qualification.
+
 - Consolidated Workbench is now the normal entry, with separate Optimize navigation;
   the original layout remains at `?workbench=classic`. Optimize can explicitly load
   later quote expiries and strike windows without rebuilding current holdings.

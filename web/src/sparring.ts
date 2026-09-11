@@ -62,6 +62,7 @@ export const MAX_CONVERSATION_CHARS = 12_000;
 export const MAX_OUTPUT_TOKENS = 4096;
 export const PROVIDER_TIMEOUT_MS = 20_000;
 export const SCENARIO_TOOL_TIMEOUT_MS = 30_000;
+export const VERIFICATION_TIMEOUT_MS = 10_000;
 
 function observeAnalysis(observer: AnalysisObserver | undefined, event: Parameters<AnalysisObserver>[0]) {
   if (observer) observer(JSON.parse(JSON.stringify(event, (key, value) => /^(reasoning|reasoning_details|analysis|headers|authorization)$/i.test(key) ? undefined : value)));
@@ -268,7 +269,11 @@ async function discussReadOnly(facts: LotDiscussionFacts | PriceHistoryDiscussio
     let phase = 'fetch';
     const call = reply ? 'verification' : 'generation';
     try {
-    if (Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
+    if (controller.signal.aborted || Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
+    if (reply) {
+      clearTimeout(timeout!);
+      timeout = setTimeout(expire!, VERIFICATION_TIMEOUT_MS);
+    }
     const selectingTool = !reply && kind === "lots" && !toolMessages.length;
     const content = JSON.stringify({ ...JSON.parse(frozen), requestedScenarios, ...(selectingTool ? { reply_schema: LOT_DISCUSSION_SCHEMA.schema } : {}), ...(reply ? { reply } : {}) });
     if (new TextEncoder().encode(content).byteLength > inputLimit) throw new Error("Lot discussion facts exceed the analysis limit.");
@@ -1070,7 +1075,11 @@ export async function spar(
     let phase = 'fetch';
     const call = verification ? 'verification' : 'generation';
     try {
-    if (Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
+    if (controller.signal.aborted || Date.now() - startedAt >= (toolMessages.length ? SCENARIO_TOOL_TIMEOUT_MS : PROVIDER_TIMEOUT_MS)) throw new Error("Provider timed out");
+    if (verification) {
+      clearTimeout(timeout);
+      timeout = setTimeout(expire!, VERIFICATION_TIMEOUT_MS);
+    }
     const selectingTool = !verification && !preview && !firstExpiryBounds && !request.candidate_selection && !request.discovery && !toolMessages.length;
     const response = await Promise.race([deadline, providerFetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",

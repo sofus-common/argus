@@ -1,9 +1,29 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: verify live AI discussion and launch configuration against the qualified release bundle
+next_action: repair AI content qualification failures without weakening verification or adding agent loops
 blocker: null
 updated: 2026-09-11
+
+AI/release audit checkpoint: local frozen bundle analysis-v16 digest
+89531521ca027b5cfa34d05f501fd2fec704b6f82f78811776ea2e4e7acad356,
+engine analysis-contract-v7. Quoted judgment run had two verification timeouts:
+3d04fafb-7895-4ab8-83a4-e0bc99304300 and b4185f41-962c-4707-be68-a350fe91ed94.
+Generation ended 18473/19880ms; shared deadline aborted around20020ms. Fixed
+both orchestration paths with bounded10s verification after existing generation
+cap, retaining fail-closed checks and call counts. 136 tests, TypeScript and build pass;
+independent review confirms30s normal/40s one-tool maximum provider duration.
+Quoted rerun hit chain503 before inference; separate synthetic live judgment
+completed4/4 but is NOT content-qualified. Trace0277317a-4251-4a75-8355-f3a29ddc5d71
+asserted an unsupported5:30 broker deadline and described opposite assignment
+outcomes as the same short inventory. Prior quoted calendar trace
+d75a9c36-0137-4d4e-b7ac-0d797100e004 described midpoint liquidation as locked-in
+and zero-interest assumptions despite supplied rate0.04. Repair this gate next;
+do not repeat schema-only passes as quality evidence. No prompt/model changed.
+Cloudflare read-only preflight: migrations0001..0005 applied; no active D1 prompt
+override; Access allows only the authorized owner. Current remote version
+320ac0ae-06e5-42d4-9abe-1c1c48e9c7a3 uploadedSep9, not current local code.
+No remote mutation or deployment. Hosted post-release journey remains unproved.
 
 Launch checkpoint: normal / now opens consolidated Workbench; classic layout stays
 at ?workbench=classic. Explicit Optimize quote-window loading reuses preserved

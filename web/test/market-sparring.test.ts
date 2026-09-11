@@ -608,7 +608,7 @@ it("keeps the shared deadline for eligible bound verification fetch and body sta
         return Response.json({ choices: [{ message: { content: JSON.stringify(answer) } }] });
       });
       const result = expect(spar(input, "key", fetcher)).rejects.toMatchObject({ reason: "timeout" });
-      await vi.advanceTimersByTimeAsync(20_001);
+      await vi.advanceTimersByTimeAsync(30_001);
       await result;
       expect(fetcher).toHaveBeenCalledTimes(2);
     }
@@ -1344,7 +1344,7 @@ describe("verified market sparring", () => {
       expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
     } finally { vi.useRealTimers(); }
   });
-  it("extends a valid tool turn to 30 seconds total, not 30 seconds after the tool", async () => {
+  it("bounds tool generation at 30 seconds plus a separate verification allowance", async () => {
     vi.useFakeTimers();
     try {
       const normal = provider(reply());
@@ -1360,7 +1360,7 @@ describe("verified market sparring", () => {
       await vi.advanceTimersByTimeAsync(20_001);
       expect(fetcher).toHaveBeenCalledTimes(2);
       expect(fetcher.mock.calls[1][1]?.signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       await result;
       expect(fetcher).toHaveBeenCalledTimes(3);
     } finally { vi.useRealTimers(); }
@@ -1483,7 +1483,7 @@ describe("verified market sparring", () => {
     answer.text = "Below breakeven the entire premium is lost.";
     await expect(spar(request(), "key", provider(answer, verdict), context, snapshot)).rejects.toMatchObject({ message: "Analysis could not be verified.", reason: verdict?.valid === false && Object.keys(verdict).length === 1 ? "rejected" : "invalid_output" });
   });
-  it.each(["fetch", "body"])("uses one total deadline and fails closed on unavailable or stalled verification %s", async stage => {
+  it.each(["fetch", "body"])("bounds verification independently and fails closed on unavailable or stalled verification %s", async stage => {
     for (const [response, reason] of [[new Response("down", { status: 500 }), "provider_error"], [new Response("invalid"), "invalid_output"], [new Response("x".repeat(65 * 1024)), "invalid_output"], [Response.json({}), "invalid_output"], [Response.json({ choices: [{ message: { content: "not JSON" } }] }), "invalid_output"]] as const) {
       const normal = provider(reply());
       const fetcher = vi.fn<typeof fetch>(async (url, init) => JSON.parse(String(init?.body)).response_format?.json_schema.name === "analysis_verification" ? response : normal(url, init));
@@ -1498,7 +1498,7 @@ describe("verified market sparring", () => {
         return normal(url, init);
       });
       const result = expect(spar(request(), "key", fetcher, context, snapshot)).rejects.toMatchObject({ reason: "timeout" });
-      await vi.advanceTimersByTimeAsync(20_001);
+      await vi.advanceTimersByTimeAsync(30_001);
       await result;
       expect(fetcher).toHaveBeenCalledTimes(2);
     } finally { vi.useRealTimers(); }
@@ -1506,7 +1506,7 @@ describe("verified market sparring", () => {
   it.each([false, true])("isolates late clarification deadlines from JSON fencing (fenced=%s)", async fenced => {
     vi.useFakeTimers();
     try {
-      for (const verificationDelay of [1_000, 2_000]) {
+      for (const verificationDelay of [2_000, 11_000]) {
         const input = request(), before = structuredClone(input), answer = reply();
         answer.text = "What maximum net entry outlay should I use?";
         const json = JSON.stringify(answer);
@@ -1516,13 +1516,13 @@ describe("verified market sparring", () => {
           return Response.json({ choices: [{ message: { content: verifying ? '{"valid":true}' : fenced ? "```json\n" + json + "\n```" : json } }] });
         });
         const result = spar(input, "key", fetcher, context, snapshot);
-        const checked = verificationDelay === 1_000
+        const checked = verificationDelay === 2_000
           ? expect(result).resolves.toMatchObject({ reply: answer, next_state: { ...input.state, version: input.state.version + 1 } })
           : expect(result).rejects.toMatchObject({ reason: "timeout" });
-        await vi.advanceTimersByTimeAsync(20_001);
+        await vi.advanceTimersByTimeAsync(30_001);
         await checked;
         expect(fetcher).toHaveBeenCalledTimes(2);
-        expect(fetcher.mock.calls[1][1]?.signal?.aborted).toBe(verificationDelay === 2_000);
+        expect(fetcher.mock.calls[1][1]?.signal?.aborted).toBe(verificationDelay === 11_000);
         expect(answer.operations).toEqual([]);
         expect(input).toEqual(before);
         await vi.runAllTimersAsync();

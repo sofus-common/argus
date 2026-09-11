@@ -3,6 +3,30 @@ import { createStrategy } from "../src/options";
 import { spar, discussLotComparison, type SparringRequest } from "../src/sparring";
 import type { AnalysisObserver } from "../src/analysis-trace";
 
+it.each(['spar', 'lots'] as const)('reserves bounded verification time after late %s generation', async mode => {
+  vi.useFakeTimers();
+  try {
+    for (const verificationMs of [5000, 11000]) {
+      const state = createStrategy('long-call'), before = structuredClone(state);
+      const reply = { text: 'Discuss only.', assumptions: [], objections: [], suggested_prompts: [], ...(mode === 'spar' ? { operations: [], risk_classification: 'bounded', evidence_ids: [] } : {}) };
+      const provider = vi.fn<typeof fetch>(async (): Promise<Response> => {
+        const verifying = provider.mock.calls.length === 2;
+        await new Promise(resolve => setTimeout(resolve, verifying ? verificationMs : 18500));
+        return Response.json({ choices: [{ message: { content: JSON.stringify(verifying ? { valid: true } : reply) } }] });
+      });
+      const pending = mode === 'spar'
+        ? spar({ request_id: 'late-verification', base_state_version: 1, state, conversation: [{ role: 'user', content: 'Explain' }] }, 'KEY', provider)
+        : discussLotComparison({ title: 'Synthetic' } as never, [{ role: 'user', content: 'Explain' }], 'KEY', provider);
+      const checked = verificationMs === 5000 ? expect(pending).resolves.toMatchObject({ reply }) : expect(pending).rejects.toMatchObject({ reason: 'timeout' });
+      await vi.advanceTimersByTimeAsync(30001);
+      await checked;
+      expect(provider).toHaveBeenCalledTimes(2);
+      expect(state).toEqual(before);
+      await vi.runAllTimersAsync();
+    }
+  } finally { vi.useRealTimers(); }
+});
+
 it('distinguishes stalled fetch, stalled body and malformed JSON without private diagnostics', async () => {
   for (const mode of ['spar', 'lots'] as const) for (const phase of ['fetch', 'body', 'parse'] as const) {
     vi.useFakeTimers();
