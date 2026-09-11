@@ -2,6 +2,14 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added an opt-in integrated Workbench at `/?workbench=integrated`: same root
+  financial state, validation, Undo, saves and conversation, with top thesis and
+  symbol controls, collapsed strategy library/tools, and chart-first layout.
+  Default root and existing prototype/optimizer remain unchanged. TypeScript,
+  presentation regression, desktop edit/Undo and heatmap checks passed; independent
+  review found no state blocker. Structured thesis/optimizer integration, mobile
+  and full quote/save/AI end-to-end verification remain pending. Not deployed.
+
 - Added compact read-only execution, assignment/contract-term and conditional
   probability disclosures using existing financial calculations. Reused the
   explicit-load market context panel without changing position or AI state.

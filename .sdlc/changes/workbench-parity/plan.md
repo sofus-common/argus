@@ -6,7 +6,8 @@
 3. Architecture decision after independent review: use root App as the single
    state/guard owner under a compact Workbench presentation variant. Do not copy
    Undo, snapshot registry, saved revisions or proposal handlers into ScenarioLab.
-   Await human confirmation of this structural migration before implementing it.
+   Human confirmed this structural migration with "continue". First expose it
+   at /?workbench=integrated, retaining both existing screens during verification.
 4. Preserve thesis/inspection separation while retaining root worker valuation,
    conversation and persistence. Test failed responses, explicit Apply, save/load,
    held-cost refresh, stale-response rejection and recovery isolation.

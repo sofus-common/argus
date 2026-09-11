@@ -960,7 +960,11 @@ function ChartRangeControls({ spot, range, onChange }: { spot: number; range?: C
   </form>
 }
 
-export function App() {
+export function App({ presentation = 'default' }: { presentation?: 'default' | 'workbench' } = {}) {
+  const compact = presentation === 'workbench'
+  const Library = compact ? 'details' : 'aside'
+  const WorkspaceTools = compact ? 'details' : 'div'
+  const PricingPanel = compact ? 'details' : 'div'
   const [templateQuery, setTemplateQuery] = useState('')
   const [templateFamily, setTemplateFamily] = useState('All families')
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
@@ -1589,8 +1593,13 @@ export function App() {
     const range = { min: Math.max(.001, low - margin), max: Math.min(1_000_000, high + margin) }
     return <><p>Charts share the same underlying range; vertical scales are independent. Solid lines use the shared target date. Each dashed expiry reference is separately dated below.</p><div className="candidate-charts">{states.map((state, index) => <figure key={index}><figcaption>{index === 0 ? 'Left' : 'Right'} table alternative · expiry reference {new Date(Math.min(...state.legs.map(leg => Date.parse(leg.expiry)))).toISOString()}</figcaption><PayoffChart state={state} range={range} metric="pnl" readOnly /></figure>)}</div></>
   }
+  const symbolControl = <form className="symbol-control" onSubmit={event => { event.preventDefault(); void loadMarket(false, undefined, symbolDraft.trim().toUpperCase()) }}>
+    <label>Underlying<input aria-label="Underlying symbol" aria-describedby="symbol-help" maxLength={6} value={symbolDraft} autoCapitalize="characters" autoComplete="off" spellCheck={false} onChange={event => setSymbolDraft(event.target.value.toUpperCase())} /></label>
+    <button type="submit" disabled={chainPending || !/^[A-Z]{1,6}$/.test(symbolDraft.trim())}>{chainPending ? 'Loading symbol…' : 'Load symbol'}</button>
+    <small id="symbol-help">Standard equity / ETF or XSP cash index · rebuilds template · Undo restores your position</small>
+  </form>
   return (
-    <main className="app-shell">
+    <main className={`app-shell${compact ? ' integrated-workbench' : ''}`}>
       <header className="topbar">
         <div className="brand"><span className="brand-mark">A</span><div><strong>ARGUS</strong><small>OPTIONS, INTERROGATED.</small></div></div>
         <div className="market-pill"><i /> {marketSnapshot?.imported ? 'Imported quotes · unverified' : marketSnapshot?.historical ? 'Historical quotes' : marketSnapshot ? 'Tastytrade quotes' : 'Replay-safe sample'} <span>{marketSnapshot ? 'timestamped' : 'not live'}</span></div>
@@ -1598,9 +1607,16 @@ export function App() {
         <div className="top-actions"><button disabled={chainPending} onClick={() => void loadMarket(!!marketSnapshot, marketSnapshot ? [...new Set(marketSnapshot.contracts.map(c => c.expiry.slice(0,10)))].sort() : undefined)}>{chainPending ? 'Loading quotes…' : marketSnapshot ? 'Refresh prices' : 'Use real prices'}</button>{marketSnapshot && <button onClick={() => { chainRequest.current++; setChainPending(false); commit({ ...createStrategy((activeId ?? 'iron-condor') as TemplateId), valuationModel: strategyRef.current.valuationModel }) }}>Sample mode</button>}</div>
       </header>
 
+      {compact && <section className="workbench-intent" aria-label="Trading thesis">
+        {symbolControl}
+        <label htmlFor="trade-thesis">Your thesis<textarea id="trade-thesis" value={thesis} maxLength={1000} onChange={event => setThesis(event.target.value)} placeholder="What do you expect to happen, and by when?" /></label>
+        <small>Thesis stays separate from chart inspection. Included in position discussion; not an instruction to execute.</small>
+      </section>}
+
       <nav className="workspace-nav" aria-label="Workspace sections"><a href="#workspace-chart">Chart</a><a href="#workspace-legs">Legs</a><a href="#workspace-question">Ask ARGUS</a></nav>
       <div className="workspace">
-        <aside className="strategy-rail">
+        <Library className="strategy-rail">
+          {compact && <summary>Change strategy <span>{strategy.name} · {templates.length} templates</span></summary>}
           <div className="rail-title"><span>Strategy library</span></div>
           <button className="new-strategy" onClick={newWorkspace}><b>＋</b> New strategy</button>
           <div className="template-filters">
@@ -1613,7 +1629,7 @@ export function App() {
           </div>
           {!visibleTemplates.length && <p className="template-empty">No matching strategies.<br /><small>Try another name or clear the filters.</small></p>}
           <div className="rail-foot"><span>{templates.length}</span><p>Curated templates<br /><small>+ custom composition</small></p></div>
-        </aside>
+        </Library>
 
         <section className="builder">
           <div className="context-strip">
@@ -1622,12 +1638,9 @@ export function App() {
             <div className="workspace-actions"><button className="undo-button" disabled={!marketSnapshot || !analysisState || pending || chainPending || workspaceBusy} onClick={() => { stopAutomatic(); setHistoryOpen(true) }}>Price history</button><button className="icon-button" aria-label="Reset strategy" onClick={() => pickTemplate((activeId ?? 'iron-condor') as TemplateId)}>↻</button><button className="undo-button" aria-label="Undo" disabled={!history.length} onClick={undo}>↶ Undo</button></div>
           </div>
 
-          <div className="workspace-tools" role="group" aria-label="Position and saved workspace controls">
-          <form className="symbol-control" onSubmit={event => { event.preventDefault(); void loadMarket(false, undefined, symbolDraft.trim().toUpperCase()) }}>
-            <label>Underlying<input aria-label="Underlying symbol" aria-describedby="symbol-help" maxLength={6} value={symbolDraft} autoCapitalize="characters" autoComplete="off" spellCheck={false} onChange={event => setSymbolDraft(event.target.value.toUpperCase())} /></label>
-            <button type="submit" disabled={chainPending || !/^[A-Z]{1,6}$/.test(symbolDraft.trim())}>{chainPending ? 'Loading symbol…' : 'Load symbol'}</button>
-            <small id="symbol-help">Standard equity / ETF or XSP cash index · rebuilds template · Undo restores your position</small>
-          </form>
+          <WorkspaceTools className="workspace-tools" role={compact ? undefined : 'group'} aria-label="Position and saved workspace controls">
+          {compact && <summary>Saved workspace &amp; position tools <span>{savedIdentity?.title ?? 'Unsaved position'}{unsavedChanges ? ' · Unsaved changes' : ''}</span></summary>}
+          {!compact && symbolControl}
 
           <SymbolSearch underlying={strategy.underlying} onSelect={setSymbolDraft} />
 
@@ -1654,7 +1667,7 @@ export function App() {
             <SavedImport disabled={workspaceBusy || !session} onImported={refreshSaved} />
             <small>Explicit position saves only; conversation is not saved. Unsaved position edits trigger a browser warning on reload or leaving where supported. Loading replaces the open position; Undo restores it. Quotes retain their original timestamps.</small>
           </details>
-          </div>
+          </WorkspaceTools>
           {session && /^[a-f0-9]{64}$/.test(session.recoveryKey) && <DraftRecovery key={session.recoveryKey} ownerKey={session.recoveryKey} data={{ state: strategy, snapshot: marketSnapshot ?? null, title: savedTitle, thesis, composer }} changed={unsavedChanges || !!thesis || !!composer} disabled={workspaceBusy} onRestore={restoreDraft} />}
           {workspaceBusy && <p className="workspace-notice" role="status">Updating saved workspace…</p>}
           {lifecycleSaved && <PositionLifecycle key={lifecycleSaved} savedId={lifecycleSaved} snapshotId={marketSnapshot?.id} onClose={() => setLifecycleSaved('')} onRecorded={refreshSaved} onAnalyze={analyzeRemaining} />}
@@ -1663,7 +1676,8 @@ export function App() {
           {workspaceNotice && <p className="workspace-notice" role="status">{workspaceNotice}</p>}
           {workspaceError && <p className="workspace-notice workspace-error" role="alert">{workspaceError}</p>}
 
-          {marketSnapshot && <div className="market-pricing-panel">
+          {marketSnapshot && <PricingPanel className="market-pricing-panel">
+            {compact && <summary>Quotes &amp; pricing <span>{strategy.pricing?.basis} · {strategy.pricing?.entryMode === 'fixed' ? 'held entry costs' : 'estimated entry'} · retrieved {marketSnapshot.retrievedAt} · source age inside</span></summary>}
             <SnapshotAge snapshot={marketSnapshot} contracts={strategy.legs.map(leg => leg.contractId!)} />
             <details className="quote-provenance"><summary><b>{marketSnapshot.historical ? 'HISTORICAL QUOTES' : marketSnapshot.captureSource ? 'Captured position · selected contracts only' : strategy.pricing?.entryMode === 'fixed' ? 'REAL CONTRACTS · HELD ENTRY COSTS' : 'REAL CONTRACTS · ESTIMATED ENTRY'}</b><small>Source details · not a live fill</small></summary><span>{marketSnapshot.contracts.length} quoted contracts in this window · underlying quote {marketSnapshot.spotAsOf}</span><span>Retrieved {marketSnapshot.retrievedAt} · retrieval does not establish source freshness. Rates/yield are model assumptions.</span>{marketSnapshot.captureSource && <><span>Refresh the chain to explore alternatives. Quote time is the oldest bid, ask or IV source time.</span><span>Underlying bid {marketSnapshot.spotSourceTimes?.bid} · ask {marketSnapshot.spotSourceTimes?.ask}</span>{marketSnapshot.contracts.map(contract => <span key={contract.contractId}>{contract.contractId} · bid {contract.sourceTimes?.bid} · ask {contract.sourceTimes?.ask} · IV {contract.sourceTimes?.iv}</span>)}</>}</details>
             {quoteMark && <details className="quote-model-comparison" aria-label="Quote and model comparison">
@@ -1679,7 +1693,7 @@ export function App() {
             {quoteMark && <details aria-label="Quote valuation"><summary><b>{strategy.stock ? 'Dated options + stock mark P/L' : 'Estimated liquidation P/L'} {money(quoteMark.pnl)}</b></summary><span>{strategy.stock ? 'Combined option estimate + stock mark' : 'Signed liquidation value'} {money(quoteMark.signedLiquidationValue)} − signed entry {money(quoteMark.signedEntry)} − cost allowance {money(quoteMark.feeAllowance ?? 0)}</span>{strategy.stock && <span>Shares marked at underlying snapshot spot: {money(quoteMark.signedStockValue ?? 0)} · {marketSnapshot?.spotAsOf}. Not an executable stock bid/ask.</span>}<details aria-label="Option quoted spreads"><summary>Quoted option spread width {money(quoteMark.optionQuotedSpreadWidth, '—', 2)}</summary><span>Midpoint to natural liquidation difference {money(quoteMark.optionMidToNaturalDifference, '—', 2)}</span>{quoteMark.optionSpreadLegs.map(leg => <span key={leg.legId}>{leg.contracts} × {leg.contractId} · bid {money(leg.bid, '—', 2)} / ask {money(leg.ask, '—', 2)} · position width {money(leg.positionWidthUsd, '—', 2)} · {leg.quoteAsOf}</span>)}<span>{quoteMark.optionSpreadBasis}</span></details><span>{quoteMark.basis} · {quoteMark.oldestQuoteAt} to {quoteMark.newestQuoteAt}</span><span>{quoteMark.historical ? 'Historical quotes. ' : ''}Not scenario-model P/L, realized returns, or a promised fill. Includes the supplied flat allowance, not actual broker fees.</span></details>}
             <StreamedMarks key={`${marketSnapshot.underlying}:${[...new Set(strategy.legs.map(leg => leg.contractId))].sort().join(',')}`} captureEnabled={!chainPending && strategy.pricing?.entryMode === 'fixed'} onCapture={() => void loadMarket(true, undefined, strategy.underlying, undefined, true)} onReview={() => void captureAndReview()} automatic={automatic} onAutomatic={enabled => { if (!enabled) return stopAutomatic(); if (chainPending || workspaceBusy || reviewRequest.current || proposal || strategyRef.current.pricing?.entryMode !== 'fixed') return; automaticGeneration.current++; automaticCheckpoint.current = true; automaticRef.current = true; setAutomatic(true) }} onTick={() => loadMarket(true, undefined, strategyRef.current.underlying, undefined, true, true)} reviewEnabled={!pending && !proposal && !workspaceBusy && !analysisUnavailable} snapshot={marketSnapshot} contracts={[...new Set(strategy.legs.map(leg => leg.contractId))].sort()} />
             <details><summary>Choose chain window</summary><div className="chain-window"><label>Strike center<input aria-label="Strike center" type="number" min="0.001" max="1000000" step="any" value={strikeCenter} onChange={e => setStrikeCenter(e.target.value)} /></label><button disabled={chainPending || !Number.isFinite(Number(strikeCenter)) || Number(strikeCenter) <= 0 || Number(strikeCenter) > 1000000} onClick={() => void loadMarket(true, [...new Set(marketSnapshot.contracts.map(c => c.expiry.slice(0,10)))].sort(), strategy.underlying, Number(strikeCenter))}>Browse strikes</button><small>Retains your selected legs and quantities. {strategy.pricing?.entryMode === 'fixed' ? 'Refreshes quotes; held entry costs remain unchanged.' : 'Refreshes quotes and re-estimates entry.'} Not realized returns.</small></div><div className="chain-window">{Array.from({ length: MAX_OPTION_EXPIRIES }, (_, index) => <label key={index}>Expiry {index+1}{index > 0 ? ' (optional)' : ''}<select aria-label={`Chain expiry ${index+1}`} value={windowDates[index] ?? ''} onChange={e => setWindowDates(dates => Object.assign([...dates], { [index]: e.target.value }))}><option value="" disabled={index === 0}>{index === 0 ? 'Choose expiry' : 'None'}</option>{marketSnapshot.availableExpiries.map(date => <option key={date} value={date}>{date}</option>)}</select></label>)}<button disabled={chainPending || !windowDates[0] || new Set(windowDates.filter(Boolean)).size !== windowDates.filter(Boolean).length} onClick={() => void loadMarket(false, windowDates.filter(Boolean))}>Rebuild template with these expiries</button><small>Calendars and diagonals need two expiries. Leave optional dates as None for a single-expiry window. Rebuilds the current template; custom legs and quantities are replaced. Refresh prices above preserves your legs.</small></div></details>
-          </div>}
+          </PricingPanel>}
 
 
           {analysisState && (cashIndex ? <p className="history-basis">Cash-index options settle in cash; there is no share delivery or early exercise. Settlement amounts and resulting cashflows are not recorded automatically.</p> : <AssignmentOutcomes state={analysisState} snapshot={marketSnapshot ?? undefined} />)}
@@ -1751,7 +1765,7 @@ export function App() {
         <aside className="sparring-rail">
           <div className="sparring-head"><div><span className="argus-orb"><i /></span><div><strong>ARGUS</strong><small><i /> SPARRING PARTNER</small></div></div></div>
           {!discoveryMode && <WorkspaceContext key={strategy.underlying} symbol={strategy.underlying} sample={!strategy.pricing} />}
-          <details className="thesis-card" hidden={!!proposal || discoveryMode}><summary>Your thesis <small>{thesis.trim() ? 'Included in review' : 'optional'}</small></summary><label className="sr-only" htmlFor="trade-thesis">Your thesis</label><textarea id="trade-thesis" value={thesis} maxLength={1000} onChange={(event) => setThesis(event.target.value)} placeholder="What do you expect to happen, and by when?" /></details>
+          {!compact && <details className="thesis-card" hidden={!!proposal || discoveryMode}><summary>Your thesis <small>{thesis.trim() ? 'Included in review' : 'optional'}</small></summary><label className="sr-only" htmlFor="trade-thesis">Your thesis</label><textarea id="trade-thesis" value={thesis} maxLength={1000} onChange={(event) => setThesis(event.target.value)} placeholder="What do you expect to happen, and by when?" /></details>}
           <div className="conversation" ref={conversationPane}>
             {!messages.length && metrics && <article className="position-brief"><div className="brief-heading"><span>POSITION BRIEF</span><small>Calculated locally</small></div><h3>{metrics.maxLoss == null && !mixedExpiry ? 'Your downside is uncapped.' : mixedExpiry ? 'Time changes this trade.' : `Know the ${money(metrics.maxLoss)} at risk.`}</h3><p>{brief}</p><div className="brief-facts"><span>Theta · local sensitivity<strong>{signed(Number(metrics.theta.toFixed(2)), 2)} USD / day</strong></span><span>Vega · local sensitivity<strong>{signed(briefVega, 2)} USD / IV point</strong></span></div><p className="brief-question">{briefQuestion}</p></article>}
             <div className="session-divider"><span>STRATEGY REVIEW</span></div>
