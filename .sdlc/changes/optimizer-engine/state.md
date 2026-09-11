@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: finish prototype direction, expiry and ranking control migration without synthetic fallback
+next_action: specify and regression-test a genuine blended objective and two-sided scenarios before enabling their controls
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -43,3 +43,12 @@ deterministic helper. Browser returned seven scenario and two entry-basis rows;
 Inspect returned to Workbench without applying. TypeScript and 33 focused tests
 passed. Direction icons, expiry strip and ranking blend remain pending; overall
 AC3 is not complete. No production deployment or default-page promotion.
+
+Quoted expiry checkpoint: optional domain.expiry selects exact first/short expiry
+before enumeration/counts/ranking, retaining later mixed long legs. API uses stored
+snapshot unchanged; UI verifies selected expiry and exact domain echo. Engine
+replay verifies partition counts, family winners, reversed quotes and mixed legs.
+98 focused/API tests and TypeScript pass; browser three-family Sep14 search and
+Inspect handoff pass. Direction controls use disclosed fixed target offsets and
+starter families only. Existing objectives remain unchanged; no cosmetic blend.
+No production deployment or default promotion; overall AC3 still incomplete.

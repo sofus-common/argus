@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: migrate prototype direction icons, expiry strip and ranking controls before promoting integrated Workbench
+next_action: define and test genuine return/chance blend and two-sided move scoring before exposing those controls
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -114,3 +114,16 @@ mid/natural estimates and Inspect return passed; held Iron Condor stayed unchang
 and Apply remained explicit. Review found and fixed hidden inspection errors.
 Mobile verification of this checkpoint remains pending. Direction icons, expiry
 strip and ranking blend are not yet migrated. No deployment or default promotion.
+
+Ninth checkpoint migrates outlook buttons and quoted expiry strip. Deterministic
+offset presets select starter option families; not predictions or exhaustive
+directional classification. Two-sided control stays disabled. domain.expiry is
+an optional exact quoted first/short expiry, enforced before enumeration and
+reconciled on the client; later long legs remain eligible. Reuses prototype strip
+with quoted provenance and disabled pre-horizon dates. No snapshot filtering.
+TypeScript and 98 tests passed with CLI 20s timeout after two 5s timeouts under
+load; no test assertion failures remained. Independent reviewer found no blockers.
+Browser selected Sep 14 reduced enumeration from1250 to625 and returned three
+Sep14 families; Inspect retained Iron Condor and explicit Apply. 390px viewport
+had375px document width; reset afterward. Drag/overflow across many quoted months
+not exercised: current quote window has two dates. No deployment/default promotion.

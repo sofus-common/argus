@@ -11,7 +11,7 @@ const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'curren
 const dateLabel = (value: string) => new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 const legsLabel = (state: StrategyState) => [...state.legs.map(leg => `${leg.side === 'long' ? 'Buy' : 'Sell'} ${leg.contracts} × ${leg.strike}${leg.type === 'call' ? 'C' : 'P'}`), ...(state.stock ? [`${state.stock.shares} shares at ${money(state.stock.entryPrice)}`] : [])].join(' · ')
 
-export function ExpiryStrip({ expiry, onChange, dates = LAB_SAMPLE_EXPIRIES }: { expiry: string; onChange: (date: string) => void; dates?: readonly string[] }) {
+export function ExpiryStrip({ expiry, onChange, dates = LAB_SAMPLE_EXPIRIES, quoted = false, minDate }: { expiry: string; onChange: (date: string) => void; dates?: readonly string[]; quoted?: boolean; minDate?: string }) {
   const track = useRef<HTMLDivElement>(null)
   const drag = useRef<{ x: number; scroll: number; moved: boolean } | null>(null)
   const [edges, setEdges] = useState({ start: true, end: true })
@@ -29,9 +29,9 @@ export function ExpiryStrip({ expiry, onChange, dates = LAB_SAMPLE_EXPIRIES }: {
     if (node) node.scrollBy({ left: direction * node.clientWidth * .7, behavior: 'auto' })
   }
   return <section className="opt-expiry-strip" aria-label="Trade expiry">
-    <div className="opt-expiry-caption"><h2>Trade expiry</h2><strong>{dateLabel(expiry)}</strong><small>Separate from your thesis horizon</small></div>
+    <div className="opt-expiry-caption"><h2>{quoted ? 'First / short expiry' : 'Trade expiry'}</h2><strong>{expiry ? dateLabel(expiry) : 'All quoted expiries'}</strong><small>Separate from your thesis horizon</small></div>
     <div className="opt-strip-picker">
-      <button aria-label="Earlier months" disabled={edges.start} onClick={() => move(-1)}>‹</button>
+      <button type="button" aria-label="Earlier months" disabled={edges.start} onClick={() => move(-1)}>‹</button>
       <div ref={track} className="opt-strip-track" role="group" aria-label="Expiration dates" onScroll={measure}
         onPointerDown={event => { drag.current = event.pointerType === 'mouse' && event.button === 0 ? { x: event.clientX, scroll: event.currentTarget.scrollLeft, moved: false } : null }}
         onPointerMove={event => {
@@ -46,12 +46,12 @@ export function ExpiryStrip({ expiry, onChange, dates = LAB_SAMPLE_EXPIRIES }: {
         onClickCapture={event => { if (drag.current?.moved && event.detail !== 0) { event.preventDefault(); event.stopPropagation() } drag.current = null }}>
         {[...new Set(dates.map(date => date.slice(0, 7)))].map(month => <div className="opt-strip-month" key={month}>
           <span>{new Date(month + '-01T00:00:00Z').toLocaleDateString('en-US', { month: 'short', ...(month.endsWith('-01') ? { year: '2-digit' as const } : {}), timeZone: 'UTC' })}</span>
-          <div>{dates.filter(date => date.startsWith(month)).map(date => <button key={date} aria-label={'Expiry ' + dateLabel(date)} aria-pressed={date === expiry} onClick={() => onChange(date)}>{new Date(date).getUTCDate()}</button>)}</div>
+          <div>{dates.filter(date => date.startsWith(month)).map(date => <button type="button" key={date} disabled={!!minDate && Date.parse(date) < Date.parse(minDate)} title={minDate && Date.parse(date) < Date.parse(minDate) ? 'Before target horizon' : undefined} aria-label={'Expiry ' + dateLabel(date)} aria-pressed={date === expiry} onClick={() => onChange(date)}>{new Date(date).getUTCDate()}</button>)}</div>
         </div>)}
       </div>
-      <button aria-label="Later months" disabled={edges.end} onClick={() => move(1)}>›</button>
+      <button type="button" aria-label="Later months" disabled={edges.end} onClick={() => move(1)}>›</button>
     </div>
-    <small className="opt-expiry-help">Drag months left or right · click a date<br/>{dates.length} loaded sample expiries</small>
+    <small className="opt-expiry-help">Drag months left or right · click a date<br/>{dates.length} loaded {quoted ? 'quoted' : 'sample'} expiries</small>
   </section>
 }
 

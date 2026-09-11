@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CANDIDATE_OPTION_FAMILIES, candidateOptionFamily, candidateStrategyFamily, expirationProbability, firstExpirySpreadLossBound, validateMarketStrategy, type MarketSnapshot, type StrategyState, type searchCandidates } from './options'
 import { requestWorkspaceValuation, requestOptimizerSensitivity } from './workspace-valuation-client'
-import { ExpiryPlot } from './scenario-lab-optimizer'
+import { ExpiryPlot, ExpiryStrip } from './scenario-lab-optimizer'
 import type { optimizerSensitivity } from './optimizer-sensitivity'
 
 export type CandidateSearchResult = ReturnType<typeof searchCandidates>
@@ -32,6 +32,13 @@ export function CandidateStress({ state, snapshot }: { state: StrategyState; sna
 }
 type Search = CandidateSearchResult['request']
 type Domain = NonNullable<Parameters<typeof searchCandidates>[3]>
+export function outlookPreset(label: string, spot: number): { target: number; families: Domain['families'] } | null {
+  const offset = ({ 'Very bearish': -.06, Bearish: -.03, Neutral: 0, Bullish: .03, 'Very bullish': .06 } as Record<string, number>)[label]
+  if (!Number.isFinite(spot) || spot <= 0 || typeof offset !== 'number') return null
+  const target = Number((spot * (1 + offset)).toFixed(3))
+  if (target < .001 || target > 1000000) return null
+  return { target, families: offset > 0 ? ['long-call', 'bull-call', 'bull-put'] : offset < 0 ? ['long-put', 'bear-call', 'bear-put'] : ['call-butterfly', 'put-butterfly', 'iron-butterfly', 'iron-condor'] }
+}
 const familyLabels = { options: 'Options only', 'long-call': 'Long call', 'long-put': 'Long put', 'bull-call': 'Bull call spread', 'bear-call': 'Bear call spread', 'bull-put': 'Bull put spread', 'bear-put': 'Bear put spread', 'long-straddle': 'Long straddle', 'long-strangle': 'Long strangle', 'call-butterfly': 'Call butterfly', 'put-butterfly': 'Put butterfly', 'short-call-butterfly': 'Short call butterfly', 'short-put-butterfly': 'Short put butterfly', 'iron-butterfly': 'Iron butterfly', 'inverse-iron-butterfly': 'Inverse iron butterfly', 'iron-condor': 'Iron condor', 'inverse-iron-condor': 'Inverse iron condor', 'covered-call': 'Covered call', 'protective-put': 'Protective put', collar: 'Collar', 'call-calendar': 'Call calendar', 'put-calendar': 'Put calendar', 'call-diagonal': 'Call diagonal', 'put-diagonal': 'Put diagonal' } as const
 const specificOptionFamily = (family: string) => CANDIDATE_OPTION_FAMILIES.some(value => value === family)
 const mixedFamily = (family: string) => family.endsWith('-calendar') || family.endsWith('-diagonal')
@@ -41,7 +48,7 @@ const money = (value: number | null) => value === null ? 'Unbounded' : new Intl.
 
 export async function checkSearch(raw: unknown, state: StrategyState, snapshot: MarketSnapshot, input: Search, domain: Domain | undefined, signal: AbortSignal): Promise<CandidateSearchResult> {
   if (!input || Object.keys(input).sort().join() !== 'basis,feeAllowance,maxLoss,objective,targetDate,targetSpot' || !Number.isFinite(input.targetSpot) || input.targetSpot <= 0 || input.targetSpot > 1000000 || !Number.isFinite(input.maxLoss) || input.maxLoss <= 0 || !Number.isFinite(input.feeAllowance) || input.feeAllowance < 0 || !['mid', 'natural'].includes(input.basis) || !['target-pnl', 'return-on-risk', 'expiry-probability'].includes(input.objective) || typeof input.targetDate !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(input.targetDate) || !Number.isFinite(Date.parse(input.targetDate)) || new Date(input.targetDate).toISOString() !== (input.targetDate.includes('.') ? input.targetDate : input.targetDate.replace('Z', '.000Z')) || Date.parse(input.targetDate) < Date.parse(snapshot.retrievedAt)) throw new Error('Invalid candidate search constraints.')
-  if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== (domain.resultMode === 'best-per-family' ? 'families,maxEntryOutlay,resultMode' : 'families,maxEntryOutlay') || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !Object.hasOwn(familyLabels, family) || !supportedFamily(family, state)) || !Number.isFinite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0 || domain.families.some(mixedFamily) && input.objective === 'expiry-probability')) throw new Error('Invalid candidate search domain.')
+  if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== ['families', 'maxEntryOutlay', ...(domain.resultMode === 'best-per-family' ? ['resultMode'] : []), ...(domain.expiry !== undefined ? ['expiry'] : [])].sort().join() || domain.expiry !== undefined && (typeof domain.expiry !== 'string' || !snapshot.contracts.some(contract => contract.expiry === domain.expiry) || Date.parse(domain.expiry) < Date.parse(input.targetDate)) || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !Object.hasOwn(familyLabels, family) || !supportedFamily(family, state)) || !Number.isFinite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0 || domain.families.some(mixedFamily) && input.objective === 'expiry-probability')) throw new Error('Invalid candidate search domain.')
   const result = raw as CandidateSearchResult
   if (!result || JSON.stringify(result.domain) !== JSON.stringify(domain) || result.snapshotId !== snapshot.id || result.baseVersion !== state.version || result.model !== (state.valuationModel ?? 'european-bsm-v1') || !result.request || Object.keys(result.request).sort().join() !== Object.keys(input).sort().join() || Object.keys(input).some(key => result.request[key as keyof Search] !== input[key as keyof Search])) throw new Error('Search response does not match this position, snapshot and request.')
   const grouped = domain?.resultMode === 'best-per-family'
@@ -58,6 +65,7 @@ export async function checkSearch(raw: unknown, state: StrategyState, snapshot: 
       seenFamilies.add(family)
     }
     if (candidate.id !== id) throw new Error('Candidate identity is invalid.')
+    if (domain?.expiry && Math.min(...next.legs.map(leg => Date.parse(leg.expiry))) !== Date.parse(domain.expiry)) throw new Error('Candidate expiry does not match the search.')
     const mixed = new Set(next.legs.map(leg => leg.expiry)).size > 1
     if (mixed) {
       const [short, long] = next.legs
@@ -123,13 +131,15 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
   const [loss, setLoss] = useState('1000'), [fee, setFee] = useState(String(state.feeAllowance ?? 0))
   const [families, setFamilies] = useState<Domain['families']>(['options']), [outlay, setOutlay] = useState('10000')
   const [grouped, setGrouped] = useState(true)
+  const [expiry, setExpiry] = useState('')
+  const expiries = [...new Set(snapshot.contracts.map(contract => contract.expiry))].sort()
   const [basis, setBasis] = useState<Search['basis']>(state.pricing?.basis ?? 'mid'), [objective, setObjective] = useState<Search['objective']>('target-pnl')
   const [result, setResult] = useState<CandidateSearchResult | null>(null), [pending, setPending] = useState(false), [error, setError] = useState('')
   const request = useRef<AbortController | null>(null)
   useEffect(() => { setResult(null); setPending(false); return () => request.current?.abort() }, [state, snapshot])
   useEffect(() => { if (disabled) { request.current?.abort(); setPending(false) } }, [disabled])
   const invalidate = () => { request.current?.abort(); setPending(false); setResult(null); setError('') }
-  const validDate = Number.isFinite(Date.parse(`${date}Z`)) && Date.parse(`${date}Z`) >= Date.parse(snapshot.retrievedAt)
+  const validDate = Number.isFinite(Date.parse(`${date}Z`)) && Date.parse(`${date}Z`) >= Date.parse(snapshot.retrievedAt) && (!expiry || Date.parse(`${date}Z`) <= Date.parse(expiry))
   const hasMixed = families.some(mixedFamily), supported = families.every(family => supportedFamily(family, state))
   const availableFamilies = (Object.keys(familyLabels) as Domain['families']).filter(family => state.underlyingKind !== 'cash-index' || !['covered-call', 'protective-put', 'collar'].includes(family))
   const familyControl = (family: Domain['families'][number]) => <label key={family}><input type="checkbox" aria-label={`Optimizer ${familyLabels[family].toLowerCase()}`} disabled={!supportedFamily(family, state)} checked={families.includes(family)} onChange={event => { invalidate(); setFamilies(event.target.checked ? [...families.filter(value => family === 'options' ? !specificOptionFamily(value) : !specificOptionFamily(family) || value !== 'options'), family] : families.filter(value => value !== family)) }} />{familyLabels[family]}</label>
@@ -139,7 +149,7 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
     invalidate(); onSearch()
     const controller = new AbortController(); request.current = controller; setPending(true)
     const input: Search = { targetSpot: Number(target), targetDate: new Date(`${date}Z`).toISOString(), maxLoss: Number(loss), feeAllowance: Number(fee), basis, objective }
-    const domain: Domain = { families, maxEntryOutlay: Number(outlay), ...(grouped ? { resultMode: 'best-per-family' as const } : {}) }
+    const domain: Domain = { families, maxEntryOutlay: Number(outlay), ...(grouped ? { resultMode: 'best-per-family' as const } : {}), ...(expiry ? { expiry } : {}) }
     try {
       const response = await fetch('/api/candidates', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-ARGUS-Request': '1' }, body: JSON.stringify({ state, search: input, domain }), signal: controller.signal })
       const body = await response.json() as { search?: unknown; error?: { code?: string } }
@@ -153,11 +163,16 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
   return <section className="verified-risk" aria-label="Strategy optimizer"><details open={expanded || undefined}><summary>Find a strategy · deterministic optimizer</summary>
     <p>Search this quoted window for a new position. No AI call, order or holding change. Snapshot {snapshot.id} · workspace v{state.version} · {snapshot.contracts.length} quotes.</p>
     <form onSubmit={event => { event.preventDefault(); void search() }}><fieldset className="chain-window" disabled={disabled}>
+      {expanded && <div className="opt-outlooks quoted-outlooks"><h2>Market outlook</h2><div>{[['Very bearish', '↓↓'], ['Bearish', '↓'], ['Neutral', '→'], ['Either direction', '↔'], ['Bullish', '↑'], ['Very bullish', '↑↑']].map(([label, icon]) => {
+        const preset = outlookPreset(label, snapshot.spot)
+        return <button type="button" key={label} aria-pressed={!!preset && Number(target) === preset.target && families.length === preset.families.length && preset.families.every(family => families.includes(family))} disabled={!preset} title={label === 'Either direction' ? 'Two-sided move scoring is not implemented.' : 'Sets a target preset and starter option families; not a forecast.'} onClick={() => { if (!preset) return; invalidate(); setTarget(String(preset.target)); setFamilies(preset.families) }}><b aria-hidden="true">{icon}</b><span>{label}</span></button>
+      })}</div><p>Target presets: −6%, −3%, unchanged, +3%, +6% from dated spot—not forecasts. Starter option families only; customize below to include other structures or stock. Either-direction scoring is not implemented. Your saved thesis and position are unchanged.</p></div>}
       <fieldset><legend>Search families</legend>{familyControl('options')}<p>Options only searches all supported same-expiry option strategies. Choose specific strategies below to narrow the search before ranking.</p><details><summary>Choose specific option strategies{families.some(specificOptionFamily) ? ` · ${families.filter(specificOptionFamily).length} selected` : ''}</summary>{availableFamilies.filter(specificOptionFamily).map(familyControl)}</details>{availableFamilies.filter(family => family !== 'options' && !specificOptionFamily(family)).map(familyControl)}</fieldset>
       <label>Maximum net entry outlay · USD<input aria-label="Optimizer maximum entry outlay" type="number" min="0" step="any" required value={outlay} onChange={event => { invalidate(); setOutlay(event.target.value) }} /></label>
       <p>Outlay is net option debit plus {state.underlyingKind !== 'cash-index' && 'share purchase cost and '}fee allowance, floored at zero. It is not margin, buying power or total capital at risk.{state.underlyingKind !== 'cash-index' && ' Stock-backed families buy 100 shares at the dated underlying spot mark, not a bid/ask or natural fill; quote basis applies only to options.'}</p>
       <label>Target price<input aria-label="Optimizer target price" type="number" min="0.001" max="1000000" step="any" required value={target} onChange={event => { invalidate(); setTarget(event.target.value) }} /></label>
-      <label>Target date · UTC<input aria-label="Optimizer target date UTC" type="datetime-local" step={initialTarget ? '0.001' : '1'} required min={snapshot.retrievedAt.slice(0, 19)} value={date} onChange={event => { invalidate(); setDate(event.target.value) }} /></label>
+      <label>Target date · UTC<input aria-label="Optimizer target date UTC" type="datetime-local" step="0.001" required min={snapshot.retrievedAt.slice(0, -1)} max={expiry ? expiry.slice(0, -1) : undefined} value={date} onChange={event => { invalidate(); setDate(event.target.value) }} /></label>
+      {expanded && <div className="quoted-expiry"><ExpiryStrip quoted expiry={expiry} dates={expiries} minDate={validDate ? new Date(`${date}Z`).toISOString() : snapshot.retrievedAt} onChange={value => { invalidate(); setExpiry(value) }} /><button type="button" aria-pressed={!expiry} onClick={() => { invalidate(); setExpiry('') }}>All quoted expiries</button><p>Only dates with loaded quotes. Calendars and diagonals use this as their short expiry, retaining later long legs. Target horizon cannot follow the selected expiry.</p></div>}
       <p>Calendars and diagonals require a target no later than the short expiry. The selected valuation model is retained. European put families are supported at any yield; European call families require zero or negative continuous yield, because positive yield leaves unbounded first-expiry loss as spot rises. Their loss budget uses a conservative intact first-expiry bound, not exact maximum loss. It does not cap losses before first expiry or lifetime losses; assignment, funding and slippage are excluded. Target P/L divided by this bound is a scenario ratio, not a return forecast. No mixed-expiry profit probability is calculated.</p>
       {hasMixed && (!supported || objective === 'expiry-probability') && <p role="alert">Use a supported family and target P/L or return-on-risk ranking. European call calendars and diagonals require zero or negative continuous yield. No model is switched automatically.</p>}
       <label>Maximum loss budget · USD<input aria-label="Optimizer maximum loss" type="number" min="0.01" step="any" required value={loss} onChange={event => { invalidate(); setLoss(event.target.value) }} /></label>

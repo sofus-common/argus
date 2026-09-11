@@ -2,6 +2,17 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added integrated optimizer outlook presets and reused the draggable prototype
+  expiry strip with actual loaded quote dates. Presets explicitly set target
+  offsets and starter option families; they do not infer forecasts or edit the
+  saved thesis. Optional exact first/short expiry filters enumeration before
+  ranking and preserves later calendar/diagonal long legs. Horizon is bounded
+  by selected expiry. All-expiry search remains available and API-compatible.
+  TypeScript and 98 tests passed (20s test timeout after two loaded-machine 5s
+  timeouts). Browser selected Sep 14 returned three Sep 14 families; Inspect
+  retained the held position with explicit Apply. Mobile width check passed.
+  Two-sided move scoring and a genuine return/chance blend remain pending.
+
 - Integrated Workbench and Optimize now use separate screens with shared state.
   Quoted candidates reuse compact prototype expiry plots and offer on-demand
   worker-backed price/time/IV and midpoint/natural stress comparisons. Inspect

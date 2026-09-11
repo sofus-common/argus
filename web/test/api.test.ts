@@ -161,6 +161,13 @@ it("searches quoted candidates directly without inference and rejects stale or f
   expect(verticalBody.search.domain).toEqual(verticalDomain);
   expect(verticalBody.search.planned).toBe(3);
   expect(verticalBody.search.candidates).toHaveLength(3);
+  const datedDomain = { ...verticalDomain, expiry };
+  const datedResult = await request({ state, search, domain: datedDomain });
+  expect(datedResult.status).toBe(200);
+  const datedBody = await datedResult.json() as any;
+  expect(datedBody.search.domain).toEqual(datedDomain);
+  expect(datedBody.search.candidates).toEqual(verticalBody.search.candidates);
+  expect((await request({ state, search, domain: { ...datedDomain, expiry: at } })).status).toBe(400);
   for (const candidate of verticalBody.search.candidates) {
     const [long, short] = candidate.state.legs;
     expect(long.type).toBe('call'); expect(short.type).toBe('call');

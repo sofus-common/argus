@@ -13,6 +13,38 @@ const snapshot: MarketSnapshot = {
 };
 
 describe("listed market strategies", () => {
+  it('filters selected expiry before ranking and retains later calendar legs', () => {
+    const held = { ...createMarketStrategy('bull-call', snapshot), dividendYield: 0 };
+    const expiries = [...new Set(snapshot.contracts.map(contract => contract.expiry))];
+    const input = { targetSpot: 653, targetDate: expiries[0], maxLoss: 100000, feeAllowance: 5, basis: 'natural' as const, objective: 'target-pnl' as const };
+    const domain = { families: ['options' as const], maxEntryOutlay: 100000, resultMode: 'best-per-family' as const };
+    const unfiltered = searchCandidates(held, snapshot, input, domain);
+    const byExpiry = expiries.map(expiry => searchCandidates(held, snapshot, input, { ...domain, expiry }));
+    expect(byExpiry.reduce((sum, result) => sum + result.planned, 0)).toBe(unfiltered.planned);
+    expect(byExpiry.reduce((sum, result) => sum + result.eligible, 0)).toBe(unfiltered.eligible);
+    for (const [index, result] of byExpiry.entries()) {
+      expect(result.evaluated).toBe(result.planned);
+      expect(result.candidates.length).toBeGreaterThan(0);
+      expect(result.candidates.every(candidate => candidate.state.legs.every(leg => leg.expiry === expiries[index]))).toBe(true);
+      expect(result.excludedBeforeTarget).toBe(0);
+      expect(result.domain).toEqual({ ...domain, expiry: expiries[index] });
+      expect(searchCandidates(held, { ...snapshot, contracts: [...snapshot.contracts].reverse() }, input, { ...domain, expiry: expiries[index] })).toEqual(result);
+    }
+    const winners = [...new Set(unfiltered.candidates.map(candidate => candidateStrategyFamily(candidate.state)))].map(family => byExpiry.flatMap(result => result.candidates).filter(candidate => candidateStrategyFamily(candidate.state) === family).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))[0]).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    expect(unfiltered.candidates).toEqual(winners);
+    const mixedDomain = { families: ['call-calendar' as const, 'put-diagonal' as const], maxEntryOutlay: 100000 };
+    const mixed = searchCandidates(held, snapshot, input, { ...mixedDomain, expiry: expiries[0] });
+    expect(mixed.planned).toBe(25);
+    expect(mixed.candidates.length).toBeGreaterThan(0);
+    expect(mixed.candidates.every(candidate => candidate.state.legs.some(leg => leg.side === 'short' && leg.expiry === expiries[0]) && candidate.state.legs.some(leg => leg.side === 'long' && leg.expiry === expiries[1]))).toBe(true);
+    expect(mixed.candidates).toEqual(searchCandidates(held, snapshot, input, mixedDomain).candidates);
+    const noLaterExpiry = searchCandidates(held, snapshot, input, { ...mixedDomain, expiry: expiries[1] });
+    expect(noLaterExpiry.planned).toBe(0);
+    expect(noLaterExpiry.candidates).toEqual([]);
+    for (const expiry of ['', null, 4, '2026-09-08', '2026-10-01T20:15:00.000Z', '2026-09-08T20:15:00Z']) expect(() => searchCandidates(held, snapshot, input, { ...domain, expiry } as never)).toThrow(/expiry/i);
+    expect(() => searchCandidates(held, snapshot, { ...input, targetDate: expiries[1] }, { ...domain, expiry: expiries[0] })).toThrow(/expiry/i);
+    expect(searchCandidates(held, snapshot, input, domain)).toEqual(unfiltered);
+  });
   it('returns the independently searched best eligible representative of every selected family', () => {
     const held = { ...createMarketStrategy('bull-call', snapshot), dividendYield: 0 };
     const families = [...CANDIDATE_OPTION_FAMILIES, 'covered-call', 'protective-put', 'collar', 'call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'] as const;

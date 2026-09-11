@@ -1,13 +1,21 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { App } from '../src/App'
-import { CandidateSearch, checkSearch } from '../src/CandidateSearch'
-import { ExpiryPlot } from '../src/scenario-lab-optimizer'
+import { CandidateSearch, checkSearch, outlookPreset } from '../src/CandidateSearch'
+import { ExpiryPlot, ExpiryStrip } from '../src/scenario-lab-optimizer'
 import { candidateStrategyFamily, createMarketStrategy, createStrategy, searchCandidates, type MarketSnapshot } from '../src/options'
 import * as valuationClient from '../src/workspace-valuation-client'
 import { calculateWorkspaceValuation } from '../src/workspace-valuation'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+it('uses explicit outlook presets without inferring forecasts or allowing two-sided scoring', () => {
+  expect(outlookPreset('Bullish', 200)).toEqual({ target: 206, families: ['long-call', 'bull-call', 'bull-put'] })
+  expect(outlookPreset('Very bullish', 200)?.target).toBe(212)
+  expect(outlookPreset('Bearish', 200)).toEqual({ target: 194, families: ['long-put', 'bear-call', 'bear-put'] })
+  expect(outlookPreset('Very bearish', 200)?.target).toBe(188)
+  expect(outlookPreset('Neutral', 200)?.target).toBe(200)
+  for (const [label, spot] of [['Either direction', 200], ['unknown', 200], ['Bullish', 1000000], ['Bullish', NaN], ['Bearish', 0]] as const) expect(outlookPreset(label, spot)).toBeNull()
+})
 it('keeps the compact view on the root state owner without replacing the original layout', () => {
   vi.stubGlobal('window', { location: { search: '' } })
   const original = renderToStaticMarkup(<App />)
@@ -42,6 +50,15 @@ it('scales the shared expiry plot to market levels and labels cash-index units',
   expect(index).not.toContain('Underlying price at expiry ($)')
 })
 
+it('reuses the expiry strip with quoted dates, bounded choices and no form submissions', () => {
+  const html = renderToStaticMarkup(<ExpiryStrip quoted expiry="" dates={['2026-09-11T20:00:00.000Z', '2026-10-16T20:00:00.000Z']} minDate="2026-09-18T20:00:00.000Z" onChange={() => { throw new Error('Unexpected selection') }} />)
+  expect(html).toContain('All quoted expiries')
+  expect(html).toContain('2 loaded quoted expiries')
+  expect(html).toContain('disabled="" title="Before target horizon" aria-label="Expiry Sep 11, 2026"')
+  expect(html.match(/type="button"/g)).toHaveLength(4)
+  expect(html).not.toContain('sample')
+})
+
 it('prefills an explicit optimizer target without changing the held scenario', () => {
   const state = createStrategy('bull-call'), before = structuredClone(state)
   const snapshot: MarketSnapshot = { id: 'prefill', underlying: 'SPY', source: 'Tastytrade', retrievedAt: state.valuationTimestamp, spot: state.spot, spotAsOf: state.valuationTimestamp, contracts: [], availableExpiries: [] }
@@ -52,6 +69,9 @@ it('prefills an explicit optimizer target without changing the held scenario', (
   expect(html).toContain('Find strategies')
   expect(html).toContain('Best per strategy family')
   expect(html).toContain('Top five overall')
+  expect(html).toContain('Market outlook')
+  expect(html).toContain('Either direction')
+  expect(html).toContain('First / short expiry')
   expect(state).toEqual(before)
 })
 
@@ -68,6 +88,10 @@ it('validates grouped search counts and distinct families without weakening lega
   vi.spyOn(valuationClient, 'requestWorkspaceValuation').mockImplementation(async next => calculateWorkspaceValuation(next))
   expect(result.candidates.length).toBeGreaterThan(1)
   await expect(checkSearch(result, state, snapshot, input, domain, signal)).resolves.toEqual(result)
+  const datedDomain = { ...domain, expiry }
+  const dated = searchCandidates(state, snapshot, input, datedDomain)
+  await expect(checkSearch(dated, state, snapshot, input, datedDomain, signal)).resolves.toEqual(dated)
+  await expect(checkSearch(dated, state, snapshot, input, { ...datedDomain, expiry: '2026-10-16T20:00:00.000Z' }, signal)).rejects.toThrow('Invalid candidate search domain.')
   for (const count of [-1, .5, 26, result.eligibleFamilies! + 1]) {
     await expect(checkSearch({ ...result, eligibleFamilies: count }, state, snapshot, input, domain, signal)).rejects.toThrow(/coverage/)
   }
