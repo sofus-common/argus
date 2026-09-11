@@ -2,6 +2,13 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added quoted optimizer result grouping: best eligible structure per strategy
+  family, with the previous global top-five mode still selectable. Uses unchanged
+  pricing, fee, risk/outlay filters and deterministic score/ID ordering. Client
+  rejects inconsistent family counts and duplicate families. Live bullish search
+  returned bull put spread, bull call spread and long call; Inspect/Apply/Undo
+  passed. Net entry outlay is not relabeled as collateral. No deployment.
+
 - Thesis text, target and UTC horizon now save/load with the position and follow
   Undo. Legacy saves clear unrelated thesis fields; legacy draft text is retained.
   Same-symbol template/quote changes and proposals preserve the user's thesis.

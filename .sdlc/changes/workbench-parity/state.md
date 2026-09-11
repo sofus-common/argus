@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: complete remaining optimizer integration acceptance before promoting integrated Workbench
+next_action: merge dated optimizer presentation and stress comparison before promoting integrated Workbench
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -96,3 +96,12 @@ legacy load cleared all fields. Only the new verification record was deleted.
 TypeScript and 31 focused tests passed; independent AI regression 103/103 passed.
 Independent review findings on decimal input and legacy truncation were resolved.
 No SQL migration, prompt change, production deployment or default-page promotion.
+
+Seventh checkpoint: live quoted candidate Inspect/Apply/Undo retains persisted
+thesis and restores original legs. Added explicit best-per-family search mode
+(browser default), with global top five retained as an option and API default.
+Same financial calculations, constraints and tie ordering; family count and
+duplicate-family responses fail closed. Live bullish search produced three distinct
+families. Engine replay and client tampering regressions pass. Remaining work is
+the visual optimizer/dated quote presentation and market stress comparison merge;
+do not equate this search checkpoint with full prototype replacement.

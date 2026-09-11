@@ -1,9 +1,9 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: reconcile market search family ranking and collateral semantics before AC3 UI integration
+next_action: integrate dated quote optimizer presentation and market stress comparisons without synthetic fallback
 blocker: null
-updated: 2026-09-10
+updated: 2026-09-11
 approvals:
   - gate: plan
     decision: accepted
@@ -23,3 +23,16 @@ passed at isolated port 5175, including seven stress rows, desktop/mobile,
 expiry selection, preview/Escape and Apply. Independent pricing_benchmarks
 review found no blockers in numeric guard or sensitivity implementation.
 Full plan remains building, not verified or released.
+
+Market ranking reconciliation: optional best-per-family result mode reuses the
+same quoted enumeration, risk/outlay checks and score/ID ordering. Existing callers
+without the mode retain global top five. Browser defaults to family grouping with
+explicit global option. Net entry outlay remains net debit plus share cost and fee,
+not margin or collateral. Cash-secured-put collateral policy is not implemented.
+Replay compared every family winner with independent single-family searches under
+mid/natural and P/L/risk ranking, plus probability ordering and reversed quote order.
+Client validates mode echo, family counts/uniqueness, pricing and ranking.
+Live three-family bullish search returned bull put, bull call and long call results;
+Inspect/Apply/Undo passed. No synthetic fallback, order or AI call was added.
+The old prototype visual optimizer is not yet the market-quote presentation;
+AC3/AC4 remain incomplete. No deployment or default-page promotion.

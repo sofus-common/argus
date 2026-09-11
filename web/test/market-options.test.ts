@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import * as american from "../src/american-price";
-import { searchCandidates, expirationProbability, calculateStrategy, createMarketStrategy, createStrategy, marketLeg, quoteValuation, scenarioFacts, TEMPLATES, validateMarketStrategy, validateStrategy, type MarketSnapshot } from "../src/options";
+import { candidateStrategyFamily, CANDIDATE_OPTION_FAMILIES, searchCandidates, expirationProbability, calculateStrategy, createMarketStrategy, createStrategy, marketLeg, quoteValuation, scenarioFacts, TEMPLATES, validateMarketStrategy, validateStrategy, type MarketSnapshot } from "../src/options";
 
 const snapshot: MarketSnapshot = {
   id: "snapshot-1", underlying: "SPY", source: "Tastytrade", retrievedAt: "2026-09-05T12:00:00.000Z", spot: 650, spotAsOf: "2026-09-04T20:00:00.000Z",
@@ -13,6 +13,35 @@ const snapshot: MarketSnapshot = {
 };
 
 describe("listed market strategies", () => {
+  it('returns the independently searched best eligible representative of every selected family', () => {
+    const held = { ...createMarketStrategy('bull-call', snapshot), dividendYield: 0 };
+    const families = [...CANDIDATE_OPTION_FAMILIES, 'covered-call', 'protective-put', 'collar', 'call-calendar', 'put-calendar', 'call-diagonal', 'put-diagonal'] as const;
+    for (const basis of ['mid', 'natural'] as const) for (const objective of ['target-pnl', 'return-on-risk'] as const) {
+      const input = { targetSpot: 653, targetDate: snapshot.contracts[0].expiry, maxLoss: 100000, feeAllowance: 5, basis, objective };
+      const domain = { families: [...families], maxEntryOutlay: 100000, resultMode: 'best-per-family' as const };
+      const result = searchCandidates(held, snapshot, input, domain);
+      const representatives = families.flatMap(family => searchCandidates(held, snapshot, input, { families: [family], maxEntryOutlay: domain.maxEntryOutlay }).candidates.slice(0, 1)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+      expect(result.candidates).toEqual(representatives);
+      expect(result.eligibleFamilies).toBe(representatives.length);
+      expect(result.candidates.length).toBeGreaterThan(5);
+      expect(new Set(result.candidates.map(candidate => candidateStrategyFamily(candidate.state))).size).toBe(representatives.length);
+      expect(result.candidates.every(candidate => candidateStrategyFamily(candidate.state) !== null)).toBe(true);
+      expect(result.domain).toEqual(domain);
+      expect(searchCandidates(held, { ...snapshot, contracts: [...snapshot.contracts].reverse() }, input, domain)).toEqual(result);
+      const legacy = searchCandidates(held, snapshot, input, { families: [...families], maxEntryOutlay: domain.maxEntryOutlay });
+      expect(legacy).not.toHaveProperty('eligibleFamilies');
+      expect(legacy.candidates).toHaveLength(5);
+      expect([legacy.evaluated, legacy.eligible, legacy.excludedBudget, legacy.excludedCost]).toEqual([result.evaluated, result.eligible, result.excludedBudget, result.excludedCost]);
+      for (const invalid of [{ ...domain, resultMode: 'unknown' }, { ...domain, extra: true }]) expect(() => searchCandidates(held, snapshot, input, invalid as never)).toThrow();
+    }
+    const input = { targetSpot: 653, targetDate: snapshot.contracts[0].expiry, maxLoss: 100000, feeAllowance: 5, basis: 'natural' as const, objective: 'expiry-probability' as const };
+    const domain = { families: ['options' as const], maxEntryOutlay: 100000, resultMode: 'best-per-family' as const };
+    const result = searchCandidates(held, snapshot, input, domain);
+    const oracle = CANDIDATE_OPTION_FAMILIES.flatMap(family => searchCandidates(held, snapshot, input, { families: [family], maxEntryOutlay: domain.maxEntryOutlay }).candidates.slice(0, 1)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    expect(result.candidates).toEqual(oracle);
+    const empty = searchCandidates(held, snapshot, { ...input, maxLoss: .01 }, domain);
+    expect(empty).toMatchObject({ candidates: [], eligibleFamilies: 0 });
+  });
   it.each(["short-call-butterfly", "short-put-butterfly", "inverse-iron-butterfly", "inverse-iron-condor"] as const)("searches the quoted inverse orientation %s", template => {
     const shape = createMarketStrategy(template, snapshot);
     const chain = { ...snapshot, contracts: snapshot.contracts.filter(c => shape.legs.some(l => l.contractId === c.contractId)).map(c => {

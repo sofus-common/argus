@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { CANDIDATE_OPTION_FAMILIES, candidateOptionFamily, expirationProbability, firstExpirySpreadLossBound, validateMarketStrategy, type MarketSnapshot, type StrategyState, type searchCandidates } from './options'
+import { CANDIDATE_OPTION_FAMILIES, candidateOptionFamily, candidateStrategyFamily, expirationProbability, firstExpirySpreadLossBound, validateMarketStrategy, type MarketSnapshot, type StrategyState, type searchCandidates } from './options'
 import { requestWorkspaceValuation } from './workspace-valuation-client'
 
 export type CandidateSearchResult = ReturnType<typeof searchCandidates>
@@ -14,14 +14,22 @@ const money = (value: number | null) => value === null ? 'Unbounded' : new Intl.
 
 export async function checkSearch(raw: unknown, state: StrategyState, snapshot: MarketSnapshot, input: Search, domain: Domain | undefined, signal: AbortSignal): Promise<CandidateSearchResult> {
   if (!input || Object.keys(input).sort().join() !== 'basis,feeAllowance,maxLoss,objective,targetDate,targetSpot' || !Number.isFinite(input.targetSpot) || input.targetSpot <= 0 || input.targetSpot > 1000000 || !Number.isFinite(input.maxLoss) || input.maxLoss <= 0 || !Number.isFinite(input.feeAllowance) || input.feeAllowance < 0 || !['mid', 'natural'].includes(input.basis) || !['target-pnl', 'return-on-risk', 'expiry-probability'].includes(input.objective) || typeof input.targetDate !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/.test(input.targetDate) || !Number.isFinite(Date.parse(input.targetDate)) || new Date(input.targetDate).toISOString() !== (input.targetDate.includes('.') ? input.targetDate : input.targetDate.replace('Z', '.000Z')) || Date.parse(input.targetDate) < Date.parse(snapshot.retrievedAt)) throw new Error('Invalid candidate search constraints.')
-  if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== 'families,maxEntryOutlay' || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !Object.hasOwn(familyLabels, family) || !supportedFamily(family, state)) || !Number.isFinite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0 || domain.families.some(mixedFamily) && input.objective === 'expiry-probability')) throw new Error('Invalid candidate search domain.')
+  if (domain !== undefined && (!domain || Object.keys(domain).sort().join() !== (domain.resultMode === 'best-per-family' ? 'families,maxEntryOutlay,resultMode' : 'families,maxEntryOutlay') || !Array.isArray(domain.families) || !domain.families.length || new Set(domain.families).size !== domain.families.length || domain.families.some(family => !Object.hasOwn(familyLabels, family) || !supportedFamily(family, state)) || !Number.isFinite(domain.maxEntryOutlay) || domain.maxEntryOutlay < 0 || domain.families.some(mixedFamily) && input.objective === 'expiry-probability')) throw new Error('Invalid candidate search domain.')
   const result = raw as CandidateSearchResult
   if (!result || JSON.stringify(result.domain) !== JSON.stringify(domain) || result.snapshotId !== snapshot.id || result.baseVersion !== state.version || result.model !== (state.valuationModel ?? 'european-bsm-v1') || !result.request || Object.keys(result.request).sort().join() !== Object.keys(input).sort().join() || Object.keys(input).some(key => result.request[key as keyof Search] !== input[key as keyof Search])) throw new Error('Search response does not match this position, snapshot and request.')
-  if ([result.planned, result.evaluated, result.eligible, result.excludedRisk, result.excludedBudget, result.excludedBeforeTarget, ...(domain ? [result.excludedCost] : [])].some(count => typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) || !domain && result.excludedCost !== undefined || result.planned > 300000 || result.evaluated !== result.planned || result.eligible + result.excludedRisk + result.excludedBudget + (result.excludedCost ?? 0) !== result.evaluated || result.excludedBeforeTarget > snapshot.contracts.length || !Array.isArray(result.candidates) || result.candidates.length !== Math.min(result.eligible, 5) || new Set(result.candidates.map(candidate => candidate?.id)).size !== result.candidates.length || [result.coverage, result.assumptions, result.probabilityBasis].some(text => typeof text !== 'string' || text.length > 4000)) throw new Error('Search coverage is invalid.')
+  const grouped = domain?.resultMode === 'best-per-family'
+  if (grouped ? !Number.isSafeInteger(result.eligibleFamilies) || result.eligibleFamilies! < 0 || result.eligibleFamilies! > 25 || result.eligibleFamilies! > result.eligible || (result.eligible > 0 && result.eligibleFamilies === 0) : result.eligibleFamilies !== undefined) throw new Error('Search family coverage is invalid.')
+  if ([result.planned, result.evaluated, result.eligible, result.excludedRisk, result.excludedBudget, result.excludedBeforeTarget, ...(domain ? [result.excludedCost] : [])].some(count => typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) || !domain && result.excludedCost !== undefined || result.planned > 300000 || result.evaluated !== result.planned || result.eligible + result.excludedRisk + result.excludedBudget + (result.excludedCost ?? 0) !== result.evaluated || result.excludedBeforeTarget > snapshot.contracts.length || !Array.isArray(result.candidates) || result.candidates.length !== (grouped ? result.eligibleFamilies : Math.min(result.eligible, 5)) || new Set(result.candidates.map(candidate => candidate?.id)).size !== result.candidates.length || [result.coverage, result.assumptions, result.probabilityBasis].some(text => typeof text !== 'string' || text.length > 4000)) throw new Error('Search coverage is invalid.')
+  const seenFamilies = new Set<string>()
   for (const [index, candidate] of result.candidates.entries()) {
     const next = candidate?.state
     if (!next || validateMarketStrategy(next, snapshot).length || next.id !== 'candidate' || next.version !== state.version || next.name !== 'Quoted candidate' || next.excludedLegIds !== undefined || next.expiryIvShifts !== undefined || next.pricing?.entryMode !== undefined || next.pricing?.basis !== input.basis || next.scenarioSpot !== input.targetSpot || next.scenarioDate !== input.targetDate || next.feeAllowance !== input.feeAllowance || next.rate !== state.rate || next.dividendYield !== state.dividendYield || next.ivShift !== state.ivShift || next.valuationModel !== state.valuationModel || next.legs.length > 4 || next.legs.some(leg => leg.id !== leg.contractId)) throw new Error('Candidate does not match the searched position assumptions.')
     const id = (next.stock ? `stock:100@${snapshot.spot}|` : '') + next.legs.map(leg => `${leg.side}:${leg.contractId}${leg.contracts === 1 ? '' : `*${leg.contracts}`}`).join('|')
+    if (grouped) {
+      const family = candidateStrategyFamily(next)
+      if (!family || seenFamilies.has(family)) throw new Error('Search repeats a strategy family.')
+      seenFamilies.add(family)
+    }
     if (candidate.id !== id) throw new Error('Candidate identity is invalid.')
     const mixed = new Set(next.legs.map(leg => leg.expiry)).size > 1
     if (mixed) {
@@ -57,7 +65,7 @@ export function CandidateComparison({ result, snapshot, disabled, onInspect, ren
   const pair = result.candidates.filter(candidate => selected.includes(candidate.id))
   return <>
       {result.candidates.length > 1 && <p>Select two alternatives to compare before changing your position.</p>}
-      {result.candidates.map((candidate, index) => <label className="candidate-select" key={candidate.id}><input type="checkbox" aria-label={`Compare candidate ${index + 1}`} checked={selected.includes(candidate.id)} disabled={disabled || selected.length === 2 && !selected.includes(candidate.id)} onChange={event => setSelected(event.target.checked ? [...selected, candidate.id] : selected.filter(id => id !== candidate.id))} />Compare candidate {index + 1} · {candidate.state.legs.map(leg => `${leg.side} ${leg.strike}${leg.type === 'call' ? 'C' : 'P'}`).join(' / ')}</label>)}
+      {result.candidates.map((candidate, index) => <label className="candidate-select" key={candidate.id}><input type="checkbox" aria-label={`Compare candidate ${index + 1}`} checked={selected.includes(candidate.id)} disabled={disabled || selected.length === 2 && !selected.includes(candidate.id)} onChange={event => setSelected(event.target.checked ? [...selected, candidate.id] : selected.filter(id => id !== candidate.id))} />Compare candidate {index + 1} · {familyLabels[candidateStrategyFamily(candidate.state) ?? 'options']} · {candidate.state.legs.map(leg => `${leg.side} ${leg.strike}${leg.type === 'call' ? 'C' : 'P'}`).join(' / ')}</label>)}
       {pair.length === 2 && <section className="candidate-comparison" role="region" aria-label="Candidate comparison">
         <header><h3>Compare alternatives</h3><button disabled={disabled} onClick={() => setSelected([])}>Clear comparison</button></header>
         <p>New-position estimates · {result.request.targetDate} · target {snapshot.underlyingKind === 'cash-index' ? `${result.request.targetSpot} index points` : money(result.request.targetSpot)} · {result.request.basis} quotes · {result.model}. Same snapshot and search constraints; your holdings are unchanged.</p>
@@ -87,6 +95,7 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
   const [target, setTarget] = useState(String(initialTarget?.targetSpot ?? state.scenarioSpot)), [date, setDate] = useState(initialTarget ? initialTarget.targetDate.slice(0, -1) : new Date(Math.ceil(Date.parse(state.scenarioDate) / 1000) * 1000).toISOString().slice(0, 19))
   const [loss, setLoss] = useState('1000'), [fee, setFee] = useState(String(state.feeAllowance ?? 0))
   const [families, setFamilies] = useState<Domain['families']>(['options']), [outlay, setOutlay] = useState('10000')
+  const [grouped, setGrouped] = useState(true)
   const [basis, setBasis] = useState<Search['basis']>(state.pricing?.basis ?? 'mid'), [objective, setObjective] = useState<Search['objective']>('target-pnl')
   const [result, setResult] = useState<CandidateSearchResult | null>(null), [pending, setPending] = useState(false), [error, setError] = useState('')
   const request = useRef<AbortController | null>(null)
@@ -103,7 +112,7 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
     invalidate(); onSearch()
     const controller = new AbortController(); request.current = controller; setPending(true)
     const input: Search = { targetSpot: Number(target), targetDate: new Date(`${date}Z`).toISOString(), maxLoss: Number(loss), feeAllowance: Number(fee), basis, objective }
-    const domain: Domain = { families, maxEntryOutlay: Number(outlay) }
+    const domain: Domain = { families, maxEntryOutlay: Number(outlay), ...(grouped ? { resultMode: 'best-per-family' as const } : {}) }
     try {
       const response = await fetch('/api/candidates', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-ARGUS-Request': '1' }, body: JSON.stringify({ state, search: input, domain }), signal: controller.signal })
       const body = await response.json() as { search?: unknown; error?: { code?: string } }
@@ -129,9 +138,11 @@ export function CandidateSearch({ state, snapshot, disabled, onSearch, onInspect
       <label>Quote basis<select aria-label="Optimizer quote basis" value={basis} onChange={event => { invalidate(); setBasis(event.target.value as Search['basis']) }}><option value="mid">Midpoint estimate</option><option value="natural">Natural estimate</option></select></label>
       <label>Rank by<select aria-label="Optimizer objective" value={objective} onChange={event => { invalidate(); setObjective(event.target.value as Search['objective']) }}><option value="target-pnl">Target P/L</option><option value="return-on-risk">Target P/L / loss bound</option><option value="expiry-probability" disabled={hasMixed}>Modeled expiry profit probability</option></select></label>
       <button type="submit" disabled={!valid || pending}>Find strategies</button>
+      <label>Show results<select aria-label="Optimizer result grouping" value={grouped ? 'family' : 'global'} onChange={event => { invalidate(); setGrouped(event.target.value === 'family') }}><option value="family">Best per strategy family</option><option value="global">Top five overall</option></select></label>
     </fieldset></form>
     {pending && <p role="status">Searching quoted strategies…</p>}{error && <p role="alert">{error}</p>}
     {result && <section aria-label="Deterministic quoted candidates"><p>{result.coverage}</p><p>{result.assumptions}</p>
+      <p>{result.domain?.resultMode === 'best-per-family' ? 'One highest-ranked eligible structure per strategy family, using the selected objective. Missing families did not meet the search constraints.' : 'Five highest-ranked eligible structures overall; several may belong to the same family.'}</p>
       <p>{result.evaluated} evaluated · {result.eligible} within constraints · {result.excludedRisk} without bounded positive risk · {result.excludedBudget} above loss budget · {result.excludedCost} above entry outlay · {result.excludedBeforeTarget} contracts before target · showing {result.candidates.length}. Ranked only within this search, not globally optimal.</p>
       <details><summary>Probability assumptions</summary><p>{result.probabilityBasis}</p></details>
       {!result.candidates.length && <p>No quoted strategies satisfy these constraints.</p>}

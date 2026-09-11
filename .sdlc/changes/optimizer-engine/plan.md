@@ -4,6 +4,12 @@
 2. Independent pricing-benchmarks.test.ts with sourced references: AC2.
 3. Inspect and reuse existing market snapshot/search seams for the local Optimize
    screen; implement dated quote adapter and replay acceptance: AC3.
+   Market reconciliation: retain explicit net-entry-outlay semantics (not stock
+   collateral). Add optional best-per-family result grouping to existing search;
+   absence retains global top five for existing callers. Same deterministic score,
+   risk checks and quote window. Browser default groups; user can select global.
+   Verify each family winner against a separate single-family replay, returned
+   family/count guards, and explicit Inspect/Apply/Undo with the persisted thesis.
 4. Reuse scenario calculations for explicit fill/cost/stress comparisons: AC4.
 5. Focused Vitest, TypeScript, browser replay and independent diff review: AC5.
 
