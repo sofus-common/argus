@@ -2,6 +2,16 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Applied Workbench design review: compact instrument bar, scenario tests beside
+  the chart, smaller conversation preview, readable supporting labels, nearby
+  action feedback and available-first strategy selection. Chart inspection now
+  distinguishes scenario spot from thesis target. Hourly keyboard time navigation
+  reaches exact expiry; advanced IV/comparison/display/range controls are grouped.
+  Original chart defaults and pricing logic remain unchanged. Verified TypeScript,
+  18 focused tests, in-app desktop/mobile interaction checks and independent diff
+  review. Added a standalone browser regression (not run as a script this turn).
+  Local prototype only; no production deployment.
+
 - Added symbol loading and company search above the Workbench thesis, using the
   existing validated market snapshot and option-chain components. Explicit load
   confirmation replaces the trade and clears the thesis; failures and stale

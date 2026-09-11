@@ -534,7 +534,7 @@ function ChartAnalysis({ inspection }: { inspection: NonNullable<SparringSuccess
   </details>
 }
 
-function PayoffChart({ state: sourceState, comparison, comparisonLabel = 'Proposed', metric, onStrike, onStrikeCommit, onDragStart, readOnly = false, pnlDisplay = 'pnl', breakevens, range }: { range?: ChartRange; breakevens?: BreakevenResult['value']; pnlDisplay?: PnlDisplayMode; state: StrategyState; comparison?: StrategyState; comparisonLabel?: string; metric: ChartMetric; onStrike?: (source: StrategyState, id: string, strike: number, group: boolean, step?: -1 | 1) => StrategyState; onStrikeCommit?: (source: StrategyState, next: StrategyState) => void; onDragStart?: () => void; readOnly?: boolean }) {
+function PayoffChart({ state: sourceState, comparison, comparisonLabel = 'Proposed', metric, onStrike, onStrikeCommit, onDragStart, readOnly = false, pnlDisplay = 'pnl', breakevens, range, scenarioLabel = 'TARGET', thesisTarget }: { range?: ChartRange; breakevens?: BreakevenResult['value']; pnlDisplay?: PnlDisplayMode; state: StrategyState; comparison?: StrategyState; comparisonLabel?: string; metric: ChartMetric; onStrike?: (source: StrategyState, id: string, strike: number, group: boolean, step?: -1 | 1) => StrategyState; onStrikeCommit?: (source: StrategyState, next: StrategyState) => void; onDragStart?: () => void; readOnly?: boolean; scenarioLabel?: string; thesisTarget?: number }) {
   const [preview, setPreview] = useState<{ source: StrategyState; next: StrategyState }>()
   const state = preview?.source === sourceState ? preview.next : sourceState
   const [dragError, setDragError] = useState('')
@@ -698,7 +698,8 @@ function PayoffChart({ state: sourceState, comparison, comparisonLabel = 'Propos
         </g>}
         {state.spot >= minSpot && state.spot <= maxSpot && <g><line x1={x(state.spot)} x2={x(state.spot)} y1={pad.top} y2={height - pad.bottom} className="spot-line" />
         <text x={x(state.spot)} y={15} textAnchor="middle" className="spot-label">SPOT {state.spot.toFixed(2)}</text></g>}
-        {curve && state.scenarioSpot >= minSpot && state.scenarioSpot <= maxSpot && <g className="scenario-target" data-spot={state.scenarioSpot}><line x1={x(state.scenarioSpot)} x2={x(state.scenarioSpot)} y1={pad.top} y2={height - pad.bottom} /><circle cx={x(state.scenarioSpot)} cy={y(metric === 'pnl' ? displayPnl(curve.target, basis) : curve.target)} r="5" /><text x={x(state.scenarioSpot)} y={30} textAnchor="middle">TARGET {state.scenarioSpot.toFixed(2)}</text></g>}
+        {curve && state.scenarioSpot >= minSpot && state.scenarioSpot <= maxSpot && <g className="scenario-target" data-spot={state.scenarioSpot}><line x1={x(state.scenarioSpot)} x2={x(state.scenarioSpot)} y1={pad.top} y2={height - pad.bottom} /><circle cx={x(state.scenarioSpot)} cy={y(metric === 'pnl' ? displayPnl(curve.target, basis) : curve.target)} r="5" /><text x={x(state.scenarioSpot)} y={30} textAnchor="middle">{scenarioLabel} {state.scenarioSpot.toFixed(2)}</text></g>}
+        {thesisTarget !== undefined && thesisTarget !== state.scenarioSpot && thesisTarget >= minSpot && thesisTarget <= maxSpot && <g className="scenario-target thesis-target" data-spot={thesisTarget}><line x1={x(thesisTarget)} x2={x(thesisTarget)} y1={pad.top} y2={height - pad.bottom}/><text x={x(thesisTarget)} y={46} textAnchor="middle">THESIS TARGET {thesisTarget.toFixed(2)}</text></g>}
         {state.legs.map((leg, index) => (leg.strike >= minSpot && leg.strike <= maxSpot &&
           <g
             key={leg.id}

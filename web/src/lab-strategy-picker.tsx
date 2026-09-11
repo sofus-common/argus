@@ -18,6 +18,7 @@ export function LabStrategyPicker({ onSelect, onClose, market = false }: { marke
   const titleId = useId()
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('All')
+  const [showAll, setShowAll] = useState(false)
   const [selected, setSelected] = useState<TemplateId | null>(null)
   useEffect(() => {
     const element = dialog.current!
@@ -25,7 +26,7 @@ export function LabStrategyPicker({ onSelect, onClose, market = false }: { marke
     return () => element.close()
   }, [])
   const visible = Object.entries(groups).filter(([name]) => category === 'All' || name === category)
-    .map(([name, ids]) => ({ name, ids: ids.filter(id => `${label(id)} ${name}`.toLowerCase().includes(query.trim().toLowerCase())) }))
+    .map(([name, ids]) => ({ name, ids: ids.filter(id => (showAll || supported.includes(id)) && `${label(id)} ${name}`.toLowerCase().includes(query.trim().toLowerCase())) }))
     .filter(group => group.ids.length)
   const count = visible.reduce((total, group) => total + group.ids.length, 0)
 
@@ -33,6 +34,7 @@ export function LabStrategyPicker({ onSelect, onClose, market = false }: { marke
     <header className="lsp-header"><div><span className="lsp-eyebrow">STRATEGY LIBRARY</span><h2 id={titleId}>Choose your structure</h2></div><button type="button" onClick={onClose} aria-label="Close strategy library">Close</button></header>
     <p className="lsp-disclosure">{TEMPLATES.length} structures · {supported.length} interactive {market ? 'quoted' : 'sample'} templates. Other structures are available in the full app only.</p>
     <label className="lsp-search">Find a strategy<input type="search" autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search by name or family" /></label>
+    <label className="lsp-availability"><input type="checkbox" checked={showAll} onChange={event => { setShowAll(event.target.checked); setCategory('All') }}/> Show all structures, including unavailable</label>
     <div className="lsp-categories" aria-label="Strategy categories">{['All', ...Object.keys(groups)].map(name => <button type="button" key={name} aria-pressed={category === name} onClick={() => setCategory(name)}>{name}</button>)}</div>
     <p className="lsp-count" role="status">{count} {count === 1 ? 'structure' : 'structures'} shown</p>
     <div className="lsp-results">{visible.map(group => <section className="lsp-group" key={group.name} aria-label={group.name}><h3>{group.name}</h3><div className="lsp-grid">{group.ids.map(id => <button className="lsp-template" type="button" key={id} disabled={!supported.includes(id)} aria-pressed={selected === id} onClick={() => setSelected(id)}><strong>{label(id)}</strong><small>{supported.includes(id) ? market ? 'Quoted template' : 'Sample template' : 'Full app only'}</small></button>)}</div></section>)}{!count && <p>No matching strategies. Try another name or category.</p>}</div>

@@ -106,5 +106,13 @@
 .lac .comparison-key { width: 16px; border-top: 2px dashed var(--cobalt); }
 .lac [role="alert"] { color: var(--coral); padding-inline: 18px; }
 .lac :focus-visible { outline: 2px solid #69d4ff; outline-offset: 3px; }
+.lac .lac-advanced { border-top: 1px solid var(--line); margin: 0 18px 12px; font-size: 12px; }
+.lac .lac-advanced > summary { padding: 12px 0; cursor: pointer; color: var(--muted); }
+.lac .lac-volatility { padding: 0 18px 12px; }
+.lac .thesis-target line { stroke: var(--cobalt); stroke-dasharray: 2 5; }
+.lac .thesis-target text { fill: var(--cobalt); }
+.lac .scenario label, .lac .scenario-time label, .lac .scenario-time small, .lac .chart-caption, .lac .expiry-volatility, .lac .chart-range, .lac .chart-range .range-heading, .lac .scenario-display p, .lac .heatmap-help, .lac .scenario-table-wrap p, .lac .scenario-table-wrap small, .lac .heatmap-scale { font-size: 12px; }
+.lac .scenario input { width: 90px; min-height: 32px; }
+@media (max-width: 720px) { .lac .canvas-head { gap: 8px; } .lac .segmented button, .lac .chart-inspection button, .lac .scenario-date-heading button { min-height: 44px; } .lac .scenario-time { gap: 8px; } }
 @media (min-width: 1600px) { .lac .payoff-chart { height: 350px; } }
 @media (max-width: 720px) { .lac .canvas-head { grid-template-columns: minmax(0, 1fr); } .lac .chart-controls { flex-wrap: wrap; } .lac .scenario { justify-content: flex-end; } .lac .chart-caption .drag-hint { display: none; } .lac .payoff-chart { height: 300px; } .lac .scenario-time label { max-width: 100%; } }
