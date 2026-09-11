@@ -109,6 +109,13 @@ it('validates grouped search counts and distinct families without weakening lega
   const blendedInput = { ...input, objective: 'balanced' as const, chanceWeight: 50 }
   const blended = searchCandidates(state, snapshot, blendedInput, datedDomain)
   await expect(checkSearch(blended, state, snapshot, blendedInput, datedDomain, signal)).resolves.toEqual(blended)
+  const roundoff = structuredClone(blended)
+  roundoff.candidates.forEach(candidate => { candidate.probability.probability! += 1.2e-13; candidate.score += 1.2e-13 })
+  await expect(checkSearch(roundoff, state, snapshot, blendedInput, datedDomain, signal)).resolves.toEqual(roundoff)
+  for (const mutate of [(candidate: typeof blended.candidates[number]) => { candidate.probability.probability! += 1e-9 }, (candidate: typeof blended.candidates[number]) => { candidate.probability.spot += 1 }, (candidate: typeof blended.candidates[number]) => { candidate.probability.probability = null }]) {
+    const changed = structuredClone(blended); mutate(changed.candidates[0])
+    await expect(checkSearch(changed, state, snapshot, blendedInput, datedDomain, signal)).rejects.toThrow(/ranking/)
+  }
   const wrongScore = structuredClone(blended); wrongScore.candidates[0].score += .01
   await expect(checkSearch(wrongScore, state, snapshot, blendedInput, datedDomain, signal)).rejects.toThrow(/ranking/)
   await expect(checkSearch({ ...blended, request: { ...blendedInput, chanceWeight: 51 } }, state, snapshot, blendedInput, datedDomain, signal)).rejects.toThrow(/request/)

@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: verify blended slider/search/Inspect in browser after quote catalog recovery, then implement two-sided scoring
+next_action: implement and verify two-sided move scoring
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -64,3 +64,12 @@ SPY and QQQ browser quote load failed; direct local chain probe returned503 with
 chain_unavailable/catalog/Unavailable. Live slider/search/Inspect and mobile proof
 are pending. No synthetic fallback, provider configuration edits or deployment.
 Overall acceptance remains building; this checkpoint is not a proven trading edge.
+
+Catalog recovered; actual browser blended search and Inspect/Keep current passed.
+100-contract live API replay passed standard, blended, stock-backed and mixed
+search with zero inference calls. Exact probability comparison failed on observed
+Node/Worker drift1.2e-13; probability/derived-score tolerance is now1e-12 absolute.
+Metadata, monetary metrics and returned score/tie ordering remain strict. Regression
+accepts roundoff and rejects larger drift, changed metadata/null and forged scores.
+Seven presentation tests and TypeScript pass; independent review has no blockers.
+Provider recovery was observed, not attributed to a transport fix. No deployment.

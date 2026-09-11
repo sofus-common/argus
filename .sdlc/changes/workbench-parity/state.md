@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: verify blended optimizer browser workflow when quoted catalog is available, then two-sided scoring
+next_action: implement and verify two-sided scoring without weakening current quoted search guards
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -136,3 +136,14 @@ before family/global selection. Mixed expiries and invalid weights rejected.
 is blocked by local quote catalog503 for SPY and QQQ; held position remains intact.
 No successful slider/search/Inspect or mobile claim for this checkpoint. Default
 ranking unchanged; no deployment/default promotion. Two-sided control still disabled.
+
+Find-strategies verification supersedes catalog-blocked browser status: recovered
+provider and local chain supplied100 contracts. Browser blended search evaluated
+1250 structures, returned three bullish families, Inspect/Keep current preserved
+held Iron Condor, and Optimize results were reopened. No candidate was applied.
+Live API replay passed standard/blended/stock/mixed search without inference.
+Observed Node/Worker probability drift around1.2e-13 exposed exact-float guard;
+added absolute1e-12 probability/derived-score tolerance only, exact metadata/money
+and server ordering retained. Seven regressions and TypeScript pass; independent
+review found no blockers. Prior catalog outage recovered without configuration
+changes; its cause is not established. No deployment.

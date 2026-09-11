@@ -88,7 +88,10 @@ export async function checkSearch(raw: unknown, state: StrategyState, snapshot: 
     const probability = expirationProbability({ ...next, scenarioSpot: snapshot.spot, scenarioDate: snapshot.retrievedAt }, undefined, reference)
     const score = input.objective === 'balanced' ? balancedCandidateScore(metrics.scenarioPnl / risk, probability.probability ?? NaN, input.chanceWeight!) : input.objective === 'expiry-probability' ? probability.probability : input.objective === 'return-on-risk' ? metrics.scenarioPnl / risk : metrics.scenarioPnl
     const previous = result.candidates[index - 1]
-    if (JSON.stringify(probability) !== JSON.stringify(candidate.probability) || score === null || !Number.isFinite(score) || candidate.score !== score || previous && (previous.score < score || previous.score === score && previous.id.localeCompare(candidate.id) > 0)) throw new Error('Candidate ranking or probability could not be reconciled.')
+    const reportedProbability = candidate.probability?.probability
+    const probabilityMatches = reportedProbability === probability.probability || typeof reportedProbability === 'number' && Number.isFinite(reportedProbability) && reportedProbability >= 0 && reportedProbability <= 1 && probability.probability !== null && Math.abs(reportedProbability - probability.probability) <= 1e-12
+    const scoreMatches = Number.isFinite(candidate.score) && score !== null && Number.isFinite(score) && (['balanced', 'expiry-probability'].includes(input.objective) ? Math.abs(candidate.score - score) <= 1e-12 : candidate.score === score)
+    if (!probabilityMatches || JSON.stringify(probability) !== JSON.stringify({ ...candidate.probability, probability: probability.probability }) || !scoreMatches || previous && (previous.score < candidate.score || previous.score === candidate.score && previous.id.localeCompare(candidate.id) > 0)) throw new Error('Candidate ranking or probability could not be reconciled.')
   }
   return result
 }

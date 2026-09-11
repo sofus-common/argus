@@ -1,6 +1,23 @@
 import assert from 'node:assert/strict';
 import { createMarketStrategy, calculateStrategy, evaluateScenario, marketLeg, validateMarketStrategy, searchCandidates } from '../src/options.ts';
 
+function assertSearchEqual(actual, expected) {
+  const normalized = structuredClone(actual);
+  assert.equal(normalized.candidates.length, expected.candidates.length);
+  normalized.candidates.forEach((candidate, index) => {
+    const reference = expected.candidates[index];
+    if (reference.probability.probability !== null) {
+      assert.ok(Number.isFinite(candidate.probability.probability) && candidate.probability.probability >= 0 && candidate.probability.probability <= 1 && Math.abs(candidate.probability.probability - reference.probability.probability) <= 1e-12, 'Probability replay exceeds numerical tolerance');
+      candidate.probability.probability = reference.probability.probability;
+    }
+    if (['balanced', 'expiry-probability'].includes(expected.request.objective)) {
+      assert.ok(Number.isFinite(candidate.score) && Math.abs(candidate.score - reference.score) <= 1e-12, 'Score replay exceeds numerical tolerance');
+      candidate.score = reference.score;
+    }
+  });
+  assert.deepEqual(normalized, expected);
+}
+
 if (!process.argv.includes('--run')) throw new Error('Pass --run for real quote retrieval and up to four paid generation/verification requests; --wide uses at most three; --optimizer makes no inference requests.');
 const base = 'http://127.0.0.1:5173';
 const optimizer = process.argv.includes('--optimizer');
@@ -49,7 +66,13 @@ if (optimizer) {
   const response = await post('/api/candidates', { state, search });
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body.error));
-  assert.deepEqual(body.search, searchCandidates(state, snapshot, search));
+  assertSearchEqual(body.search, searchCandidates(state, snapshot, search));
+  const blendedSearch = { ...search, objective: 'balanced', chanceWeight: 50 };
+  const blendedResponse = await post('/api/candidates', { state, search: blendedSearch });
+  assert.equal(blendedResponse.status, 200);
+  const blended = (await blendedResponse.json()).search;
+  assertSearchEqual(blended, searchCandidates(state, snapshot, blendedSearch));
+  assert.ok(blended.candidates.length > 0);
   assert.ok(body.search.candidates.length > 0);
   for (const candidate of body.search.candidates) {
     assert.deepEqual(candidate.metrics, calculateStrategy(candidate.state));
@@ -61,7 +84,7 @@ if (optimizer) {
   const stockResponse = await post('/api/candidates', { state, search: stockSearch, domain });
   const stockBody = await stockResponse.json();
   assert.equal(stockResponse.status, 200, JSON.stringify(stockBody.error));
-  assert.deepEqual(stockBody.search, searchCandidates(state, snapshot, stockSearch, domain));
+  assertSearchEqual(stockBody.search, searchCandidates(state, snapshot, stockSearch, domain));
   assert.ok(stockBody.search.candidates.length > 0);
   for (const candidate of stockBody.search.candidates) {
     assert.deepEqual(candidate.state.stock, { shares: 100, entryPrice: snapshot.spot });

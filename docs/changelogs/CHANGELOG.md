@@ -2,6 +2,16 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Verified Find strategies with recovered real Tastytrade quotes. Browser blended
+  search evaluated 1,250 structures, returned three bullish families, and passed
+  Inspect/Keep current without applying. Live API replay passed standard, blended,
+  stock-backed and mixed-expiry search on 100 contracts with zero inference calls.
+  Fixed false probability reconciliation failures from observed cross-runtime
+  drift (~1.2e-13): only probability scalars and probability-derived scores permit
+  absolute 1e-12 noise; metadata, money and returned ordering remain strict.
+  Seven regression tests, TypeScript and independent review pass. No provider
+  settings changed; prior catalog failure recovered, not diagnosed as fixed.
+
 - Fixed Optimize being inaccessible without quotes. Integrated navigation and
   controls now render independently of data availability; absent, empty or
   historical quotes cannot start a search or render candidate results. Workspace
