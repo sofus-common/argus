@@ -1,9 +1,24 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: repair AI content qualification failures without weakening verification or adding agent loops
+next_action: evaluate operational routing bypasses and mixed questions before promoting the opt-in candidate; retain broad AI qualification gate
 blocker: null
 updated: 2026-09-11
+
+Operational answer candidate: analysis-operational-v1, digest
+b8233d873f9c6dea5bbf6cd3ce5209ab575f54561c2fc5a858a18968addc51e9.
+Adds only OPERATIONAL_TOOL_DESCRIPTION to baseline v16. Exact validated tool
+selection renders broker-policy absence, conditional assignment/exercise and
+quoted liquidation estimates without using accompanying model prose. Scope
+ambiguity, combined events and action requests receive deterministic limitations.
+Excluded canonical holdings preserved, no operations, one call, no continuation.
+124 focused tests pass; TypeScript/build pass after test-only type correction.
+Offline and live --operational-answer protocols pass5/5 each, at most five paid
+calls total, synthetic data. Original deadline, opposite-event, closing estimate,
+combined-event and action cases all selected expected topics/scopes. Independent
+review: no blockers for opt-in path. Baseline remains v16; no D1 activation/deploy.
+This is NOT full AI qualification: tool bypass and incorrect scope selection are
+still probabilistic. Test mixed questions and negative controls before promotion.
 
 Operational fact checkpoint: existing shared conditional-assignment calculation
 now also returns independent long-exercise scenarios. Classic and integrated

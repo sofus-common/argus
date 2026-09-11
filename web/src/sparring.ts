@@ -1,6 +1,7 @@
 import { defaultAnalysisPrompts, readAnalysisPrompts, type AnalysisPrompts } from "./analysis-prompts";
 import { DISCOVERY_INTENT_SCHEMA, parseDiscoveryIntent, renderDiscovery, type DiscoveryIntent } from './discovery';
 import operationalReference from "../knowledge/options-operations-v1.json" with { type: "json" };
+import { OPERATIONAL_PARAMETERS, renderOperationalAnswer } from './operational-answer';
 import type { AnalysisObserver } from "./analysis-trace";
 import {
   TEMPLATES,
@@ -1117,7 +1118,7 @@ export async function spar(
           ]),
           ...toolMessages,
         ],
-        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [candidateTool] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: request.discovery ? DISCOVERY_INTENT_SCHEMA : inspectedComparison ? COMPARISON_INTENT_SCHEMA : verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
+        ...(selectingTool ? { tools: [...SCENARIO_TOOLS, POSITION_COMPARISON_TOOL, FIRST_EXPIRY_TOOL, ...(candidateAvailable() ? [candidateTool] : []), ...(prompts.OPERATIONAL_TOOL_DESCRIPTION ? [{ type: 'function', function: { name: 'explain_operational_facts', description: prompts.OPERATIONAL_TOOL_DESCRIPTION, parameters: OPERATIONAL_PARAMETERS } }] : [])], tool_choice: "auto" } : { response_format: { type: "json_schema", json_schema: request.discovery ? DISCOVERY_INTENT_SCHEMA : inspectedComparison ? COMPARISON_INTENT_SCHEMA : verification ? boundPassages ? BOUND_VERIFICATION_SCHEMA : VERIFICATION_SCHEMA : RESPONSE_SCHEMA } }),
         provider: {
           allow_fallbacks: false,
           data_collection: "deny",
@@ -1180,7 +1181,18 @@ export async function spar(
         if (!Array.isArray(message.tool_calls) || message.tool_calls.length !== 1) throw new Error();
         const parsed = record(message.tool_calls[0]);
         const fn = record(parsed?.function);
-        if (!parsed || Object.keys(parsed).some(key => !["id", "type", "function", "index"].includes(key)) || (parsed.index !== undefined && (!Number.isInteger(parsed.index) || (parsed.index as number) < 0)) || typeof parsed.id !== "string" || parsed.id.length < 1 || parsed.id.length > 128 || parsed.type !== "function" || !fn || Object.keys(fn).length !== 2 || !["evaluate_scenarios", "search_candidates", "compare_position", "analyze_first_expiry"].includes(String(fn.name)) || typeof fn.arguments !== "string" || new TextEncoder().encode(fn.arguments).byteLength > 16 * 1024) throw new Error();
+        if (!parsed || Object.keys(parsed).some(key => !["id", "type", "function", "index"].includes(key)) || (parsed.index !== undefined && (!Number.isInteger(parsed.index) || (parsed.index as number) < 0)) || typeof parsed.id !== "string" || parsed.id.length < 1 || parsed.id.length > 128 || parsed.type !== "function" || !fn || Object.keys(fn).length !== 2 || !["evaluate_scenarios", "search_candidates", "compare_position", "analyze_first_expiry", ...(prompts.OPERATIONAL_TOOL_DESCRIPTION ? ['explain_operational_facts'] : [])].includes(String(fn.name)) || typeof fn.arguments !== "string" || new TextEncoder().encode(fn.arguments).byteLength > 16 * 1024) throw new Error();
+        if (fn.name === 'explain_operational_facts') {
+          const intent = JSON.parse(fn.arguments);
+          const reply: SparringReply = { ...renderOperationalAnswer(request.state, snapshot, intent), operations: [], evidence_ids: [], risk_classification: calculated.lossClassification };
+          if (controller.signal.aborted || Date.now() - startedAt >= PROVIDER_TIMEOUT_MS) throw new Error('Provider timed out');
+          const next = { ...canonical, version: canonical.version + 1 };
+          observeAnalysis(observer, { stage: 'tool-admission', reason: 'validated-operational-selection', input: intent });
+          observeAnalysis(observer, { stage: 'tool-result', reason: 'deterministic-operational-answer', output: reply });
+          observeAnalysis(observer, { stage: 'proposal-check', reason: 'read-only-operational-answer', output: { reply, next_state: next } });
+          observeAnalysis(observer, { stage: 'completion', reason: 'deterministic-operational-accepted' });
+          return { request_id: request.request_id, base_state_version: request.base_state_version, reply, next_state: next, metrics: calculateStrategy(request.state), calculated, market_context: marketContext };
+        }
         observeAnalysis(observer, { stage: "tool-admission", reason: "allowed-read-only-tool", input: { name: fn.name, arguments: JSON.parse(fn.arguments) } });
         if (fn.name === "search_candidates") {
           if (!snapshot || !candidateAvailable()) throw new Error("Fresh candidate quotes required");

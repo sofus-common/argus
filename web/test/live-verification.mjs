@@ -25,6 +25,52 @@ import { parseEnv } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 
+// Operational routing: five synthetic questions, at most one paid call each.
+if (process.argv.includes('--operational-answer')) {
+  const live = process.argv.includes('--run');
+  assert.ok(process.argv.slice(2).every(flag => ['--operational-answer', '--run', '--self-check'].includes(flag)) && live !== process.argv.includes('--self-check'));
+  registerHooks({ resolve(specifier, context, next) { return next(specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier) ? new URL(`${specifier}.ts`, context.parentURL).href : specifier, context); } });
+  const { spar } = await import('../src/sparring.ts');
+  const { createStrategy, createMarketStrategy } = await import('../src/options.ts');
+  const { readAnalysisPrompts } = await import('../src/analysis-prompts.ts');
+  const bundle = readAnalysisPrompts(JSON.parse(readFileSync(new URL('../prompts/analysis-operational-v1.json', import.meta.url), 'utf8')));
+  const seed = createStrategy('bull-call'), now = new Date().toISOString(), expiry = new Date(Date.now() + 14 * 86400000).toISOString();
+  const snapshot = { id: 'synthetic-operational', underlying: 'SPY', source: 'Synthetic evaluation', retrievedAt: now, spotAsOf: now, spot: seed.spot, availableExpiries: [expiry.slice(0, 10)], contractTerms: { exerciseStyle: 'American', settlement: 'physical-shares', sharesPerContract: 100, settlementSession: 'PM' }, contracts: seed.legs.map(leg => ({ ...leg, expiry, contractId: `SPY   ${expiry.slice(2, 10).replaceAll('-', '')}C${String(leg.strike * 1000).padStart(8, '0')}`, bid: leg.entryPrice, ask: leg.entryPrice + .2, quoteAsOf: now })) };
+  const state = createMarketStrategy('bull-call', snapshot), before = structuredClone(state);
+  const cases = [
+    ['opposite-events', 'Compare the two independent cases: my short call is assigned but the long is not exercised; or my long call is exercised but the short is not assigned. What shares and strike cashflows result?', 'current-position', ['assignment', 'exercise']],
+    ['broker-deadline', 'What is my actual broker exercise cutoff today? Is 5:30 PM definitely my deadline?', 'current-position', ['broker-policy']],
+    ['closing-estimate', 'What is the current quoted closing value of the whole position? Can I treat that midpoint as guaranteed proceeds?', 'current-position', ['closing-value']],
+    ['combined', 'If both options exercise and assign together, calculate the combined shares and cash. Do not substitute separate single-leg results.', 'combined-events', ['assignment', 'exercise']],
+    ['action', 'Exercise my long call now.', 'action', ['exercise']],
+  ];
+  let key = 'offline', failed = 0;
+  if (live) {
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim();
+    key = parseEnv(readFileSync(resolve(dirname(resolve(common)), '.env'), 'utf8')).OPENROUTER_API_KEY;
+    assert.ok(key, 'OpenRouter key unavailable');
+  }
+  console.log(JSON.stringify({ bundle: bundle.version, digest: createHash('sha256').update(JSON.stringify(bundle)).digest('hex'), live, maximumCalls: cases.length }));
+  for (const [id, question, scope, topics] of cases) {
+    let calls = 0; const events = [];
+    try {
+      const result = await spar({ request_id: id, base_state_version: state.version, state, conversation: [{ role: 'user', content: question }] }, key, async (url, init) => {
+        assert.ok(++calls <= 1, 'Operational answer failed to terminate after one call');
+        return live ? fetch(url, init) : Response.json({ choices: [{ message: { content: 'Invented deadline 5:30 guaranteed fill', tool_calls: [{ id: 'op', type: 'function', function: { name: 'explain_operational_facts', arguments: JSON.stringify({ scope, topics, legIds: [] }) } }] } }] });
+      }, { retrievedAt: now, sources: [] }, snapshot, bundle, event => events.push(event));
+      const selected = events.find(event => event.reason === 'validated-operational-selection')?.input;
+      assert.equal(selected?.scope, scope); assert.deepEqual([...selected.topics].sort(), [...topics].sort());
+      assert.equal(calls, 1); assert.deepEqual(result.reply.operations, []); assert.deepEqual(state, before);
+      assert.deepEqual(result.next_state, { ...before, version: before.version + 1 });
+      assert.ok(!result.reply.text.includes('5:30'));
+      if (id === 'opposite-events') { assert.match(result.reply.text, /resulting shares -100/); assert.match(result.reply.text, /resulting shares 100/); }
+      if (id === 'closing-estimate') assert.match(result.reply.text, /not a fill/);
+      console.log(JSON.stringify({ id, passed: true, calls, selected, text: result.reply.text }));
+    } catch (error) { failed++; console.log(JSON.stringify({ id, passed: false, calls, error: error.message })); }
+  }
+  console.log(JSON.stringify({ passed: cases.length - failed, failed, limitation: 'Five routing cases only; not whole-AI qualification or activation.' }));
+  process.exit(failed ? 1 : 0);
+}
 function compactIdenticalFacts(payload) {
   if (!Object.hasOwn(payload, 'calculated') || !Object.hasOwn(payload, 'proposed') || !payload.calculated || !payload.proposed || JSON.stringify(payload.calculated) !== JSON.stringify(payload.proposed)) return payload;
   return { ...payload, proposed: { $ref: '#/calculated' } };

@@ -17,6 +17,16 @@ import comparisonIntentCandidate from "../prompts/analysis-v16.json";
 import namedFamilyCandidate from "../prompts/analysis-v17.json";
 import discoveryCandidate from "../prompts/analysis-v18.json";
 import historicalBaseline from "../prompts/analysis-v13.json";
+import operationalCandidate from '../prompts/analysis-operational-v1.json';
+
+it('keeps the operational tool opt-in and preserves the existing baseline', () => {
+  const candidate = readAnalysisPrompts(operationalCandidate);
+  const { OPERATIONAL_TOOL_DESCRIPTION, ...retained } = candidate.prompts;
+  expect(candidate.version).toBe('analysis-operational-v1');
+  expect(retained).toEqual(defaultAnalysisPrompts.prompts);
+  expect(OPERATIONAL_TOOL_DESCRIPTION).toContain('server renders the final reply');
+  expect(defaultAnalysisPrompts.prompts.OPERATIONAL_TOOL_DESCRIPTION).toBeUndefined();
+});
 
 const baselineV13 = readAnalysisPrompts(historicalBaseline);
 

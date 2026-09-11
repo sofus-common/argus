@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added an opt-in operational-answer path: the model selects validated topics and
+  included leg IDs; code renders assignment/exercise, absent broker policy and
+  timestamped closing estimates. Model prose is discarded, holdings unchanged,
+  and no second inference call is required. Offline/live synthetic routing checks
+  passed5/5 each. Candidate is not activated; general AI reliability remains open.
+
 - Added independent long-call/put exercise outcomes to the existing assignment
   calculator and Workbench disclosure. Both event types start from original share
   inventory, remove only the affected option and show gross strike cashflow, not

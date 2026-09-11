@@ -31,6 +31,11 @@ Prove call/put signs, original inventory, remaining legs, unavailable terms and 
 mutation. This supplies missing facts; it does not qualify unrestricted AI prose.
 Next, validate typed operational topic selection and render from these facts rather
 than accepting model-authored cashflows, broker deadlines or execution guarantees.
+Implemented as an opt-in versioned tool description on the existing first call;
+strict topic/scope/leg selection renders directly without model prose, continuation
+or verifier. Five synthetic live routing cases are the first gate, not whole-AI
+qualification. Preserve normal thesis discussion and evaluate routing bypasses,
+mixed requests and ambiguity before promoting the candidate configuration.
 
 1. Trace existing App.tsx flows and shared helpers; confirm backend/session routing.
 2. First tracer: existing assignment/probability/evidence and quote-risk displays

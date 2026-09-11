@@ -1,6 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import europeanPrompts from '../prompts/analysis-v14.json';
+import operationalPrompts from '../prompts/analysis-operational-v1.json';
 import { defaultAnalysisPrompts } from '../src/analysis-prompts';
+
+it('renders operational tools from facts, discards model prose and preserves excluded holdings', async () => {
+  const supplied = { ...snapshot, contractTerms: { exerciseStyle: 'American', settlement: 'physical-shares', sharesPerContract: 100, settlementSession: 'PM' } as const };
+  const input = { ...request(), state: createMarketStrategy('bull-call', supplied) };
+  const before = structuredClone(input);
+  const events: Array<{ stage: string; reason: string }> = [];
+  const args = { scope: 'current-position', topics: ['assignment', 'exercise', 'broker-policy', 'closing-value'], legIds: [] as string[] };
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ choices: [{ message: { content: 'Guaranteed fill; broker deadline 5:30; both events leave short shares.', tool_calls: [{ id: 'operation', type: 'function', function: { name: 'explain_operational_facts', arguments: JSON.stringify(args) } }] } }] }));
+  const result = await spar(input, 'key', fetcher, context, supplied, operationalPrompts, event => events.push(event));
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(result.reply.text).not.toMatch(/5:30|Guaranteed fill|both events leave/);
+  expect(result.reply.text).toContain('resulting shares -100');
+  expect(result.reply.text).toContain('resulting shares 100');
+  expect(result.reply.text).toContain('not a fill');
+  expect(result.reply.text).toContain('unknown');
+  expect(result.reply.operations).toEqual([]);
+  expect(result.next_state).toEqual({ ...input.state, version: input.state.version + 1 });
+  expect(events.some(event => event.reason === 'deterministic-operational-accepted')).toBe(true);
+  expect(input).toEqual(before);
+  input.state.excludedLegIds = [input.state.legs[0].id];
+  args.topics = ['assignment', 'exercise'];
+  const excludedResult = await spar(input, 'key', fetcher, context, supplied, operationalPrompts);
+  expect(excludedResult.next_state).toEqual({ ...input.state, version: input.state.version + 1 });
+  args.legIds = [input.state.legs[0].id];
+  await expect(spar(input, 'key', fetcher, context, supplied, operationalPrompts)).rejects.toThrow('Invalid scenario tool request');
+  await expect(spar(before, 'key', fetcher, context, supplied)).rejects.toThrow('Invalid scenario tool request');
+});
 
 it('admits only an explicit mutually exclusive discovery request', () => {
   const input = { ...request(), discovery: true };
