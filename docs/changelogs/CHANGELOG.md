@@ -2,6 +2,18 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Added explicit return/chance blend ranking and a native preference slider.
+  Intermediate weights combine fixed normalized target return-on-risk with model
+  expiry probability; endpoints reproduce the existing rankings exactly. This
+  disclosed heuristic is not expected return or demonstrated trading edge.
+  Shared engine/client validation rejects invalid weights and mixed expiries;
+  ranking precedes family/global selection. Slider changes invalidate results
+  without searching or applying. Default ranking remains unchanged.
+  TypeScript and 100 engine/client/API tests pass; independent review found no
+  blockers. Live slider/search/Inspect verification remains pending because SPY
+  and QQQ catalog loading returned chain_unavailable (503). No synthetic fallback
+  or deployment. Two-sided move scoring is still disabled.
+
 - Added integrated optimizer outlook presets and reused the draggable prototype
   expiry strip with actual loaded quote dates. Presets explicitly set target
   offsets and starter option families; they do not infer forecasts or edit the

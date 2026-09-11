@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: specify and regression-test a genuine blended objective and two-sided scenarios before enabling their controls
+next_action: verify blended slider/search/Inspect in browser after quote catalog recovery, then implement two-sided scoring
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -52,3 +52,15 @@ replay verifies partition counts, family winners, reversed quotes and mixed legs
 Inspect handoff pass. Direction controls use disclosed fixed target offsets and
 starter families only. Existing objectives remain unchanged; no cosmetic blend.
 No production deployment or default promotion; overall AC3 still incomplete.
+
+Blend checkpoint: explicit balanced objective requires integer chanceWeight0..100
+only for that objective. Shared pure score uses fixed normalization documented in
+plan.md; exact endpoints reproduce legacy rankings. Mixed expiry fails closed.
+100 engine/client/API tests and TypeScript pass; independent review found no
+blockers. Tests cover component monotonicity, endpoint identity, intermediate
+family/global replay, quote order and tampered requests/replies. New UI offers an
+explicit slider without changing default objective or automatically searching.
+SPY and QQQ browser quote load failed; direct local chain probe returned503 with
+chain_unavailable/catalog/Unavailable. Live slider/search/Inspect and mobile proof
+are pending. No synthetic fallback, provider configuration edits or deployment.
+Overall acceptance remains building; this checkpoint is not a proven trading edge.

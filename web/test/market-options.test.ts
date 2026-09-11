@@ -13,6 +13,41 @@ const snapshot: MarketSnapshot = {
 };
 
 describe("listed market strategies", () => {
+  it('uses fixed bounded blend scores and preserves endpoint identity', async () => {
+    const { balancedCandidateScore: score } = await import('../src/options');
+    expect(score(4, .8, 0)).toBe(4);
+    expect(score(4, .8, 100)).toBe(.8);
+    expect(score(4, .8, 40)).toBeCloseTo(.6 * (4 / 5) + .4 * .6, 14);
+    expect(score(-2, .3, 50)).toBeCloseTo(.5 * (-2 / 3) + .5 * -.4, 14);
+    expect(score(3, .7, 40)).toBeGreaterThan(score(2, .7, 40));
+    expect(score(3, .8, 40)).toBeGreaterThan(score(3, .7, 40));
+    for (const args of [[NaN, .5, 50], [Infinity, .5, 50], [1, NaN, 50], [1, -.1, 50], [1, 1.1, 50], [1, .5, -1], [1, .5, 101], [1, .5, 2.5], [1, .5, NaN]]) expect(() => score(...args as [number, number, number])).toThrow();
+  });
+  it('ranks balanced candidates before family selection and rejects ambiguous blend requests', () => {
+    const held = { ...createMarketStrategy('bull-call', snapshot), dividendYield: 0 };
+    const base = { targetSpot: 653, targetDate: snapshot.contracts[0].expiry, maxLoss: 100000, feeAllowance: 5, basis: 'natural' as const };
+    const families = [...CANDIDATE_OPTION_FAMILIES];
+    for (const resultMode of [undefined, 'best-per-family'] as const) {
+      const domain = { families, maxEntryOutlay: 100000, ...(resultMode ? { resultMode } : {}) };
+      for (const [chanceWeight, objective] of [[0, 'return-on-risk'], [100, 'expiry-probability']] as const) {
+        const endpoint = searchCandidates(held, snapshot, { ...base, objective: 'balanced', chanceWeight }, domain);
+        expect(endpoint.candidates).toEqual(searchCandidates(held, snapshot, { ...base, objective }, domain).candidates);
+      }
+      const input = { ...base, objective: 'balanced' as const, chanceWeight: 40 };
+      const result = searchCandidates(held, snapshot, input, domain);
+      const independentlyRanked = families.flatMap(family => searchCandidates(held, snapshot, input, { families: [family], maxEntryOutlay: 100000 }).candidates.slice(0, resultMode ? 1 : 5)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+      expect(result.candidates).toEqual(resultMode ? independentlyRanked : independentlyRanked.slice(0, 5));
+      for (const candidate of result.candidates) {
+        const r = candidate.metrics.scenarioPnl / candidate.metrics.maxLoss!, p = candidate.probability.probability!;
+        expect(candidate.score).toBeCloseTo(.6 * r / (1 + Math.abs(r)) + .4 * (2 * p - 1), 14);
+      }
+      expect(searchCandidates(held, { ...snapshot, contracts: [...snapshot.contracts].reverse() }, input, domain)).toEqual(result);
+      for (const chanceWeight of [undefined, null, '50', -1, 101, .5, NaN, Infinity]) expect(() => searchCandidates(held, snapshot, { ...input, chanceWeight } as never, domain)).toThrow();
+      expect(() => searchCandidates(held, snapshot, { ...base, objective: 'balanced' } as never, domain)).toThrow();
+      for (const objective of ['target-pnl', 'return-on-risk', 'expiry-probability'] as const) expect(() => searchCandidates(held, snapshot, { ...base, objective, chanceWeight: 50 }, domain)).toThrow();
+      expect(() => searchCandidates(held, snapshot, input, { families: ['call-calendar'], maxEntryOutlay: 100000 })).toThrow(/Mixed-expiry/);
+    }
+  });
   it('filters selected expiry before ranking and retains later calendar legs', () => {
     const held = { ...createMarketStrategy('bull-call', snapshot), dividendYield: 0 };
     const expiries = [...new Set(snapshot.contracts.map(contract => contract.expiry))];

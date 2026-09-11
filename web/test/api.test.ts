@@ -167,6 +167,12 @@ it("searches quoted candidates directly without inference and rejects stale or f
   const datedBody = await datedResult.json() as any;
   expect(datedBody.search.domain).toEqual(datedDomain);
   expect(datedBody.search.candidates).toEqual(verticalBody.search.candidates);
+  const blendedSearch = { ...search, objective: 'balanced' as const, chanceWeight: 50 };
+  const blendedResponse = await request({ state, search: blendedSearch });
+  expect(blendedResponse.status).toBe(200);
+  expect(await blendedResponse.json()).toEqual({ search: searchCandidates(state, snapshot, blendedSearch) });
+  for (const chanceWeight of [null, -1, 101, .5, undefined]) expect((await request({ state, search: { ...blendedSearch, chanceWeight } })).status).toBe(400);
+  expect((await request({ state, search: { ...search, chanceWeight: 50 } })).status).toBe(400);
   expect((await request({ state, search, domain: { ...datedDomain, expiry: at } })).status).toBe(400);
   for (const candidate of verticalBody.search.candidates) {
     const [long, short] = candidate.state.legs;

@@ -72,6 +72,8 @@ it('prefills an explicit optimizer target without changing the held scenario', (
   expect(html).toContain('Market outlook')
   expect(html).toContain('Either direction')
   expect(html).toContain('First / short expiry')
+  expect(html).toContain('<option value="balanced">Return / chance blend</option>')
+  expect(html).toContain('<option value="target-pnl" selected="">')
   expect(state).toEqual(before)
 })
 
@@ -91,6 +93,13 @@ it('validates grouped search counts and distinct families without weakening lega
   const datedDomain = { ...domain, expiry }
   const dated = searchCandidates(state, snapshot, input, datedDomain)
   await expect(checkSearch(dated, state, snapshot, input, datedDomain, signal)).resolves.toEqual(dated)
+  const blendedInput = { ...input, objective: 'balanced' as const, chanceWeight: 50 }
+  const blended = searchCandidates(state, snapshot, blendedInput, datedDomain)
+  await expect(checkSearch(blended, state, snapshot, blendedInput, datedDomain, signal)).resolves.toEqual(blended)
+  const wrongScore = structuredClone(blended); wrongScore.candidates[0].score += .01
+  await expect(checkSearch(wrongScore, state, snapshot, blendedInput, datedDomain, signal)).rejects.toThrow(/ranking/)
+  await expect(checkSearch({ ...blended, request: { ...blendedInput, chanceWeight: 51 } }, state, snapshot, blendedInput, datedDomain, signal)).rejects.toThrow(/request/)
+  for (const chanceWeight of [-1, 101, .5, NaN, undefined]) await expect(checkSearch(blended, state, snapshot, { ...blendedInput, chanceWeight }, datedDomain, signal)).rejects.toThrow(/constraints/)
   await expect(checkSearch(dated, state, snapshot, input, { ...datedDomain, expiry: '2026-10-16T20:00:00.000Z' }, signal)).rejects.toThrow('Invalid candidate search domain.')
   for (const count of [-1, .5, 26, result.eligibleFamilies! + 1]) {
     await expect(checkSearch({ ...result, eligibleFamilies: count }, state, snapshot, input, domain, signal)).rejects.toThrow(/coverage/)

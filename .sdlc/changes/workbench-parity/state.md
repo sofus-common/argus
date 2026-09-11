@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: define and test genuine return/chance blend and two-sided move scoring before exposing those controls
+next_action: verify blended optimizer browser workflow when quoted catalog is available, then two-sided scoring
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -127,3 +127,12 @@ Browser selected Sep 14 reduced enumeration from1250 to625 and returned three
 Sep14 families; Inspect retained Iron Condor and explicit Apply. 390px viewport
 had375px document width; reset afterward. Drag/overflow across many quoted months
 not exercised: current quote window has two dates. No deployment/default promotion.
+
+Tenth checkpoint: explicit return/chance objective and native slider with disclosed
+fixed normalization, raw target-return/risk and probability values. Endpoint
+rankings match existing objectives; every intermediate weight reranks enumeration
+before family/global selection. Mixed expiries and invalid weights rejected.
+100 engine/client/API tests, TypeScript and independent review pass. Browser proof
+is blocked by local quote catalog503 for SPY and QQQ; held position remains intact.
+No successful slider/search/Inspect or mobile claim for this checkpoint. Default
+ranking unchanged; no deployment/default promotion. Two-sided control still disabled.
