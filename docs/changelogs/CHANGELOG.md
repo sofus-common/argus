@@ -2,6 +2,12 @@
 
 ## Unreleased — local Scenario Lab prototype
 
+- Fixed integrated Workbench thesis textarea overflow on mobile. Verified at
+  390x844 with chart navigation and Heatmap/Table switching. Browser save/load,
+  Undo and a live read-only AI response passed using a synthetic test position;
+  the temporary saved record was removed afterward. Written thesis still remains
+  tab-local rather than saved with the position. No persistence or prompt changes.
+
 - Fixed the local prototype API proxy rejecting valid browser POSTs: translate
   only the exact loopback prototype origin, including the existing feed socket.
   Production auth is unchanged. Regression and 11 auth tests passed; live checks

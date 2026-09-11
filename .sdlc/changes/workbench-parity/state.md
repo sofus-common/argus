@@ -1,7 +1,7 @@
 status: building
 lane: controlled
 current_gate: build
-next_action: verify mobile and AI/save interactions before prototype replacement
+next_action: resolve durable thesis ownership before promoting integrated Workbench
 blocker: null
 updated: 2026-09-11
 approvals:
@@ -63,3 +63,19 @@ After restarting the stalled prototype server, browser quote refresh and explici
 search returned five quoted candidates while retaining the held position.
 Socket translation is regression-tested, not live-feed verified. Mobile, AI and
 durable-save browser verification remain pending. No production deployment.
+
+Fifth checkpoint: native 390x844 browser viewport reproduced thesis textarea
+overflow (407px document width). A block textarea fixes the stacked layout;
+document width is now 375px inside the 390px viewport. Mobile chart navigation,
+Heatmap and Table switching passed; viewport reset after verification.
+Synthetic position saved as a new record, modified, loaded and Undo restored the
+pre-load contract quantity. Only that temporary verification record was deleted.
+Live read-only AI response completed and matched the separate calculated $160
+expiry loss, without a proposal or holding change. This is one response, not a
+general analysis-quality claim. TypeScript and 2 presentation tests passed;
+independent test runner reports 7 draft, 16 saved and 103 market-sparring tests
+passed, with existing sandbox static-analysis and missing-secret warnings.
+Important unresolved limitation: written thesis is tab-local, not stored with
+saved positions; Load retains the current thesis. Structured target/time remain
+explicitly temporary too. The accepted slice excluded persistence schema changes;
+resolve that next rather than claiming the thesis-led workflow is complete.
